@@ -47,8 +47,8 @@ struct HostSettingsView: View {
     var body: some View {
         Form {
             Section("Status collection") {
-                LabeledContent("Mode", value: "Read only")
-                Text("Tether Host for Mac does not change the VM, credentials, or network policy in this build.")
+                LabeledContent("Mode", value: "Guided setup; read-only VM inventory")
+                Text("Guest installation runs only inside a macOS VM after you start it. Verified connection credentials are stored in Keychain. VM lifecycle and host isolation controls remain unavailable.")
                     .foregroundStyle(.secondary)
             }
             Section("Last refresh") {

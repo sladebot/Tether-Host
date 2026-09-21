@@ -42,7 +42,7 @@ public enum SetupStage: String, Codable, CaseIterable, Sendable {
     public var requirement: String {
         switch self {
         case .systemCompatibility: "Requires Apple silicon and macOS 14 or later."
-        case .utmDetection: "Checks Apple's native virtualization support and any optional UTM migration source."
+        case .utmDetection: "Checks the selected provider: built-in Apple virtualization or a compatible UTM installation."
         case .vmPreparation: "Create or adopt the exact VM identity and verify its signed guest image."
         case .privilegedHelperAuthorization: "Requires the signed helper and administrator approval."
         case .hostIsolationInstallation: "Requires a reviewed policy and external negative tests."
@@ -55,7 +55,7 @@ public enum SetupStage: String, Codable, CaseIterable, Sendable {
         case .cuaScreenRecordingPermission: "Allow CUA to capture only the guest display."
         case .hermesTokenGeneration: "Generate in the guest and keep the host copy in Keychain."
         case .tailscaleServeConfiguration: "Expose HTTPS 443 only to guest loopback port 8642."
-        case .tetherConnectionHandoff: "Requires an authenticated, expiring one-use pairing exchange."
+        case .tetherConnectionHandoff: "Verify the guest URL and API token, then test a Hermes API Server connection from Tether iOS."
         case .finalVerification: "Positive, negative, restart, and real-client checks must pass."
         }
     }

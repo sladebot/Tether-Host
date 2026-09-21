@@ -5,15 +5,17 @@
 This repository contains the native macOS app, its local `TetherHostCore` Swift
 package, host tests, VM/isolation support assets, and release tooling. The Tether
 iOS application now lives in a separate repository and will interoperate through
-a versioned pairing and capability contract. The current Mac milestone is read
-only; there is no privileged daemon, guest bootstrap transport, or completed
-Developer ID distribution artifact yet.
+a versioned pairing and capability contract. The current preview includes
+read-only VM inventory, a manually attached guest setup ISO, and a guest-local
+macOS installer. There is no privileged daemon, automatic VM lifecycle, or
+completed Developer ID distribution artifact yet.
 
-New installations use a Tether-owned Linux guest through Apple's
-`Virtualization.framework`; UTM is not a customer prerequisite. First-run setup
-will download a Tether-signed guest image, verify the release manifest and digest,
-create an application-owned VM bundle, and boot it natively. The UTM adapter is
-retained as a migration and recovery backend for existing installations.
+The working preview uses a macOS guest in UTM. It detects an exact VM and running
+state, exports a read-only transfer ISO, then checks and configures Tailscale and
+Hermes only after Tether Host is running inside that guest. The production target
+uses Apple's `Virtualization.framework` so UTM is not a customer prerequisite,
+but the native guest image and lifecycle are not implemented in this preview.
+UTM remains the supported preview and future recovery path.
 
 An existing working UTM guest must be adopted or migrated without destructive
 recreation. The migration notes report two registrations named Hermes Sandbox,
@@ -67,7 +69,7 @@ flowchart TB
       KC[Host Keychain]
       Helper[Signed privileged helper]
       Policy[Externally enforced VM network boundary]
-      VM[Apple Virtualization backend / optional UTM migration]
+      VM[Future Apple backend / current UTM preview]
       GUI --> KC
       GUI -->|Typed authenticated XPC|Helper
       Helper -->|Only Tether-owned policy|Policy
@@ -117,9 +119,10 @@ Actions explain the missing prerequisite instead of pretending setup succeeded.
 ## Native VM implementation
 
 Keep VM reading separate from lifecycle and provisioning. Use
-`Virtualization.framework` as the primary backend and retain UTM only for explicit
-migration or recovery. The signed Linux guest release owns the kernel, initrd,
-root disk and versioned manifest. Persist VM identity and disk ownership
+`Virtualization.framework` as the primary production backend and retain UTM for
+preview, migration, and recovery. The current guest installer targets macOS for
+both providers. A future signed native macOS guest artifact must include a
+versioned manifest and verified restore-image inputs. Persist VM identity and disk ownership
 atomically. Omit directory, clipboard and other sharing devices by construction.
 Own a tested network attachment and stop networked execution synchronously when
 its trusted identity or policy changes. NAT alone does not establish host

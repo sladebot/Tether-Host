@@ -118,7 +118,7 @@ struct HostDashboardView: View {
                     ReadOnlyAction(title: "Run diagnostics", symbol: "stethoscope", reason: readOnlyReason)
                     ReadOnlyAction(title: "Repair installation", symbol: "wrench.and.screwdriver", reason: readOnlyReason)
                     ReadOnlyAction(title: "Rotate token", symbol: "key", reason: "Token rotation requires a Keychain-backed implementation and explicit confirmation.")
-                    ReadOnlyAction(title: "Pair Tether", symbol: "qrcode", reason: "Pairing is unavailable until an authenticated one-use handoff exists.")
+                    Button("Connect Tether", systemImage: "iphone") { model.selection = .setup }
                     ReadOnlyAction(title: "Uninstall", symbol: "trash", reason: "Uninstall requires an ownership inventory and a separate confirmation before VM data deletion.")
                 }
             }

@@ -1,8 +1,9 @@
 # Tether Host for Mac verification — 2026-09-20
 
-This records evidence for the initial read-only milestone. It is not evidence
-that the production installer, privileged helper, network boundary, guest
-provisioner, pairing exchange, or signed/notarized DMG is complete.
+This began as evidence for the initial read-only milestone and now also records
+the local guest-installer preview. It is not evidence that the production native
+VM installer, privileged helper, network boundary, pairing exchange, or
+signed/notarized DMG is complete.
 
 ## Implemented and verified
 
@@ -15,9 +16,10 @@ provisioner, pairing exchange, or signed/notarized DMG is complete.
 - Debug and optimized Release builds succeeded for Apple silicon with code
   signing disabled for local verification. The Release build produced
   `/tmp/tether-host-native-release/Build/Products/Release/Tether Host for Mac.app`.
-- The provider now prefers the fail-closed inventory of Tether-owned native VM
-  bundles. It uses fixed `utmctl list` and exact-UUID `status` arguments only as
-  a read-only migration/recovery fallback when no native VM is installed.
+- The production architecture retains fail-closed inventory for Tether-owned
+  native VM bundles. The current preview prefers UTM when a compatible copy is
+  installed and blocks the Built-in option until native image/lifecycle support
+  exists. UTM queries use fixed `utmctl list` and exact UUID selection.
 - The installed UTM version is 4.7.5. A live read-only `utmctl list` returned:
   - running `Hermes Sandbox`: `738EECC5-6357-43D9-BE03-298E0B3DE206`
   - stopped `Hermes Sandbox`: `DBAD34AA-6E6F-41BB-A23D-2C57DC8B3334`
@@ -25,13 +27,14 @@ provisioner, pairing exchange, or signed/notarized DMG is complete.
 - Exact status lookup for the running Hermes UUID returned `started`. This is
   current lifecycle evidence, not containment evidence. The app displays the
   duplicate name and refuses to infer identity from the name alone.
-- The standalone core suite passes 30/30 tests. Coverage includes native VM
+- The current standalone core suite passes 43/43 tests. Coverage includes native VM
   bundle creation, exact manifest/directory identity enforcement, setup journal
   recovery, exact identity and duplicates, endpoint rejection, secret redaction,
   two-phase token rotation, signed manifest verification, component digests,
   idempotent receipts, deterministic dual-stack firewall plans, insecure Serve
   rejection, health evidence freshness/source, pairing metadata without a
-  reusable bearer token, and scoped repair/uninstall behavior.
+  reusable bearer token, scoped repair/uninstall behavior, guest-root-only
+  dependency detection, and read-only guest setup ISO creation.
 - All release scripts pass `bash -n`; non-credential dry-run paths report the
   renamed archive, app, and DMG paths; credential and artifact checks fail
   closed when their prerequisites are absent. All configuration property lists

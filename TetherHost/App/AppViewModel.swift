@@ -1,5 +1,7 @@
 import Foundation
 import SwiftUI
+import AppKit
+import UniformTypeIdentifiers
 import TetherHostCore
 
 struct HostDashboardSnapshot: Sendable {
@@ -21,12 +23,11 @@ struct HostDashboardSnapshot: Sendable {
 }
 
 protocol HostStatusProviding: Sendable {
-    func snapshot() async throws -> HostDashboardSnapshot
+    func snapshot(for vmProvider: VMProvider) async throws -> HostDashboardSnapshot
 }
 
 struct LiveHostStatusProvider: HostStatusProviding {
     private let nativeReader: (any VirtualMachineReading)?
-    private let legacyReader: (any VirtualMachineReading)?
     private let journalStore: FileSetupJournalStore?
 
     init() {
@@ -42,11 +43,6 @@ struct LiveHostStatusProvider: HostStatusProviding {
         } else {
             nativeReader = nil
         }
-        if let executor = try? UTMCTLProcessExecutor() {
-            legacyReader = UTMCTLAdapter(executor: executor)
-        } else {
-            legacyReader = nil
-        }
         if let applicationSupport {
             journalStore = FileSetupJournalStore(
                 fileURL: applicationSupport.appendingPathComponent("setup-journal.json")
@@ -56,12 +52,17 @@ struct LiveHostStatusProvider: HostStatusProviding {
         }
     }
 
-    func snapshot() async throws -> HostDashboardSnapshot {
-        guard let nativeReader else { throw NativeVirtualMachineStoreError.invalidRoot }
-        var inventory = try await nativeReader.list()
-        var evidenceSource: EvidenceSource = .appleVirtualization
-        if inventory.isEmpty, let legacyReader {
-            inventory = try await legacyReader.list()
+    func snapshot(for vmProvider: VMProvider) async throws -> HostDashboardSnapshot {
+        let inventory: [VirtualMachineRecord]
+        let evidenceSource: EvidenceSource
+        switch vmProvider {
+        case .builtIn:
+            guard let nativeReader else { throw NativeVirtualMachineStoreError.invalidRoot }
+            inventory = try await nativeReader.list()
+            evidenceSource = .appleVirtualization
+        case .utm:
+            // Recreate detection so installing UTM does not require restarting Tether.
+            inventory = try await UTMCTLAdapter(executor: UTMCTLProcessExecutor()).list()
             evidenceSource = .utm
         }
         let now = Date()
@@ -72,9 +73,9 @@ struct LiveHostStatusProvider: HostStatusProviding {
         if matches.count == 1 {
             detail = evidenceSource == .appleVirtualization
                 ? "Tether's native Apple VM is available by exact UUID."
-                : "A legacy UTM VM is available for migration by exact UUID."
+                : "A UTM VM is available by exact UUID."
         } else if inventory.isEmpty {
-            detail = "No VM is installed yet. Setup will create a native Apple VM without UTM."
+            detail = "No VM was found for the selected provider. Choose a provider in Setup Assistant."
         } else {
             detail = "Found \(matches.count) matching VMs; exact designation is required."
         }
@@ -131,15 +132,260 @@ final class AppViewModel: ObservableObject {
     @Published private(set) var lastRefresh: Date?
     @Published private(set) var statusMessage = "No host evidence has been collected yet."
 
+    @Published var connectionURL = "" { didSet { connectionVerifiedAt = nil; if connectionURL != oldValue { connectionToken = "" } } }
+    @Published var connectionToken = "" { didSet { connectionVerifiedAt = nil } }
+    @Published private(set) var connectionVerifiedAt: Date?
+    @Published private(set) var isVerifyingConnection = false
+    @Published private(set) var connectionMessage = "Verify the guest endpoint before connecting your phone."
+    @Published private(set) var guestSetupStatus = "Guest setup has not started."
+    @Published private(set) var guestSetupDiskStatus = "No guest setup disk has been created yet."
+    @Published private(set) var guestSetupDiskURL: URL?
+    @Published private(set) var isExportingGuestSetupDisk = false
+    @Published private(set) var guestDependencies: [GuestDependencyStatus] = []
+    let isInsideGuest = GuestSetupEnvironment.isVirtualMac
+    private let connectionVault = KeychainSecretStore(service: "app.tether.host.connection")
+    private var connectionID = VirtualMachineID(rawValue: UUID())
+
+    @Published private(set) var providerSetup: VMProviderSetup
+    @Published private(set) var selectedVMID: VirtualMachineID?
+    private let preferences: UserDefaults
     private let provider: any HostStatusProviding
 
-    init(provider: any HostStatusProviding = LiveHostStatusProvider()) {
+    init(provider: any HostStatusProviding = LiveHostStatusProvider(), preferences: UserDefaults = .standard) {
+        self.preferences = preferences
+        selectedVMID = preferences.string(forKey: "setup.vmID").flatMap(VirtualMachineID.init)
+        let savedProvider = preferences.string(forKey: "setup.vmProvider").flatMap(VMProvider.init(rawValue:))
+        let initialProvider = savedProvider ?? (UTMInstallation.detect() == .installed ? .utm : .builtIn)
+        providerSetup = VMProviderSetup(provider: initialProvider)
+        selection = .setup
         self.provider = provider
         let initial = HostDashboardSnapshot.unobserved
         observations = initial.observations
         inventory = initial.inventory
         setup = initial.setup
         diagnostics = initial.diagnostics
+        if let endpoint = preferences.string(forKey: "connection.endpoint"),
+           let idString = preferences.string(forKey: "connection.id"),
+           let id = VirtualMachineID(idString) {
+            connectionID = id
+            connectionURL = endpoint
+            Task { await restoreConnectionToken() }
+        }
+    }
+
+    func selectProvider(_ provider: VMProvider) {
+        providerSetup.select(provider)
+        preferences.set(provider.rawValue, forKey: "setup.vmProvider")
+        selectedVMID = nil
+        preferences.removeObject(forKey: "setup.vmID")
+        inventory = []
+        observations = HostDashboardSnapshot.unobserved.observations
+        checkProviderInstallation()
+    }
+
+    private static func availability(for provider: VMProvider) -> VMProviderAvailability {
+        if provider == .utm { return UTMInstallation.detect().availability }
+        guard AppleVirtualizationSupport.isAvailable else {
+            return .blocked("Built-in VM requires an Apple silicon Mac with macOS 14 or later.")
+        }
+        return .blocked("The native VM image and lifecycle installer are not bundled in this preview yet. Choose UTM to test the guided installation on this Mac.")
+    }
+
+    func checkProviderInstallation() {
+        providerSetup.refresh(using: Self.availability)
+    }
+
+    func continueProviderSetup() {
+        guard providerSetup.advance(using: Self.availability) else { return }
+        Task { await refresh() }
+    }
+
+    func changeSetupProvider() { providerSetup.back() }
+
+    var expectedVMName: String {
+        providerSetup.provider == .builtIn ? "Tether Sandbox" : "Hermes Sandbox"
+    }
+
+    var candidateVMs: [VirtualMachineRecord] {
+        inventory.filter { $0.name == expectedVMName }
+    }
+
+    var designatedVM: VirtualMachineRecord? {
+        if let selectedVMID {
+            return inventory.first { $0.id == selectedVMID }
+        }
+        let matches = candidateVMs
+        return matches.count == 1 ? matches[0] : nil
+    }
+
+    var designatedVMIsRunning: Bool { designatedVM?.state == .started }
+
+    func selectVM(_ id: VirtualMachineID) {
+        guard candidateVMs.contains(where: { $0.id == id }) else { return }
+        selectedVMID = id
+        preferences.set(id.description, forKey: "setup.vmID")
+    }
+
+    func openUTM() {
+        guard UTMInstallation.detect() == .installed else {
+            guestSetupDiskStatus = "UTM is not installed in Applications."
+            return
+        }
+        NSWorkspace.shared.open(UTMInstallation.applicationURL)
+    }
+
+    func exportGuestSetupDisk() {
+        guard !isExportingGuestSetupDisk else { return }
+        let panel = NSSavePanel()
+        panel.title = "Create Guest Setup Disk"
+        panel.message = "Save this read-only disk, then attach it to the VM in UTM."
+        panel.nameFieldStringValue = "Tether Guest Setup.iso"
+        panel.allowedContentTypes = [.init(filenameExtension: "iso")!]
+        guard panel.runModal() == .OK, let destination = panel.url else { return }
+
+        isExportingGuestSetupDisk = true
+        guestSetupDiskStatus = "Creating a read-only setup disk…"
+        let appURL = Bundle.main.bundleURL
+        Task {
+            defer { isExportingGuestSetupDisk = false }
+            do {
+                try await GuestSetupDiskExporter.export(appURL: appURL, to: destination)
+                guestSetupDiskURL = destination
+                guestSetupDiskStatus = "Guest setup disk is ready. Attach it to your VM in UTM."
+                NSWorkspace.shared.activateFileViewerSelecting([destination])
+            } catch {
+                guestSetupDiskURL = nil
+                guestSetupDiskStatus = (error as? LocalizedError)?.errorDescription
+                    ?? "Could not create the guest setup disk."
+            }
+        }
+    }
+
+    func revealGuestSetupDisk() {
+        guard let guestSetupDiskURL else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([guestSetupDiskURL])
+    }
+
+    private func restoreConnectionToken() async {
+        // Saved credentials are restored, but verification is never restored as a success.
+        guard let secret = try? await connectionVault.load(.activeHermes(connectionID)), connectionToken.isEmpty else { return }
+        connectionToken = secret.withUnsafeBytes { String(decoding: $0, as: UTF8.self) }
+    }
+
+    func startGuestSetup() {
+        guard isInsideGuest else {
+            guestSetupStatus = "Open this Tether Host app inside the macOS VM to install guest components."
+            return
+        }
+        guard let folder = Bundle.main.resourceURL?.appendingPathComponent("GuestSetup"),
+              FileManager.default.fileExists(atPath: folder.appendingPathComponent("Set up Tether Guest.command").path) else {
+            guestSetupStatus = "The guest installer is missing from this app bundle."
+            return
+        }
+        // User-triggered launch in the guest's Terminal so sign-in and OS approvals remain interactive.
+        let command = folder.appendingPathComponent("Set up Tether Guest.command")
+        if !NSWorkspace.shared.open(command) { guestSetupStatus = "Could not open the guest installer in Terminal." }
+    }
+
+    func refreshGuestStatus() {
+        guard isInsideGuest else { return }
+        let file = GuestSetupEnvironment.stateDirectory.appendingPathComponent("status.txt")
+        if let data = try? Data(contentsOf: file), data.count < 4096,
+           let text = String(data: data, encoding: .utf8) {
+            guestSetupStatus = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+    }
+
+    func scanGuestDependencies() {
+        guard isInsideGuest else {
+            guestDependencies = []
+            return
+        }
+        guestDependencies = GuestDependencyScanner.scan()
+    }
+
+    func importConnectionFile() {
+        guard !isVerifyingConnection else { return }
+        let panel = NSOpenPanel()
+        panel.title = "Import Guest Connection"
+        panel.message = "Choose the private connection.json generated by guest setup. The token stays masked and is verified before saving."
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        if panel.runModal() == .OK, let file = panel.url {
+            Task { await loadConnection(from: file) }
+        }
+    }
+
+    func loadGuestConnection() async {
+        guard isInsideGuest else { return }
+        await loadConnection(from: GuestSetupEnvironment.stateDirectory.appendingPathComponent("connection.json"))
+    }
+
+    private func loadConnection(from file: URL) async {
+        guard !isVerifyingConnection else { return }
+        struct GuestConnection: Decodable { let id: UUID; let endpoint: String; let token: String }
+        do {
+            let attributes = try FileManager.default.attributesOfItem(atPath: file.path)
+            guard attributes[.type] as? FileAttributeType == .typeRegular,
+                  (attributes[.posixPermissions] as? NSNumber)?.intValue == 0o600,
+                  (attributes[.ownerAccountID] as? NSNumber)?.uint32Value == getuid(),
+                  ((attributes[.size] as? NSNumber)?.intValue ?? Int.max) < 16_384 else {
+                throw ConnectionVerificationError.failed("Guest connection details must be a private file owned by this user.")
+            }
+            let details = try JSONDecoder().decode(GuestConnection.self, from: Data(contentsOf: file))
+            connectionID = VirtualMachineID(rawValue: details.id)
+            connectionURL = details.endpoint
+            connectionToken = details.token
+            await verifyConnection()
+        } catch {
+            connectionMessage = "Could not import connection details. Choose a valid connection.json owned by you with owner-only read/write permissions."
+        }
+    }
+
+    func verifyConnection() async {
+        guard !isVerifyingConnection else { return }
+        isVerifyingConnection = true
+        connectionVerifiedAt = nil
+        let endpoint = connectionURL
+        let token = connectionToken
+        defer { isVerifyingConnection = false }
+        connectionMessage = "Checking HTTPS, API authentication, durable runs, and model discovery…"
+        do {
+            let result = try await ConnectionVerifier().verify(endpoint: endpoint, token: token)
+            guard endpoint == connectionURL, token == connectionToken else { return }
+            try await connectionVault.store(SecretValue(data: Data(token.utf8)), for: .activeHermes(connectionID))
+            guard endpoint == connectionURL, token == connectionToken else { return }
+            preferences.set(connectionID.description, forKey: "connection.id")
+            preferences.set(result.endpoint.url.absoluteString, forKey: "connection.endpoint")
+            connectionVerifiedAt = result.verifiedAt
+            connectionMessage = "Backend connection verified from this Mac. Now test the connection in Tether iOS on the same tailnet."
+        } catch {
+            // Do not render raw network/server errors; they can contain credentials or remote text.
+            connectionMessage = (error as? ConnectionVerificationError)?.errorDescription
+                ?? (error as? EndpointValidationError)?.errorDescription
+                ?? "Verification failed. Check Tailscale connectivity, the URL, and the API token."
+        }
+    }
+
+    func copyConnectionURL() {
+        guard connectionVerifiedAt != nil else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(connectionURL, forType: .string)
+    }
+
+    func copyConnectionToken() {
+        guard connectionVerifiedAt != nil else { return }
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        // Mark the credential as concealed/transient for clipboard consumers.
+        pasteboard.setData(Data(), forType: NSPasteboard.PasteboardType("org.nspasteboard.ConcealedType"))
+        pasteboard.setData(Data(), forType: NSPasteboard.PasteboardType("org.nspasteboard.TransientType"))
+        pasteboard.setString(connectionToken, forType: .string)
+        let count = pasteboard.changeCount
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(45))
+            if pasteboard.changeCount == count { pasteboard.clearContents() }
+        }
     }
 
     var securityState: HealthState { HealthAggregator.aggregate(observations).overall }
@@ -162,10 +408,13 @@ final class AppViewModel: ObservableObject {
 
     func refresh() async {
         guard !isRefreshing else { return }
+        checkProviderInstallation()
+        let selectedProvider = providerSetup.provider
         isRefreshing = true
         defer { isRefreshing = false }
         do {
-            let next = try await provider.snapshot()
+            let next = try await provider.snapshot(for: selectedProvider)
+            guard selectedProvider == providerSetup.provider else { return }
             observations = normalized(next.observations)
             inventory = next.inventory.sorted {
                 let order = $0.name.localizedStandardCompare($1.name)
@@ -178,6 +427,7 @@ final class AppViewModel: ObservableObject {
             lastRefresh = Date()
             statusMessage = "Evidence refreshed. Review its source and collection time before acting."
         } catch {
+            guard selectedProvider == providerSetup.provider else { return }
             observations = HostDashboardSnapshot.unobserved.observations
             inventory = []
             lastRefresh = Date()

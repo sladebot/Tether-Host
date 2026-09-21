@@ -54,14 +54,10 @@ public actor UTMCTLProcessExecutor: UTMCommandExecuting {
         timeout: TimeInterval = 8,
         redactor: SecretRedactor = SecretRedactor()
     ) throws {
-        let selected = URL(fileURLWithPath: "/Applications/UTM.app/Contents/MacOS/utmctl")
-        let bundle = Bundle(url: URL(fileURLWithPath: "/Applications/UTM.app"))
-        let version = bundle?.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
-        guard version?.hasPrefix("4.7.") == true,
-              FileManager.default.isExecutableFile(atPath: selected.path) else {
+        guard UTMInstallation.detect() == .installed else {
             throw UTMAdapterError.executableUnavailable
         }
-        self.executableURL = selected
+        self.executableURL = UTMInstallation.applicationURL.appendingPathComponent("Contents/MacOS/utmctl")
         self.timeout = min(max(timeout, 0.25), 30)
         self.redactor = redactor
     }

@@ -275,4 +275,110 @@ final class HostCoreTests: XCTestCase {
             XCTAssertEqual(error, .identityMismatch)
         }
     }
+
+    func testGuestSetupDiskExporterBuildsTransferImage() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("tether-guest-disk-tests-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let app = root.appendingPathComponent("Tether Host for Mac.app", isDirectory: true)
+        try FileManager.default.createDirectory(at: app, withIntermediateDirectories: true)
+        try Data("test-app".utf8).write(to: app.appendingPathComponent("marker.txt"))
+        let image = root.appendingPathComponent("Tether Guest Setup.iso")
+
+        try await GuestSetupDiskExporter.export(appURL: app, to: image)
+
+        let attributes = try FileManager.default.attributesOfItem(atPath: image.path)
+        XCTAssertGreaterThan((attributes[.size] as? NSNumber)?.intValue ?? 0, 0)
+    }
+
+    func testGuestSetupDiskExporterRejectsWrongExtension() async {
+        let app = FileManager.default.temporaryDirectory
+            .appendingPathComponent("tether-invalid-disk-test-\(UUID().uuidString).app")
+        defer { try? FileManager.default.removeItem(at: app) }
+        do {
+            try FileManager.default.createDirectory(at: app, withIntermediateDirectories: true)
+            try await GuestSetupDiskExporter.export(
+                appURL: app,
+                to: FileManager.default.temporaryDirectory.appendingPathComponent("guest.dmg")
+            )
+            XCTFail("Expected a non-ISO destination to be rejected")
+        } catch let error as GuestSetupDiskError {
+            guard case .invalidDestination = error else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+    }
+
+    func testGuestDependencyScannerReadsOnlySuppliedGuestRoots() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("tether-guest-scan-tests-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appendingPathComponent("guest-home", isDirectory: true)
+        let applications = root.appendingPathComponent("guest-applications", isDirectory: true)
+        let hermesBin = home.appendingPathComponent(".hermes/hermes-agent/venv/bin", isDirectory: true)
+        let tailscaleBin = applications.appendingPathComponent("Tailscale.app/Contents/MacOS", isDirectory: true)
+        let state = home.appendingPathComponent("Library/Application Support/Tether Host for Mac/Guest Setup", isDirectory: true)
+        try FileManager.default.createDirectory(at: hermesBin, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: tailscaleBin, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: state, withIntermediateDirectories: true)
+
+        for executable in [hermesBin.appendingPathComponent("hermes"), hermesBin.appendingPathComponent("python"), tailscaleBin.appendingPathComponent("Tailscale")] {
+            try Data("#!/bin/sh\n".utf8).write(to: executable)
+            try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
+        }
+        try Data("API_SERVER_ENABLED=true\nAPI_SERVER_HOST=127.0.0.1\nAPI_SERVER_PORT=8642\nAPI_SERVER_KEY=abcdefghijklmnopqrstuvwxyz_12345\n".utf8)
+            .write(to: home.appendingPathComponent(".hermes/.env"))
+        try JSONSerialization.data(withJSONObject: [
+            "BackendState": "Running",
+            "Self": ["DNSName": "guest.example.ts.net."]
+        ]).write(to: state.appendingPathComponent("tailscale-status.json"))
+        let receipt = state.appendingPathComponent("connection.json")
+        try Data("{}".utf8).write(to: receipt)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: receipt.path)
+
+        let results = GuestDependencyScanner.scan(homeDirectory: home, applicationsDirectory: applications)
+        XCTAssertEqual(Dictionary(uniqueKeysWithValues: results.map { ($0.id, $0.state) }), [
+            "tailscale": .installed,
+            "hermes": .installed,
+            "verification": .installed
+        ])
+    }
+
+    func testGuestDependencyScannerDoesNotUsePhysicalHostInstallations() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("tether-empty-guest-scan-tests-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appendingPathComponent("guest-home", isDirectory: true)
+        let applications = root.appendingPathComponent("guest-applications", isDirectory: true)
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: applications, withIntermediateDirectories: true)
+
+        let results = GuestDependencyScanner.scan(homeDirectory: home, applicationsDirectory: applications)
+        let states = Dictionary(uniqueKeysWithValues: results.map { ($0.id, $0.state) })
+        XCTAssertEqual(states["tailscale"], .missing)
+        XCTAssertEqual(states["hermes"], .missing)
+        XCTAssertEqual(states["verification"], .needsConfiguration)
+    }
+
+    func testGuestDependencyScannerRejectsUnsafeHermesAPIConfiguration() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("tether-unsafe-guest-scan-tests-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appendingPathComponent("guest-home", isDirectory: true)
+        let applications = root.appendingPathComponent("guest-applications", isDirectory: true)
+        let hermesBin = home.appendingPathComponent(".hermes/hermes-agent/venv/bin", isDirectory: true)
+        try FileManager.default.createDirectory(at: hermesBin, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: applications, withIntermediateDirectories: true)
+        for executable in [hermesBin.appendingPathComponent("hermes"), hermesBin.appendingPathComponent("python")] {
+            try Data("#!/bin/sh\n".utf8).write(to: executable)
+            try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
+        }
+        try Data("API_SERVER_ENABLED=false\nAPI_SERVER_HOST=0.0.0.0\nAPI_SERVER_PORT=8642\nAPI_SERVER_KEY=short\n".utf8)
+            .write(to: home.appendingPathComponent(".hermes/.env"))
+
+        let results = GuestDependencyScanner.scan(homeDirectory: home, applicationsDirectory: applications)
+        XCTAssertEqual(results.first(where: { $0.id == "hermes" })?.state, .needsConfiguration)
+    }
 }

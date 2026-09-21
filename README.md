@@ -1,27 +1,54 @@
 # Tether Host for Mac
 
-Tether Host for Mac is the trusted macOS companion for the Tether iOS app. It
-owns and runs the guest directly with Apple's Virtualization framework,
-coordinates provisioning and health evidence, and will own the narrowly scoped
-privileged networking helper. UTM is not an installation dependency; its adapter
-is retained only to migrate or recover an existing guest.
+Tether Host for Mac is the macOS companion for the Tether iOS app. Its first-launch
+Setup Assistant offers Built-in VM (Apple Virtualization) and UTM. Built-in VM is
+the production direction, but this preview blocks it because the native guest
+image and lifecycle installer are not bundled yet. The working preview path uses
+a compatible UTM installation in `/Applications/UTM.app`.
 
-The current milestone is read only. It inventories Tether-owned native VM bundles
-by exact UUID, can fall back to read-only UTM discovery for migration, shows setup
-and health evidence, and deliberately keeps management actions disabled until
-their security and recovery gates are implemented.
+The welcome screen links to the official UTM download, a macOS IPSW download
+index, and UTM's macOS setup guide. UTM can download a compatible restore image
+automatically. Continue is blocked until the selected provider is available;
+the app checks again on return, on Check Again, and inside the Continue action.
+This build retains the existing UTM 4.7.x compatibility restriction.
 
-The intended customer flow is one app install. First-run setup downloads a
-Tether-signed guest image, verifies its manifest and digest, creates the native
-VM bundle, and boots it through `Virtualization.framework`. The guest image and
-provisioning implementation are still release gates; the current repository is
-not yet a distributable one-click build.
+After provider selection, the app follows four checks: find the exact VM, verify
+that it reaches the running state, check/configure Tailscale inside the guest,
+and check/configure Hermes inside the guest. The physical Mac is used only for
+the provider and VM-state checks. Guest dependency detection never uses host
+Hermes, Tailscale, or developer tools.
+
+The app creates a read-only `Tether Guest Setup.iso` containing Tether Host for
+transfer without shared host folders or clipboard. Inside the macOS guest,
+**Run Guest Setup** launches the bundled interactive installer. It checks
+Tailscale first, verifies its publisher signature, and guides sign-in when needed.
+It then installs the pinned Hermes runtime when absent or configures a working
+existing guest installation, enables loopback bearer authentication, prompts for
+model login and guest permissions, starts the gateway, configures private HTTPS,
+and verifies a real model response. It refuses to run on the physical host.
+
+**Load Guest Connection** imports the generated URL/token in the guest. The
+connection screen also offers **Import Guest Connection…** for a private, user-owned
+`connection.json`, accepts an existing endpoint manually, checks TLS and
+API authentication/capabilities, stores the credential in Keychain, and provides
+masked reveal/copy controls for use in Tether iOS. The phone still needs Tailscale
+and its own Test Connection check. A host-side check does not certify phone reachability.
+
+Automatic VM creation is not implemented. Users must create/boot the VM and
+manually attach the generated ISO in UTM. The development DMG is
+not a notarized production installer, and the new guest installation flow has not
+yet passed a clean-VM, real-phone end-to-end run. See `docs/guest-setup-implementation.md`.
 
 ## Build the app
 
 Open `TetherHost.xcodeproj`, select the `Tether Host for Mac` scheme, and build
 for My Mac. The deployment target is macOS 14 and the bundle identifier is
 `app.tether.host`.
+
+Build the ad-hoc signed development DMG with `./scripts/build-preview.sh`.
+The output is `build/Tether-Host-Guest-Setup-Preview.dmg`. The script verifies
+the app signature and DMG checksum; this is not a notarized public release.
+See `docs/mac-studio-install-test.md` for the installed-app test results.
 
 ## Test the core
 
