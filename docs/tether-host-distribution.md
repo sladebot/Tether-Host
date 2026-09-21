@@ -11,9 +11,11 @@ it with Apple's `Virtualization.framework`. An installed UTM copy will remain
 available for migration or recovery.
 
 The current development preview does not meet that contract. Its DMG contains
-the app plus a guest setup ISO, requires UTM 4.7.x, and requires the user to
-create/start the VM and attach the ISO manually. It is ad-hoc signed and is not
-notarized.
+the app plus a guest setup ISO. The built-in path now accepts a local IPSW and
+creates a fresh VM without UTM; UTM 4.7.x remains a manual backup path. The
+built-in path does not yet download a pinned guest image automatically, and it
+has not passed a clean-VM, real-phone end-to-end test. This preview is ad-hoc
+signed and is not notarized.
 
 ## Release identity and one-time setup
 

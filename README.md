@@ -1,10 +1,16 @@
 # Tether Host for Mac
 
 Tether Host for Mac is the macOS companion for the Tether iOS app. Its first-launch
-Setup Assistant offers Built-in VM (Apple Virtualization) and UTM. Built-in VM is
-the production direction, but this preview blocks it because the native guest
-image and lifecycle installer are not bundled yet. The working preview path uses
-a compatible UTM installation in `/Applications/UTM.app`.
+Setup Assistant offers a built-in Apple VM and UTM as a backup. The built-in
+path accepts a local macOS IPSW, checks compatibility, creates a new VM identity
+and sparse disk, installs macOS, and starts the VM in a Tether Host window.
+The IPSW must not require a newer macOS host; the app rejects a macOS 27 IPSW
+on a macOS 26 host before creating a disk. Apple's installer also reported a
+required host software update for that combination in local testing. On a
+macOS 26.2 host, setup can download Apple's macOS 26.2 IPSW in-app and verify
+its pinned SHA-256 digest before installation.
+The UTM path continues to work with a compatible installation in
+`/Applications/UTM.app` for existing VMs.
 
 The welcome screen links to the official UTM download, a macOS IPSW download
 index, and UTM's macOS setup guide. UTM can download a compatible restore image
@@ -34,8 +40,10 @@ API authentication/capabilities, stores the credential in Keychain, and provides
 masked reveal/copy controls for use in Tether iOS. The phone still needs Tailscale
 and its own Test Connection check. A host-side check does not certify phone reachability.
 
-Automatic VM creation is not implemented. Users must create/boot the VM and
-manually attach the generated ISO in UTM. The development DMG is
+For the built-in VM, Tether Host creates a read-only guest setup disk and
+attaches it at boot. UTM still requires manual VM creation and ISO attachment
+because UTM's public scripting interface cannot create a macOS VM from an IPSW.
+The development DMG is
 not a notarized production installer, and the new guest installation flow has not
 yet passed a clean-VM, real-phone end-to-end run. See `docs/guest-setup-implementation.md`.
 
@@ -47,7 +55,7 @@ for My Mac. The deployment target is macOS 14 and the bundle identifier is
 
 Build the ad-hoc signed development DMG with `./scripts/build-preview.sh`.
 The output filename includes the app marketing version and build number, for
-example `build/Tether-Host-for-Mac-v1.0.0-build-3-preview.dmg`, with a matching
+example `build/Tether-Host-for-Mac-v1.0.0-build-5-preview.dmg`, with a matching
 `.sha256` checksum file. Bump `MARKETING_VERSION` for a product release and
 `CURRENT_PROJECT_VERSION` for every distributed build. The script verifies the
 app signature and DMG checksum; this is not a notarized public release.

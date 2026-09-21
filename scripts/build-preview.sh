@@ -50,15 +50,17 @@ printf 'Tether Host local development preview\nVersion %s (%s)\n\n' \
 cat >> "$STAGING_DIRECTORY/content/Read Me.txt" <<'NOTE'
 
 Drag Tether Host for Mac into Applications and launch it.
-Choose UTM in this preview and follow the four numbered setup checks:
-1. Confirm the exact VM exists.
-2. Confirm the VM reaches the running state.
+Choose Built-in VM, select a compatible macOS IPSW, and follow setup in this app.
+UTM remains available as a backup for existing VMs. The four checks are:
+1. Create or select the exact VM.
+2. Install and boot macOS.
 3. Check/install/configure Tailscale inside the VM.
 4. Check/install/configure Hermes inside the VM, then verify it.
 
 The included Tether Guest Setup.iso transfers the app into the VM without
-enabling host folder or clipboard sharing. Attach it to the VM, copy the app
-to the guest's Applications folder, and choose Run Guest Setup.
+enabling host folder or clipboard sharing. Built-in VM attaches a generated
+copy automatically. In the guest, copy the app to Applications and choose
+Run Guest Setup. UTM backup users attach the ISO manually.
 
 Dependency detection for Tailscale and Hermes runs inside the VM. Software on
 the physical Mac never satisfies those checks. The installer guides Tailscale
@@ -70,8 +72,8 @@ Existing Hermes installations are preserved: the guest installer refuses
 to overwrite unmanaged data. You can verify an existing connection manually.
 
 This local preview is ad-hoc signed, not Developer ID signed or notarized.
-Automatic native VM creation is not implemented. ISO attachment remains a
-manual UTM step.
+The built-in VM path has not yet completed a clean-VM, real-phone end-to-end
+test. UTM remains a manual backup path.
 NOTE
 hdiutil create -srcfolder "$STAGING_DIRECTORY/content" -volname 'Tether Host Guest Setup' \
     -format UDZO -fs HFS+ "$STAGING_DIRECTORY/preview.dmg"

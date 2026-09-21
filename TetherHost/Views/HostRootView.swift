@@ -47,8 +47,8 @@ struct HostSettingsView: View {
     var body: some View {
         Form {
             Section("Status collection") {
-                LabeledContent("Mode", value: "Guided setup; read-only VM inventory")
-                Text("Guest installation runs only inside a macOS VM after you start it. Verified connection credentials are stored in Keychain. VM lifecycle and host isolation controls remain unavailable.")
+                LabeledContent("Mode", value: "Built-in macOS VM with UTM backup")
+                Text("Tether Host can install and start a fresh Apple VM from an IPSW. Guest setup runs inside that VM. Verified connection credentials are stored in Keychain.")
                     .foregroundStyle(.secondary)
             }
             Section("Last refresh") {

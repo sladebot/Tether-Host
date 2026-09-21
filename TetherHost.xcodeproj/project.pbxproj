@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		H10000000000000000000001 /* TetherHostApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = I10000000000000000000001 /* TetherHostApp.swift */; };
 		H10000000000000000000002 /* AppViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = I10000000000000000000002 /* AppViewModel.swift */; };
+		H1000000000000000000000D /* NativeVMManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = I1000000000000000000000D /* NativeVMManager.swift */; };
 		H10000000000000000000003 /* HostRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = I10000000000000000000003 /* HostRootView.swift */; };
 		H10000000000000000000004 /* HostDashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = I10000000000000000000004 /* HostDashboardView.swift */; };
 		H10000000000000000000005 /* SetupAssistantView.swift in Sources */ = {isa = PBXBuildFile; fileRef = I10000000000000000000005 /* SetupAssistantView.swift */; };
@@ -23,6 +24,7 @@
 /* Begin PBXFileReference section */
 		I10000000000000000000001 /* TetherHostApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TetherHostApp.swift; sourceTree = "<group>"; };
 		I10000000000000000000002 /* AppViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppViewModel.swift; sourceTree = "<group>"; };
+		I1000000000000000000000D /* NativeVMManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeVMManager.swift; sourceTree = "<group>"; };
 		I10000000000000000000003 /* HostRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostRootView.swift; sourceTree = "<group>"; };
 		I10000000000000000000004 /* HostDashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostDashboardView.swift; sourceTree = "<group>"; };
 		I10000000000000000000005 /* SetupAssistantView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SetupAssistantView.swift; sourceTree = "<group>"; };
@@ -78,6 +80,7 @@
 			children = (
 				I10000000000000000000001 /* TetherHostApp.swift */,
 				I10000000000000000000002 /* AppViewModel.swift */,
+				I1000000000000000000000D /* NativeVMManager.swift */,
 			);
 			path = App;
 			sourceTree = "<group>";
@@ -183,6 +186,7 @@
 			files = (
 				H10000000000000000000001 /* TetherHostApp.swift in Sources */,
 				H10000000000000000000002 /* AppViewModel.swift in Sources */,
+				H1000000000000000000000D /* NativeVMManager.swift in Sources */,
 				H10000000000000000000003 /* HostRootView.swift in Sources */,
 				H10000000000000000000004 /* HostDashboardView.swift in Sources */,
 				H10000000000000000000005 /* SetupAssistantView.swift in Sources */,
@@ -201,7 +205,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = Config/TetherHost.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 3;
+				CURRENT_PROJECT_VERSION = 5;
 				DEVELOPMENT_TEAM = 22BH2R3K7H;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -228,7 +232,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = Config/TetherHost.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 3;
+				CURRENT_PROJECT_VERSION = 5;
 				DEVELOPMENT_TEAM = 22BH2R3K7H;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = NO;

@@ -66,8 +66,9 @@ struct LiveHostStatusProvider: HostStatusProviding {
             evidenceSource = .utm
         }
         let now = Date()
-        let expectedName = evidenceSource == .appleVirtualization ? "Tether Sandbox" : "Hermes Sandbox"
-        let matches = inventory.filter { $0.name == expectedName }
+        let matches = evidenceSource == .appleVirtualization
+            ? inventory.filter { $0.name == "Tether Host VM" }
+            : inventory
         let vmState: HealthState = matches.count == 1 ? .healthy : .degraded
         let detail: String
         if matches.count == 1 {
@@ -147,6 +148,7 @@ final class AppViewModel: ObservableObject {
     private var connectionID = VirtualMachineID(rawValue: UUID())
 
     @Published private(set) var providerSetup: VMProviderSetup
+    let nativeVM = NativeVMManager()
     @Published private(set) var selectedVMID: VirtualMachineID?
     private let preferences: UserDefaults
     private let provider: any HostStatusProviding
@@ -155,7 +157,7 @@ final class AppViewModel: ObservableObject {
         self.preferences = preferences
         selectedVMID = preferences.string(forKey: "setup.vmID").flatMap(VirtualMachineID.init)
         let savedProvider = preferences.string(forKey: "setup.vmProvider").flatMap(VMProvider.init(rawValue:))
-        let initialProvider = savedProvider ?? (UTMInstallation.detect() == .installed ? .utm : .builtIn)
+        let initialProvider = savedProvider ?? .builtIn
         providerSetup = VMProviderSetup(provider: initialProvider)
         selection = .setup
         self.provider = provider
@@ -188,7 +190,7 @@ final class AppViewModel: ObservableObject {
         guard AppleVirtualizationSupport.isAvailable else {
             return .blocked("Built-in VM requires an Apple silicon Mac with macOS 14 or later.")
         }
-        return .blocked("The native VM image and lifecycle installer are not bundled in this preview yet. Choose UTM to test the guided installation on this Mac.")
+        return .ready
     }
 
     func checkProviderInstallation() {
@@ -203,11 +205,13 @@ final class AppViewModel: ObservableObject {
     func changeSetupProvider() { providerSetup.back() }
 
     var expectedVMName: String {
-        providerSetup.provider == .builtIn ? "Tether Sandbox" : "Hermes Sandbox"
+        providerSetup.provider == .builtIn ? "Tether Host VM" : "a UTM"
     }
 
     var candidateVMs: [VirtualMachineRecord] {
-        inventory.filter { $0.name == expectedVMName }
+        providerSetup.provider == .builtIn
+            ? inventory.filter { $0.name == expectedVMName }
+            : inventory
     }
 
     var designatedVM: VirtualMachineRecord? {
@@ -218,7 +222,12 @@ final class AppViewModel: ObservableObject {
         return matches.count == 1 ? matches[0] : nil
     }
 
-    var designatedVMIsRunning: Bool { designatedVM?.state == .started }
+    var designatedVMIsRunning: Bool {
+        if providerSetup.provider == .builtIn {
+            return designatedVM?.id == nativeVM.runningVMID
+        }
+        return designatedVM?.state == .started
+    }
 
     func selectVM(_ id: VirtualMachineID) {
         guard candidateVMs.contains(where: { $0.id == id }) else { return }
@@ -421,7 +430,12 @@ final class AppViewModel: ObservableObject {
             let next = try await provider.snapshot(for: selectedProvider)
             guard selectedProvider == providerSetup.provider else { return }
             observations = normalized(next.observations)
-            inventory = next.inventory.sorted {
+            inventory = next.inventory.map { record in
+                if selectedProvider == .builtIn, record.id == nativeVM.runningVMID {
+                    return VirtualMachineRecord(id: record.id, name: record.name, state: .started)
+                }
+                return record
+            }.sorted {
                 let order = $0.name.localizedStandardCompare($1.name)
                 return order == .orderedSame
                     ? $0.id.rawValue.uuidString < $1.id.rawValue.uuidString

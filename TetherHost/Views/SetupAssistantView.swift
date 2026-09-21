@@ -40,16 +40,16 @@ struct SetupAssistantView: View {
                     get: { model.providerSetup.provider },
                     set: { model.selectProvider($0) }
                 )) {
-                    Text("Built-in Apple VM — production target").tag(VMProvider.builtIn)
-                    Text("UTM — available in this preview").tag(VMProvider.utm)
+                    Text("Built-in Apple VM — setup inside Tether Host").tag(VMProvider.builtIn)
+                    Text("UTM — backup for existing VMs").tag(VMProvider.utm)
                 }
                 .pickerStyle(.radioGroup)
                 .disabled(model.isRefreshing)
 
                 VStack(alignment: .leading, spacing: 12) {
                     Text(model.providerSetup.provider == .utm
-                         ? "Keep UTM’s desktop window and VM settings. Install UTM separately before continuing."
-                         : "Use Apple’s virtualization through Tether Host. No separate VM app is required.")
+                         ? "Keep an existing UTM VM as a backup. Tether Host can select and inspect it."
+                         : "Choose an IPSW in Tether Host; it creates, installs, and starts a fresh macOS VM without UTM.")
                     if model.providerSetup.provider == .utm {
                         Text("This build requires UTM \(UTMInstallation.supportedVersion) in Applications.")
                             .font(.callout).foregroundStyle(.secondary)
@@ -78,7 +78,7 @@ struct SetupAssistantView: View {
                 }
 
                 HStack {
-                    Text("Continue to guest setup and connection verification. Create and boot your VM before installing its components.")
+                    Text("Continue to create or select a VM, then install the guest components and verify the phone connection.")
                         .font(.callout).foregroundStyle(.secondary)
                     Spacer(minLength: 24)
                     Button("Continue") { model.continueProviderSetup() }
@@ -113,6 +113,90 @@ struct SetupAssistantView: View {
 
 }
 
+private struct NativeVMSetupView: View {
+    @EnvironmentObject private var model: AppViewModel
+    @ObservedObject var manager: NativeVMManager
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            SetupPhaseBox(number: 1, title: "Install a fresh macOS VM", symbol: "internaldrive") {
+                Text("Choose a local Apple macOS IPSW. Tether Host checks that this Mac supports it, creates a new virtual disk and identity, and installs macOS. Existing VMs are left alone.")
+                    .foregroundStyle(.secondary)
+                HStack {
+                    Button("Choose macOS IPSW…") { manager.chooseIPSW() }
+                    Text(manager.imageDescription)
+                        .font(.callout)
+                        .textSelection(.enabled)
+                }
+                if NativeVMManager.canDownloadHostImage {
+                    Button("Download macOS 26.2 IPSW from Apple (18 GB)") {
+                        Task { await manager.downloadHostImage() }
+                    }
+                    .disabled(manager.isBusy)
+                }
+                Button(manager.isBusy ? "Installing…" : "Create and Install Tether Host VM") {
+                    Task {
+                        if let id = await manager.install() {
+                            await model.refresh()
+                            model.selectVM(id)
+                        }
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(manager.imageURL == nil || manager.isBusy)
+                if manager.isBusy { ProgressView().controlSize(.small) }
+                Text(manager.status).font(.callout).textSelection(.enabled)
+            }
+            SetupPhaseBox(number: 2, title: "Boot and finish macOS setup", symbol: "power") {
+                if model.candidateVMs.isEmpty {
+                    Text("No completed Tether Host VM is installed yet.").foregroundStyle(.secondary)
+                } else {
+                    ForEach(model.candidateVMs) { vm in
+                        HStack {
+                            VStack(alignment: .leading) {
+                                Text(vm.name).fontWeight(.medium)
+                                Text(vm.id.description).font(.caption.monospaced()).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Button("Start / Show") {
+                                model.selectVM(vm.id)
+                                Task { try? await manager.boot(vm.id) }
+                            }
+                        }
+                    }
+                }
+                Button("Refresh VM List") { Task { await model.refresh() } }
+                    .disabled(model.isRefreshing)
+                Text("Finish Apple's first-run macOS screens in the VM window. Tether Host keeps the VM display in this app.")
+                    .foregroundStyle(.secondary)
+            }
+            SetupPhaseBox(number: 3, title: "Install Tailscale inside the VM", symbol: "network") {
+                Text("The guest setup disk is attached automatically when the new VM starts. In the VM, open the disk, copy Tether Host for Mac to Applications, and launch it. Choose Run Guest Setup there; it checks Tailscale and guides any required Apple approval or sign-in.")
+                    .foregroundStyle(.secondary)
+            }
+            SetupPhaseBox(number: 4, title: "Install Hermes inside the VM", symbol: "shippingbox") {
+                Text("The same in-VM setup checks Hermes, installs or configures it, and verifies the private connection before you connect Tether on your phone.")
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .sheet(isPresented: $manager.showsDisplay) {
+            if let vm = manager.virtualMachine {
+                VStack(spacing: 0) {
+                    HStack {
+                        Text("Tether Host VM").font(.headline)
+                        Spacer()
+                        Text(manager.status).font(.caption).foregroundStyle(.secondary)
+                        Button("Hide Window") { manager.showsDisplay = false }
+                    }
+                    .padding(10)
+                    NativeVMDisplay(virtualMachine: vm)
+                }
+                .frame(minWidth: 900, minHeight: 650)
+            }
+        }
+    }
+}
+
 private struct GuestConnectionSetupView: View {
     @EnvironmentObject private var model: AppViewModel
     @State private var showToken = false
@@ -131,6 +215,8 @@ private struct GuestConnectionSetupView: View {
                 }
                 if model.isInsideGuest {
                     guestInstallation
+                } else if model.providerSetup.provider == .builtIn {
+                    NativeVMSetupView(manager: model.nativeVM)
                 } else {
                     hostInstallation
                 }
@@ -155,7 +241,7 @@ private struct GuestConnectionSetupView: View {
     private var hostInstallation: some View {
         VStack(alignment: .leading, spacing: 16) {
             SetupPhaseBox(number: 1, title: "Check that the VM exists", symbol: "macpro.gen3") {
-                Text("Tether looks for one exact **\(model.expectedVMName)** VM. This read-only check does not inspect dependencies on the physical Mac or change any VM.")
+                Text("Choose the exact UTM VM to manage. This check does not inspect dependencies on the physical Mac or change any VM.")
                     .foregroundStyle(.secondary)
                 if let vm = model.designatedVM {
                     Label("VM found", systemImage: "checkmark.circle.fill")
@@ -171,9 +257,9 @@ private struct GuestConnectionSetupView: View {
                         }
                     }
                 } else {
-                    Label("No single \(model.expectedVMName) VM was found.", systemImage: "exclamationmark.triangle.fill")
+                    Label("No UTM VM is selected.", systemImage: "exclamationmark.triangle.fill")
                         .foregroundStyle(.orange)
-                    if model.candidateVMs.count > 1 {
+                    if !model.candidateVMs.isEmpty {
                         Text("Choose the exact VM to manage:")
                             .font(.callout)
                             .foregroundStyle(.secondary)
@@ -211,10 +297,10 @@ private struct GuestConnectionSetupView: View {
                     .foregroundStyle(.secondary)
             }
 
-            SetupPhaseBox(number: 2, title: "Check that the VM boots", symbol: "power") {
+            SetupPhaseBox(number: 2, title: "Check the UTM VM process", symbol: "power") {
                 if let vm = model.designatedVM {
                     if model.designatedVMIsRunning {
-                        Label("\(vm.name) is running", systemImage: "checkmark.circle.fill")
+                        Label("\(vm.name) process is running. Confirm macOS appears in its display before continuing.", systemImage: "checkmark.circle.fill")
                             .foregroundStyle(.green)
                     } else {
                         Label("\(vm.name) is \(vm.state.rawValue). Start it in UTM, then check again.", systemImage: "exclamationmark.triangle.fill")
