@@ -1,0 +1,22 @@
+DerivedData/
+.DS_Store
+*.xcuserstate
+xcuserdata/
+build/
+.build/
+.swiftpm/
+
+# Local VM credential handoff; never commit bearer tokens.
+[Ss]hared/hermes.token
+
+# Local secrets and generated Python caches.
+[Ss]hared/*.token
+[Ss]hared/*.key
+.env
+.env.*
+!.env.example
+*.pem
+*.p12
+*.p8
+__pycache__/
+*.py[cod]

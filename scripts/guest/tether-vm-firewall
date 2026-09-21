@@ -1,0 +1,30 @@
+#!/bin/sh
+set -eu
+
+PF=/sbin/pfctl
+ANCHOR=com.apple/000.tether-vm-egress
+RULES=/etc/pf.anchors/app.tether.vm-egress
+TOKEN=
+
+cleanup() {
+    "$PF" -a "$ANCHOR" -F all >/dev/null 2>&1 || true
+    if [ -n "$TOKEN" ]; then
+        "$PF" -X "$TOKEN" >/dev/null 2>&1 || true
+    fi
+}
+trap cleanup EXIT INT TERM HUP
+
+"$PF" -sr | /usr/bin/grep -Fqx 'anchor "com.apple/*" all'
+"$PF" -n -a "$ANCHOR" -f "$RULES"
+"$PF" -a "$ANCHOR" -f "$RULES"
+TOKEN=$("$PF" -E 2>&1 | /usr/bin/awk '/Token[[:space:]]*:/ { print $3; exit }')
+if [ -z "$TOKEN" ]; then
+    echo 'PF enable token was not returned.' >&2
+    exit 1
+fi
+/usr/bin/logger -t tether-vm-firewall "loaded $ANCHOR"
+
+while :; do
+    /bin/sleep 3600 &
+    wait $!
+done

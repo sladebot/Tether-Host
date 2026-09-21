@@ -1,0 +1,8 @@
+# TEMPORARY diagnostic only. Host "self" addresses are expanded at load time.
+# Guest addresses below were observed in UTM; re-check them before execution.
+# Exact sources avoid affecting the Studio or other guests. Source spoofing,
+# new guest addresses, pre-existing states and encrypted overlay paths are NOT
+# covered by this test. No global rules or states are changed.
+block drop quick on bridge100 inet from 192.168.64.2 to self label "tether_host_probe_v4"
+block drop quick on bridge100 inet6 from fde5:5e87:ea6:ecef:141e:8c1b:74e6:6636 to self label "tether_host_probe_v6"
+block drop quick on bridge100 inet6 from fe80::18a1:734f:e19d:986 to self label "tether_host_probe_linklocal"

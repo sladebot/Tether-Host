@@ -1,0 +1,18 @@
+# Allow Tailscale's node-local DNS resolver.
+pass out quick inet proto { tcp, udp } from any to 100.100.100.100 port 53 keep state label "tether_tailscale_dns"
+
+# Permit only the authenticated oMLX HTTPS route on the Studio. These are the
+# Studio's stable tailnet addresses; remeasure after device re-enrollment.
+pass out quick inet proto tcp from any to 100.86.254.112 port 8446 flags S/SA keep state label "tether_allow_omlx_v4"
+pass out quick inet6 proto tcp from any to fd7a:115c:a1e0::7237:fe70 port 8446 flags S/SA keep state label "tether_allow_omlx_v6"
+
+# Permit SYN-ACK replies for inbound SSH and HTTPS connections over the tailnet.
+pass out quick inet proto tcp from any port { 22, 443 } to 100.64.0.0/10 flags SA/SA keep state label "tether_tailnet_service_reply"
+pass out quick inet6 proto tcp from any port { 22, 443 } to fd7a:115c:a1e0::/48 flags SA/SA keep state label "tether_tailnet_service_reply_v6"
+
+# Block guest-initiated access to tailnet peers, private/link-local networks,
+# and the currently observed Studio LAN IPv6 prefix.
+block drop out quick inet to 100.64.0.0/10 label "tether_deny_tailnet_v4"
+block drop out quick inet6 to fd7a:115c:a1e0::/48 label "tether_deny_tailnet_v6"
+block drop out quick inet to { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16 } label "tether_deny_private_v4"
+block drop out quick inet6 to { fc00::/7, fe80::/10, 2601:645:8104:6630::/64 } label "tether_deny_private_v6"

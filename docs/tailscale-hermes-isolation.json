@@ -1,0 +1,15 @@
+{
+  "tagOwners": {"tag:hermes-sandbox": ["autogroup:admin"]},
+  "grants": [
+    {"src": ["autogroup:member"], "dst": ["autogroup:member"], "ip": ["*"]},
+    {"src": ["100.99.125.120", "fd7a:115c:a1e0::1801:7da3"], "dst": ["tag:hermes-sandbox"], "ip": ["tcp:443"]},
+    {"src": ["tag:hermes-sandbox"], "dst": ["100.86.254.112", "fd7a:115c:a1e0::7237:fe70"], "ip": ["tcp:8446"]}
+  ],
+  "ssh": [{"action": "check", "src": ["autogroup:member"], "dst": ["autogroup:self"], "users": ["autogroup:nonroot", "root"]}],
+  "nodeAttrs": [{"target": ["autogroup:member"], "attr": ["funnel"]}],
+  "tests": [
+    {"src": "tag:hermes-sandbox", "proto": "tcp", "accept": ["100.86.254.112:8446", "[fd7a:115c:a1e0::7237:fe70]:8446"], "deny": ["100.86.254.112:22", "100.86.254.112:443", "100.86.254.112:8445", "100.99.125.120:*", "100.95.51.40:*", "100.110.234.87:*", "100.86.238.64:*", "100.124.190.80:*", "192.168.64.1:*", "[fd7a:115c:a1e0::7237:fe70]:22", "[fd7a:115c:a1e0::7237:fe70]:443", "[fd7a:115c:a1e0::7237:fe70]:8445"]},
+    {"src": "100.99.125.120", "accept": ["tag:hermes-sandbox:443", "100.86.254.112:8445"], "deny": ["tag:hermes-sandbox:22", "tag:hermes-sandbox:8642", "tag:hermes-sandbox:9119"]},
+    {"src": "100.86.254.112", "accept": ["100.110.234.87:22"], "deny": ["tag:hermes-sandbox:*"]}
+  ]
+}
