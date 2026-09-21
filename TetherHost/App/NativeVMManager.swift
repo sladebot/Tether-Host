@@ -64,6 +64,11 @@ final class NativeVMManager: ObservableObject {
         vmDelegate.owner = self
     }
 
+    var hasCachedHostImage: Bool {
+        FileManager.default.fileExists(atPath: rootURL.deletingLastPathComponent()
+            .appendingPathComponent("Restore Images/UniversalMac_26.2_25C56_Restore.ipsw").path)
+    }
+
     func isDesktopReady(for id: VirtualMachineID) -> Bool {
         desktopReadyVMID == id
     }

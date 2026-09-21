@@ -2,16 +2,16 @@
 
 ## Current preview
 
-- App: `/Applications/Tether Host for Mac.app`, version 1.0.0, build 7.
-- DMG: `build/Tether-Host-for-Mac-v1.0.0-build-7-preview.dmg`.
-- SHA-256: `caa51ff8423417affc517ca4811ae882bf5d437cf90168926699e58f01da2afe`.
+- App: `/Applications/Tether Host for Mac.app`, version 1.0.0, build 8.
+- DMG: `build/Tether-Host-for-Mac-v1.0.0-build-8-preview.dmg`.
+- SHA-256: `1af639f76b2582e38b71323fd8c6199cc055a7bfeec20f6609c4b770566becb7`.
 - Rebuild: `./scripts/build-preview.sh`.
 - Signing: local ad-hoc Debug build, not Developer ID signed or notarized.
 
 The DMG checksum and `hdiutil verify` passed. The app inside the DMG and the
 copy installed in Applications passed strict deep code-signature verification.
 The old preview DMGs and temporary Tether Host app copies were removed. No older
-Tether Host process remained when build 7 was launched.
+Tether Host process remained when build 8 was launched.
 
 ## Tested on this Mac Studio
 
@@ -49,6 +49,14 @@ visible in the installed app even when UTM was the previously selected provider.
 It routes to the built-in macOS creation guide; the guide explicitly labels the
 IPSW choice and creation action. The computer-use service crashed while reading
 that guide after clicking the button, but the Tether Host process remained live.
+
+Build 8 places a second **Create New VM** action directly above the existing-VM
+checks on the UTM Setup Assistant screen shown in user testing. It changes to
+the built-in Apple VM creation guide. The compatible macOS IPSW already stored
+by Tether Host is offered for reuse rather than presented as a fresh download.
+The installed app is build 8 and remains running. The computer-use service again
+closed its native pipe while reading this particular guide after navigation;
+this did not terminate Tether Host.
 
 ## Still to test with the user
 

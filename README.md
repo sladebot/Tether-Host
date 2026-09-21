@@ -7,6 +7,9 @@ and sparse disk, installs macOS, and starts the VM in a Tether Host window.
 The **Virtual Machines** page has a **Create New VM** button that opens this
 built-in creation guide even if UTM was selected previously. Choose an IPSW or
 use the in-app macOS download before creating the VM.
+The UTM setup screen also offers **Create New VM** above its existing-VM checks;
+it switches to the built-in creation path without making the user leave Setup
+Assistant. A previously downloaded compatible IPSW is labeled for reuse.
 The built-in VM has a Virtio network adapter attached to Apple's NAT, which
 routes guest traffic through the Mac's network connection. Guest internet
 reachability still needs a check inside macOS after first-run setup.
@@ -64,7 +67,7 @@ for My Mac. The deployment target is macOS 14 and the bundle identifier is
 
 Build the ad-hoc signed development DMG with `./scripts/build-preview.sh`.
 The output filename includes the app marketing version and build number, for
-example `build/Tether-Host-for-Mac-v1.0.0-build-7-preview.dmg`, with a matching
+example `build/Tether-Host-for-Mac-v1.0.0-build-8-preview.dmg`, with a matching
 `.sha256` checksum file. Bump `MARKETING_VERSION` for a product release and
 `CURRENT_PROJECT_VERSION` for every distributed build. The script verifies the
 app signature and DMG checksum; this is not a notarized public release.

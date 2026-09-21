@@ -131,7 +131,7 @@ private struct NativeVMSetupView: View {
                         .textSelection(.enabled)
                 }
                 if NativeVMManager.canDownloadHostImage {
-                    Button("Download macOS 26.2 IPSW from Apple (18 GB)") {
+                    Button(manager.hasCachedHostImage ? "Use Downloaded macOS 26.2 IPSW" : "Download macOS 26.2 IPSW from Apple (18 GB)") {
                         Task { await manager.downloadHostImage() }
                     }
                     .disabled(manager.isBusy)
@@ -254,6 +254,20 @@ private struct GuestConnectionSetupView: View {
                          : "Follow the four checks in order. Tether Host verifies the exact VM and creates a read-only transfer disk for guest-only dependency setup.")
                         .font(.title3)
                         .foregroundStyle(.secondary)
+                }
+                if !model.isInsideGuest, model.providerSetup.provider == .utm {
+                    HStack(alignment: .center, spacing: 16) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Want to create a new macOS VM?").font(.headline)
+                            Text("Use Tether Host's built-in Apple VM setup. The UTM steps below are for existing UTM VMs.")
+                                .font(.callout).foregroundStyle(.secondary)
+                        }
+                        Spacer(minLength: 12)
+                        Button("Create New VM") { model.startNewNativeVMSetup() }
+                            .buttonStyle(.borderedProminent)
+                    }
+                    .padding(16)
+                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
                 }
                 if model.isInsideGuest {
                     guestInstallation
