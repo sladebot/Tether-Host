@@ -76,11 +76,20 @@ for My Mac. The deployment target is macOS 14 and the bundle identifier is
 
 Build the ad-hoc signed development DMG with `./scripts/build-preview.sh`.
 The output filename includes the app marketing version and build number, for
-example `build/Tether-Host-for-Mac-v1.0.0-build-11-preview.dmg`, with a matching
+example `build/Tether-Host-for-Mac-v1.0.0-build-12-preview.dmg`, with a matching
 `.sha256` checksum file. Bump `MARKETING_VERSION` for a product release and
 `CURRENT_PROJECT_VERSION` for every distributed build. The script verifies the
 app signature and DMG checksum; this is not a notarized public release.
 See `docs/mac-studio-install-test.md` for the installed-app test results.
+
+The Virtual Machines page can permanently delete a stopped VM and its local
+files. It shows the exact VM UUID and requires its last eight characters before
+deletion. Tether Host deletes its built-in VM bundle directly; for a UTM VM it
+uses UTM's deletion command and removes the exact local bundle if UTM leaves
+it behind.
+The action is unavailable when the VM is running or its bundle cannot be
+matched by UUID. Deletion cannot be undone and does not move files to Trash.
+The shared macOS restore image is retained for creating another VM.
 
 ## Test the core
 

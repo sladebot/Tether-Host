@@ -120,6 +120,19 @@ enum HostDestination: String, CaseIterable, Identifiable {
     }
 }
 
+private enum VMRemovalError: LocalizedError {
+    case unavailable
+    case filesRemain(URL)
+
+    var errorDescription: String? {
+        switch self {
+        case .unavailable: "The exact stopped VM bundle is no longer available. Refresh the list and try again."
+        case .filesRemain(let bundle):
+            "The VM registration was removed, but files remain at \(bundle.path). Delete that bundle in Finder to reclaim space."
+        }
+    }
+}
+
 @MainActor
 final class AppViewModel: ObservableObject {
     @Published var selection: HostDestination? = .overview
@@ -130,6 +143,8 @@ final class AppViewModel: ObservableObject {
     @Published private(set) var isRefreshing = false
     @Published private(set) var lastRefresh: Date?
     @Published private(set) var statusMessage = "No host evidence has been collected yet."
+    @Published private(set) var isRemovingVM = false
+    @Published private(set) var vmRemovalMessage: String?
 
     @Published var connectionURL = "" { didSet { connectionVerifiedAt = nil; if connectionURL != oldValue { connectionToken = "" } } }
     @Published var connectionToken = "" { didSet { connectionVerifiedAt = nil } }
@@ -179,6 +194,7 @@ final class AppViewModel: ObservableObject {
         selectedVMID = nil
         preferences.removeObject(forKey: "setup.vmID")
         inventory = []
+        vmRemovalMessage = nil
         observations = HostDashboardSnapshot.unobserved.observations
         checkProviderInstallation()
     }
@@ -256,6 +272,54 @@ final class AppViewModel: ObservableObject {
     func revealVMInFinder(_ record: VirtualMachineRecord) {
         guard let bundle = vmBundleURL(for: record) else { return }
         NSWorkspace.shared.activateFileViewerSelecting([bundle])
+    }
+
+    func canDeleteVM(_ record: VirtualMachineRecord) -> Bool {
+        guard !isInsideGuest, !isRemovingVM, !isRefreshing,
+              record.state == .stopped,
+              inventory.contains(where: { $0.id == record.id }),
+              vmBundleURL(for: record) != nil else { return false }
+        if providerSetup.provider == .builtIn {
+            return !nativeVM.isBusy && !nativeVM.isRunning
+        }
+        return true
+    }
+
+    func deleteVM(_ record: VirtualMachineRecord, from source: VMProvider) async {
+        guard source == providerSetup.provider, canDeleteVM(record),
+              let bundle = vmBundleURL(for: record) else {
+            vmRemovalMessage = VMRemovalError.unavailable.localizedDescription
+            return
+        }
+        isRemovingVM = true
+        vmRemovalMessage = nil
+        defer { isRemovingVM = false }
+        do {
+            switch source {
+            case .builtIn:
+                try nativeVM.deleteFiles(record.id)
+            case .utm:
+                try await UTMCTLAdapter(executor: UTMCTLProcessExecutor(timeout: 30)).delete(record.id)
+                // UTM can unregister a shortcut without deleting its local bundle.
+                // Remove only the same path if it still resolves to this UUID.
+                if FileManager.default.fileExists(atPath: bundle.path) {
+                    guard vmBundleURL(for: record) == bundle else {
+                        throw VMRemovalError.filesRemain(bundle)
+                    }
+                    try FileManager.default.removeItem(at: bundle)
+                }
+            }
+            guard !FileManager.default.fileExists(atPath: bundle.path) else {
+                throw VMRemovalError.filesRemain(bundle)
+            }
+            if selectedVMID == record.id { clearVMSelection() }
+            vmRemovalMessage = "Deleted \(record.name) and its VM files."
+            await refresh()
+        } catch {
+            vmRemovalMessage = (error as? LocalizedError)?.errorDescription
+                ?? "Could not delete the VM. Refresh the list and try again."
+            await refresh()
+        }
     }
 
     func openUTM() {

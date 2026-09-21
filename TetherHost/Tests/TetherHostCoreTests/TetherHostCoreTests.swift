@@ -37,6 +37,27 @@ final class TetherHostCoreTests: XCTestCase {
         XCTAssertEqual(commands, [UTMCommand.list])
     }
 
+    func testUTMDeleteUsesExactStoppedUUIDAndConfirmsRemoval() async throws {
+        let executor = DeletingUTMExecutor(vmID: vmID, state: .stopped)
+        try await UTMCTLAdapter(executor: executor).delete(vmID)
+        let commands = await executor.commands
+        XCTAssertEqual(commands, [.list, .status(vmID), .delete(vmID), .list])
+    }
+
+    func testUTMDeleteRefusesRunningVM() async {
+        let executor = DeletingUTMExecutor(vmID: vmID, state: .started)
+        do {
+            try await UTMCTLAdapter(executor: executor).delete(vmID)
+            XCTFail("Running VM must not be deleted")
+        } catch let error as UTMAdapterError {
+            XCTAssertEqual(error, .vmNotStopped(vmID))
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+        let commands = await executor.commands
+        XCTAssertEqual(commands, [.list, .status(vmID)])
+    }
+
     func testDuplicateNamesAreAmbiguousUntilUUIDIsDesignated() {
         let other = VirtualMachineID(rawValue: UUID())
         let records = [
@@ -234,6 +255,33 @@ private actor MockUTMExecutor: UTMCommandExecuting {
             return UTMCommandOutput(standardOutput: "\(vmID) started Hermes Sandbox\n")
         case .status:
             return UTMCommandOutput(standardOutput: "started\n")
+        case .delete:
+            return UTMCommandOutput(standardOutput: "")
+        }
+    }
+}
+
+private actor DeletingUTMExecutor: UTMCommandExecuting {
+    private(set) var commands: [UTMCommand] = []
+    let vmID: VirtualMachineID
+    let state: VirtualMachineState
+    private var exists = true
+
+    init(vmID: VirtualMachineID, state: VirtualMachineState) {
+        self.vmID = vmID
+        self.state = state
+    }
+
+    func execute(_ command: UTMCommand) -> UTMCommandOutput {
+        commands.append(command)
+        switch command {
+        case .list:
+            return UTMCommandOutput(standardOutput: exists ? "\(vmID) \(state.rawValue) Test VM\n" : "")
+        case .status:
+            return UTMCommandOutput(standardOutput: "\(state.rawValue)\n")
+        case .delete:
+            exists = false
+            return UTMCommandOutput(standardOutput: "")
         }
     }
 }

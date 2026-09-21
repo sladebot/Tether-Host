@@ -4,11 +4,13 @@ import Darwin
 public enum UTMCommand: Equatable, Sendable {
     case list
     case status(VirtualMachineID)
+    case delete(VirtualMachineID)
 
     fileprivate var arguments: [String] {
         switch self {
         case .list: ["list"]
         case .status(let id): ["status", id.rawValue.uuidString]
+        case .delete(let id): ["delete", id.rawValue.uuidString]
         }
     }
 }
@@ -33,14 +35,18 @@ public enum UTMAdapterError: Error, Equatable, LocalizedError, Sendable {
     case commandFailed(exitCode: Int32, sanitizedMessage: String)
     case malformedOutput(String)
     case vmNotFound(VirtualMachineID)
+    case vmNotStopped(VirtualMachineID)
+    case deletionNotConfirmed(VirtualMachineID)
 
     public var errorDescription: String? {
         switch self {
         case .executableUnavailable: "utmctl is unavailable at an approved path."
-        case .timedOut: "The read-only UTM query timed out."
+        case .timedOut: "The UTM command timed out. Refresh the VM list before trying again."
         case .commandFailed(let code, let message): "utmctl failed (\(code)): \(message)"
         case .malformedOutput(let message): "Could not parse sanitized utmctl output: \(message)"
         case .vmNotFound(let id): "UTM did not return the exact VM ID \(id)."
+        case .vmNotStopped(let id): "UTM VM \(id) must be stopped before it can be deleted."
+        case .deletionNotConfirmed(let id): "UTM did not confirm removal of VM \(id). Refresh the VM list before trying again."
         }
     }
 }
@@ -135,6 +141,20 @@ public struct UTMCTLAdapter: VirtualMachineReading, Sendable {
         }
         let output = try await executor.execute(.status(id)).standardOutput
         return try Self.parseStatus(output)
+    }
+
+    /// UTM's own deletion API removes the registration and may permanently
+    /// remove its files. The caller must present a destructive confirmation.
+    public func delete(_ id: VirtualMachineID) async throws {
+        guard try await status(of: id) == .stopped else {
+            throw UTMAdapterError.vmNotStopped(id)
+        }
+        _ = try await executor.execute(.delete(id))
+        for attempt in 0..<5 {
+            if try await !list().contains(where: { $0.id == id }) { return }
+            if attempt < 4 { try await Task.sleep(for: .milliseconds(200)) }
+        }
+        throw UTMAdapterError.deletionNotConfirmed(id)
     }
 
     public static func parseList(_ input: String) throws -> [VirtualMachineRecord] {

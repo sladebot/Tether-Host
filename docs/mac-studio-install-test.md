@@ -2,8 +2,9 @@
 
 ## Current preview
 
-- App: `/Applications/Tether Host for Mac.app`, version 1.0.0, build 11.
-- DMG: `build/Tether-Host-for-Mac-v1.0.0-build-11-preview.dmg`.
+- App: `/Applications/Tether Host for Mac.app`, version 1.0.0, build 11
+  remains open with a VM running.
+- DMG: `build/Tether-Host-for-Mac-v1.0.0-build-12-preview.dmg`.
 - SHA-256: see the matching `.sha256` file beside the DMG.
 - Rebuild: `./scripts/build-preview.sh`.
 - Signing: local ad-hoc Debug build, not Developer ID signed or notarized.
@@ -83,6 +84,16 @@ receive a unique display name at creation. Exact UUID selection remains in
 place. The UTM inventory is separate and cannot display these native VM
 bundles as UTM registrations. The installed build 11 UI showed both saved VMs
 with distinct names and exact UUIDs in the Tether Host inventory.
+
+Build 12 adds a permanent **Delete…** action to each stopped VM row when its
+exact local bundle can be resolved by UUID. The confirmation names the VM,
+shows its full UUID, and requires typing its last eight characters. Built-in
+VM deletion removes the bundle and disk image directly; UTM deletion invokes
+UTM's UUID-specific command, then removes an exact UUID-matched local bundle
+if UTM left it behind. No real user VM was deleted during automated testing.
+Build 12 compiled, its DMG verified, and all 48 core tests passed. The running
+build 11 VM was left intact, so build 12 has not yet replaced the copy in
+Applications or received a live UI smoke test on this Mac.
 
 ## Still to test with the user
 

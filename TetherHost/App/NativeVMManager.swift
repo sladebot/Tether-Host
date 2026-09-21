@@ -15,6 +15,9 @@ enum NativeVMError: LocalizedError {
     case anotherVMRunning
     case anotherHostCopyRunning
     case guestDiskUnavailable
+    case cannotRemoveRunningVM
+    case cannotRemoveDuringInstall
+    case cannotRemoveWithOtherHostCopy
 
     var errorDescription: String? {
         switch self {
@@ -28,6 +31,9 @@ enum NativeVMError: LocalizedError {
         case .anotherVMRunning: "Another Tether VM is already running. Shut it down before starting this one."
         case .anotherHostCopyRunning: "Another Tether Host for Mac copy is open. Quit it before starting this VM."
         case .guestDiskUnavailable: "The guest setup disk could not be prepared. Check the Tether Host installation and try Start VM again."
+        case .cannotRemoveRunningVM: "Shut down the built-in VM before deleting its files."
+        case .cannotRemoveDuringInstall: "Wait for VM installation or setup to finish before deleting a VM."
+        case .cannotRemoveWithOtherHostCopy: "Quit the other Tether Host copy before deleting this VM."
         }
     }
 }
@@ -297,6 +303,17 @@ final class NativeVMManager: ObservableObject {
         catch {
             status = "Could not start the VM: \(error.localizedDescription) If another Tether Host copy is open, quit it and try again."
         }
+    }
+
+    func deleteFiles(_ id: VirtualMachineID) throws {
+        guard !isBusy else { throw NativeVMError.cannotRemoveDuringInstall }
+        guard !isRunning else { throw NativeVMError.cannotRemoveRunningVM }
+        guard !hasOtherHostCopy else { throw NativeVMError.cannotRemoveWithOtherHostCopy }
+        let locator = VirtualMachineBundleLocator(nativeRoot: rootURL, utmRoots: [])
+        guard let bundle = locator.locate(id, provider: .builtIn) else { throw NativeVMError.missingVM }
+        try FileManager.default.removeItem(at: bundle)
+        clearDesktopReady(for: id)
+        status = "Tether Host VM \(id.description) and its files were deleted."
     }
 
     private var hasOtherHostCopy: Bool {
