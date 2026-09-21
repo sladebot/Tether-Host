@@ -48,8 +48,8 @@ struct SetupAssistantView: View {
 
                 VStack(alignment: .leading, spacing: 12) {
                     Text(model.providerSetup.provider == .utm
-                         ? "Use a VM registered with UTM. Tether Host can select and inspect it."
-                         : "Choose an IPSW in Tether Host; it saves, installs, and runs a fresh macOS VM here. Built-in VMs do not appear in UTM.")
+                         ? "Choose an existing UTM VM without an IPSW, or create a new one from an Apple macOS restore image. New VMs created here appear and open in UTM."
+                         : "Tether Host stores and opens built-in Apple VMs itself; they do not appear in UTM. A new macOS VM needs Apple's restore image (IPSW), but an existing VM does not.")
                     if model.providerSetup.provider == .utm {
                         Text("This build requires UTM \(UTMInstallation.supportedVersion) in Applications.")
                             .font(.callout).foregroundStyle(.secondary)
@@ -68,11 +68,11 @@ struct SetupAssistantView: View {
                 if model.providerSetup.provider == .utm {
                     VStack(alignment: .leading, spacing: 10) {
                         Text("Get macOS for your VM").font(.headline)
-                        Text("In UTM, create a new VM and choose Virtualize → macOS. Leave the IPSW selection empty to let UTM download a compatible restore image.")
+                        Text("In Tether Host, select an existing UTM VM or choose a compatible IPSW and press Create UTM VM. Tether Host installs macOS and registers the new VM in UTM. You can also create one manually in UTM.")
                             .font(.callout).foregroundStyle(.secondary)
                         Link("macOS setup guide", destination: UTMInstallation.macOSGuideURL)
                         Link("Download macOS restore image (IPSW)", destination: UTMInstallation.macOSImageURL)
-                        Text("Manual download opens IPSW.me, a third-party index linking to Apple’s downloads. Choose an image compatible with your Mac; UTM’s automatic download is recommended.")
+                        Text("IPSW.me is a third-party index linking to Apple-hosted images. Apple Virtualization and UTM both use this macOS installer format for new VMs; existing VMs do not need it again.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 }
@@ -122,7 +122,7 @@ private struct NativeVMSetupView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             SetupPhaseBox(number: 1, title: "Create a new macOS VM", symbol: "internaldrive") {
-                Text("Choose a local Apple macOS IPSW. Tether Host checks compatibility, saves a new VM in its own Virtual Machines folder, and installs macOS. You can reopen it from Tether Host's Virtual Machines page or Show in Finder. Built-in VMs are separate from UTM and will not appear there.")
+                Text("Apple Virtualization needs a macOS restore image (IPSW) to install a new guest; this is not a UTM-specific file. Choose a compatible image you already have or download one from Apple. Tether Host then stores and opens the VM itself, without UTM.")
                     .foregroundStyle(.secondary)
                 HStack {
                     Button("Choose macOS IPSW…") { manager.chooseIPSW() }

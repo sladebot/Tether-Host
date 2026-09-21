@@ -173,6 +173,11 @@ struct HostWorkspaceView: View {
             }
             .pickerStyle(.segmented)
             .disabled(model.isRefreshing || model.isRemovingVM || manager.isRunning)
+            Text(model.providerSetup.provider == .utm
+                 ? "UTM provider: a new VM will appear in UTM and open its desktop there. Selecting an existing UTM VM needs no IPSW."
+                 : "Built-in Apple provider: Tether Host stores and displays the VM itself; UTM is not used. Selecting an existing built-in VM needs no IPSW.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
             providerAvailability
 
             if model.providerSetup.provider == .builtIn {
@@ -267,11 +272,11 @@ struct HostWorkspaceView: View {
 
     private var nativeCreation: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(model.providerSetup.provider == .utm ? "Create a macOS VM in UTM" : "Create an Apple VM")
+            Text(model.providerSetup.provider == .utm ? "Create a new VM for UTM" : "Create a new built-in Apple VM")
                 .font(.headline)
             Text(model.providerSetup.provider == .utm
-                 ? "Tether Host installs macOS from the IPSW, then registers the finished VM in UTM. The selected IPSW must be compatible with this Mac."
-                 : "The VM and its disk stay in Tether Host. The selected IPSW must be compatible with this Mac.")
+                 ? "An IPSW is Apple's macOS installer image, not a UTM-specific file. Tether Host uses it to install a new VM, then registers that VM in UTM. It appears and opens in UTM."
+                 : "Apple Virtualization also needs an IPSW to install a new macOS VM. Tether Host stores and opens this VM itself, without UTM. You can reuse a compatible IPSW already downloaded.")
                 .foregroundStyle(.secondary)
             Button("Choose macOS IPSW…") { manager.chooseIPSW() }
                 .disabled(manager.isBusy)
@@ -309,7 +314,7 @@ struct HostWorkspaceView: View {
     private var utmSetup: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Use an existing UTM VM").font(.headline)
-            Text("UTM manages this VM. Its display opens in UTM; Tether Host keeps the VM state visible at right.")
+            Text("Choose a VM already registered in UTM. No IPSW is needed to select or run it. Its display opens in UTM; Tether Host shows its power state at right.")
                 .foregroundStyle(.secondary)
             HStack {
                 Button("Open UTM") { model.openUTM() }

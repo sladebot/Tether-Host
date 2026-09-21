@@ -58,8 +58,10 @@ printf 'Tether Host local development preview\nVersion %s (%s)\n\n' \
 cat >> "$STAGING_DIRECTORY/content/Read Me.txt" <<'NOTE'
 
 Drag Tether Host for Mac into Applications and launch it.
-UTM is the default VM provider; choose a compatible macOS IPSW and follow setup
-in this app. Built-in Apple Virtualization is also available. The four checks are:
+UTM is the default VM provider. Select an existing UTM VM without an IPSW, or
+choose a compatible macOS IPSW to create a new VM that appears in UTM.
+Built-in Apple Virtualization also uses an IPSW for a new macOS VM, but stores
+and opens that VM in Tether Host instead. The four checks are:
 1. Create or select the exact VM.
 2. Install and boot macOS.
 3. Check/install/configure Tailscale inside the VM.
