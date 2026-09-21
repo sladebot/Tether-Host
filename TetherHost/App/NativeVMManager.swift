@@ -13,6 +13,7 @@ enum NativeVMError: LocalizedError {
     case missingVM
     case invalidVM
     case anotherVMRunning
+    case anotherHostCopyRunning
 
     var errorDescription: String? {
         switch self {
@@ -24,6 +25,7 @@ enum NativeVMError: LocalizedError {
         case .missingVM: "The selected Tether VM is missing. Refresh the VM list."
         case .invalidVM: "The Tether VM is incomplete or damaged. Create a new VM from an IPSW."
         case .anotherVMRunning: "Another Tether VM is already running. Shut it down before starting this one."
+        case .anotherHostCopyRunning: "Another Tether Host for Mac copy is open. Quit it before starting this VM."
         }
     }
 }
@@ -44,6 +46,7 @@ final class NativeVMManager: ObservableObject {
     @Published private(set) var isBusy = false
     @Published private(set) var isRunning = false
     @Published private(set) var virtualMachine: VZVirtualMachine?
+    @Published private(set) var desktopReadyVMID: VirtualMachineID?
     @Published var showsDisplay = false
 
     private var restoreImage: VZMacOSRestoreImage?
@@ -51,11 +54,33 @@ final class NativeVMManager: ObservableObject {
     var runningVMID: VirtualMachineID? { isRunning ? runningID : nil }
     private let rootURL: URL
     private let vmDelegate = NativeVMDelegate()
+    private let preferences: UserDefaults
 
-    init() {
+    init(preferences: UserDefaults = .standard) {
+        self.preferences = preferences
+        desktopReadyVMID = preferences.string(forKey: "setup.nativeDesktopReadyVMID").flatMap(VirtualMachineID.init)
         rootURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Tether Host for Mac/Virtual Machines", isDirectory: true)
         vmDelegate.owner = self
+    }
+
+    func isDesktopReady(for id: VirtualMachineID) -> Bool {
+        desktopReadyVMID == id
+    }
+
+    func confirmDesktopReady() {
+        guard isRunning, let runningID else { return }
+        desktopReadyVMID = runningID
+        preferences.set(runningID.description, forKey: "setup.nativeDesktopReadyVMID")
+        showsDisplay = false
+        status = "macOS desktop confirmed by you. Continue with the guest setup disk in the VM."
+    }
+
+    func clearDesktopReady(for id: VirtualMachineID) {
+        guard desktopReadyVMID == id else { return }
+        desktopReadyVMID = nil
+        preferences.removeObject(forKey: "setup.nativeDesktopReadyVMID")
+        status = "Finish the macOS welcome screens, then confirm when the desktop appears."
     }
 
     func chooseIPSW() {
@@ -149,6 +174,10 @@ final class NativeVMManager: ObservableObject {
     func install() async -> VirtualMachineID? {
         guard !isBusy, let imageURL, let restoreImage,
               let requirements = restoreImage.mostFeaturefulSupportedConfiguration else { return nil }
+        guard !hasOtherHostCopy else {
+            status = NativeVMError.anotherHostCopyRunning.localizedDescription
+            return nil
+        }
         isBusy = true
         defer { isBusy = false }
         let id = VirtualMachineID(rawValue: UUID())
@@ -222,6 +251,7 @@ final class NativeVMManager: ObservableObject {
         guard !isBusy || virtualMachine == nil else { return }
         if isRunning, runningID == id { showsDisplay = true; return }
         if isRunning { throw NativeVMError.anotherVMRunning }
+        guard !hasOtherHostCopy else { throw NativeVMError.anotherHostCopyRunning }
         let bundle = rootURL.appendingPathComponent(id.description, isDirectory: true)
         guard FileManager.default.fileExists(atPath: bundle.path) else { throw NativeVMError.missingVM }
         let hardwareData = try Data(contentsOf: bundle.appendingPathComponent("hardware.bin"))
@@ -237,11 +267,11 @@ final class NativeVMManager: ObservableObject {
         let vm = VZVirtualMachine(configuration: configuration)
         vm.delegate = vmDelegate
         virtualMachine = vm
-        showsDisplay = true
         do {
             try await vm.start()
             runningID = id
             isRunning = true
+            showsDisplay = true
             status = "Tether Host VM started. Finish the macOS welcome screens in this window."
         } catch {
             virtualMachine = nil
@@ -249,6 +279,18 @@ final class NativeVMManager: ObservableObject {
             status = "Could not boot the VM: \(error.localizedDescription)"
             throw error
         }
+    }
+
+    func startOrShow(_ id: VirtualMachineID) async {
+        do { try await boot(id) }
+        catch {
+            status = "Could not start the VM: \(error.localizedDescription) If another Tether Host copy is open, quit it and try again."
+        }
+    }
+
+    private var hasOtherHostCopy: Bool {
+        NSRunningApplication.runningApplications(withBundleIdentifier: "app.tether.host")
+            .contains { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }
     }
 
     private func makeConfiguration(

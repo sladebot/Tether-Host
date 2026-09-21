@@ -4,6 +4,12 @@ Tether Host for Mac is the macOS companion for the Tether iOS app. Its first-lau
 Setup Assistant offers a built-in Apple VM and UTM as a backup. The built-in
 path accepts a local macOS IPSW, checks compatibility, creates a new VM identity
 and sparse disk, installs macOS, and starts the VM in a Tether Host window.
+The built-in VM has a Virtio network adapter attached to Apple's NAT, which
+routes guest traffic through the Mac's network connection. Guest internet
+reachability still needs a check inside macOS after first-run setup.
+The setup guide waits for the user to finish Apple's macOS account screens in
+that window. **Desktop is ready — Continue** returns to the guide without
+stopping the VM, and **Show VM** reopens it for guest setup.
 The IPSW must not require a newer macOS host; the app rejects a macOS 27 IPSW
 on a macOS 26 host before creating a disk. Apple's installer also reported a
 required host software update for that combination in local testing. On a
@@ -55,7 +61,7 @@ for My Mac. The deployment target is macOS 14 and the bundle identifier is
 
 Build the ad-hoc signed development DMG with `./scripts/build-preview.sh`.
 The output filename includes the app marketing version and build number, for
-example `build/Tether-Host-for-Mac-v1.0.0-build-5-preview.dmg`, with a matching
+example `build/Tether-Host-for-Mac-v1.0.0-build-6-preview.dmg`, with a matching
 `.sha256` checksum file. Bump `MARKETING_VERSION` for a product release and
 `CURRENT_PROJECT_VERSION` for every distributed build. The script verifies the
 app signature and DMG checksum; this is not a notarized public release.

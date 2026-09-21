@@ -147,7 +147,7 @@ private struct NativeVMSetupView: View {
                 if manager.isBusy { ProgressView().controlSize(.small) }
                 Text(manager.status).font(.callout).textSelection(.enabled)
             }
-            SetupPhaseBox(number: 2, title: "Boot and finish macOS setup", symbol: "power") {
+            SetupPhaseBox(number: 2, title: "Finish the macOS welcome screens", symbol: "power") {
                 if model.candidateVMs.isEmpty {
                     Text("No completed Tether Host VM is installed yet.").foregroundStyle(.secondary)
                 } else {
@@ -158,21 +158,44 @@ private struct NativeVMSetupView: View {
                                 Text(vm.id.description).font(.caption.monospaced()).foregroundStyle(.secondary)
                             }
                             Spacer()
-                            Button("Start / Show") {
+                            Button(manager.runningVMID == vm.id ? "Show VM" : "Start VM") {
                                 model.selectVM(vm.id)
-                                Task { try? await manager.boot(vm.id) }
+                                Task { await manager.startOrShow(vm.id) }
                             }
+                        }
+                        if manager.isDesktopReady(for: vm.id) {
+                            HStack {
+                                Label("You confirmed the macOS desktop is ready.", systemImage: "checkmark.circle.fill")
+                                    .foregroundStyle(.green)
+                                Spacer()
+                                Button("Setup isn't finished") { manager.clearDesktopReady(for: vm.id) }
+                                    .font(.caption)
+                            }
+                        } else {
+                            Label("Waiting for you to finish macOS Setup Assistant in the VM.", systemImage: "hourglass")
+                                .foregroundStyle(.orange)
                         }
                     }
                 }
                 Button("Refresh VM List") { Task { await model.refresh() } }
                     .disabled(model.isRefreshing)
-                Text("Finish Apple's first-run macOS screens in the VM window. Tether Host keeps the VM display in this app.")
+                Text(manager.status).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
+                Text("Create the macOS user and complete Apple's first-run screens inside the VM. When its desktop appears, click “Desktop is ready — Continue” below the VM display. That returns here without shutting the VM down. Use Show VM whenever you need to go back.")
                     .foregroundStyle(.secondary)
             }
             SetupPhaseBox(number: 3, title: "Install Tailscale inside the VM", symbol: "network") {
+                if let vm = model.designatedVM, !manager.isDesktopReady(for: vm.id) {
+                    Label("Finish step 2 before installing guest components.", systemImage: "hourglass")
+                        .foregroundStyle(.orange)
+                }
                 Text("The guest setup disk is attached automatically when the new VM starts. In the VM, open the disk, copy Tether Host for Mac to Applications, and launch it. Choose Run Guest Setup there; it checks Tailscale and guides any required Apple approval or sign-in.")
                     .foregroundStyle(.secondary)
+                if let vm = model.designatedVM, manager.isDesktopReady(for: vm.id) {
+                    Button("Show VM to open the guest setup disk") {
+                        Task { await manager.startOrShow(vm.id) }
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
             }
             SetupPhaseBox(number: 4, title: "Install Hermes inside the VM", symbol: "shippingbox") {
                 Text("The same in-VM setup checks Hermes, installs or configures it, and verifies the private connection before you connect Tether on your phone.")
@@ -186,12 +209,24 @@ private struct NativeVMSetupView: View {
                         Text("Tether Host VM").font(.headline)
                         Spacer()
                         Text(manager.status).font(.caption).foregroundStyle(.secondary)
-                        Button("Hide Window") { manager.showsDisplay = false }
                     }
                     .padding(10)
                     NativeVMDisplay(virtualMachine: vm)
+                    HStack {
+                        Text("Finish the macOS account setup here. Tether Host cannot inspect the fresh desktop until its guest app is installed.")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Return to Setup Guide") { manager.showsDisplay = false }
+                            .disabled(manager.isBusy)
+                        Button("Desktop is ready — Continue") { manager.confirmDesktopReady() }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(!manager.isRunning || manager.isBusy)
+                    }
+                    .padding(10)
                 }
                 .frame(minWidth: 900, minHeight: 650)
+                .interactiveDismissDisabled(manager.isBusy)
             }
         }
     }
