@@ -36,24 +36,26 @@ and check/configure Hermes inside the guest. The physical Mac is used only for
 the provider and VM-state checks. Guest dependency detection never uses host
 Hermes, Tailscale, or developer tools.
 
-The app creates a read-only `Tether Guest Setup.iso` containing Tether Host for
-transfer without shared host folders or clipboard. Inside the macOS guest,
-**Run Guest Setup** launches the bundled interactive installer. It checks
-Tailscale first, verifies its publisher signature, and guides sign-in when needed.
+The app creates a read-only `Tether Guest Setup.iso` containing only a small
+guest helper, without shared host folders or clipboard. Inside the macOS guest,
+double-click **Set up Tether Guest.command** on that disk; no second Tether Host
+installation is needed. The helper first checks real guest HTTPS access through
+the host's NAT, then checks Tailscale, verifies its publisher signature, and
+guides sign-in when needed.
 It then installs the pinned Hermes runtime when absent or configures a working
 existing guest installation, enables loopback bearer authentication, prompts for
 model login and guest permissions, starts the gateway, configures private HTTPS,
 and verifies a real model response. It refuses to run on the physical host.
 
-**Load Guest Connection** imports the generated URL/token in the guest. The
-connection screen also offers **Import Guest Connection…** for a private, user-owned
+The helper displays the verified URL/token in its guest Terminal for entry in
+Tether iOS. The host connection screen also offers **Import Guest Connection…** for a private, user-owned
 `connection.json`, accepts an existing endpoint manually, checks TLS and
 API authentication/capabilities, stores the credential in Keychain, and provides
 masked reveal/copy controls for use in Tether iOS. The phone still needs Tailscale
 and its own Test Connection check. A host-side check does not certify phone reachability.
 
 For the built-in VM, Tether Host creates a read-only guest setup disk and
-attaches it at boot. UTM still requires manual VM creation and ISO attachment
+refreshes and attaches it at every boot. UTM still requires manual VM creation and ISO attachment
 because UTM's public scripting interface cannot create a macOS VM from an IPSW.
 The development DMG is
 not a notarized production installer, and the new guest installation flow has not
@@ -67,7 +69,7 @@ for My Mac. The deployment target is macOS 14 and the bundle identifier is
 
 Build the ad-hoc signed development DMG with `./scripts/build-preview.sh`.
 The output filename includes the app marketing version and build number, for
-example `build/Tether-Host-for-Mac-v1.0.0-build-8-preview.dmg`, with a matching
+example `build/Tether-Host-for-Mac-v1.0.0-build-9-preview.dmg`, with a matching
 `.sha256` checksum file. Bump `MARKETING_VERSION` for a product release and
 `CURRENT_PROJECT_VERSION` for every distributed build. The script verifies the
 app signature and DMG checksum; this is not a notarized public release.

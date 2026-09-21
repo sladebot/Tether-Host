@@ -165,6 +165,9 @@ private struct NativeVMSetupView: View {
                                 Text(vm.id.description).font(.caption.monospaced()).foregroundStyle(.secondary)
                             }
                             Spacer()
+                            if model.vmBundleURL(for: vm) != nil {
+                                Button("Show in Finder") { model.revealVMInFinder(vm) }
+                            }
                             Button(manager.runningVMID == vm.id ? "Show VM" : "Start VM") {
                                 model.selectVM(vm.id)
                                 Task { await manager.startOrShow(vm.id) }
@@ -187,7 +190,7 @@ private struct NativeVMSetupView: View {
                 Button("Refresh VM List") { Task { await model.refresh() } }
                     .disabled(model.isRefreshing)
                 Text(manager.status).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
-                Text("Create the macOS user and complete Apple's first-run screens inside the VM. When its desktop appears, click “Desktop is ready — Continue” below the VM display. That returns here without shutting the VM down. Use Show VM whenever you need to go back.")
+                Text("Create the macOS user and complete Apple's first-run screens inside the VM. Its network uses this Mac's Internet through Apple NAT. When the desktop appears, click “Desktop is ready — Continue” below the VM display. That returns here without shutting the VM down. Use Show VM whenever you need to go back.")
                     .foregroundStyle(.secondary)
             }
             SetupPhaseBox(number: 3, title: "Install Tailscale inside the VM", symbol: "network") {
@@ -195,7 +198,7 @@ private struct NativeVMSetupView: View {
                     Label("Finish step 2 before installing guest components.", systemImage: "hourglass")
                         .foregroundStyle(.orange)
                 }
-                Text("The guest setup disk is attached automatically when the new VM starts. In the VM, open the disk, copy Tether Host for Mac to Applications, and launch it. Choose Run Guest Setup there; it checks Tailscale and guides any required Apple approval or sign-in.")
+                Text("The guest setup disk is attached automatically when the VM starts. In the VM, open the disk and double-click Set up Tether Guest.command. The helper checks real HTTPS access from the VM, then configures Tailscale and Hermes. Tether Host stays installed only on this Mac.")
                     .foregroundStyle(.secondary)
                 if let vm = model.designatedVM, manager.isDesktopReady(for: vm.id) {
                     Button("Show VM to open the guest setup disk") {
@@ -308,6 +311,9 @@ private struct GuestConnectionSetupView: View {
                             .foregroundStyle(.secondary)
                             .textSelection(.enabled)
                         Spacer()
+                        if model.vmBundleURL(for: vm) != nil {
+                            Button("Show in Finder") { model.revealVMInFinder(vm) }
+                        }
                         if model.candidateVMs.count > 1 {
                             Button("Choose Different VM") { model.clearVMSelection() }
                         }
@@ -328,6 +334,9 @@ private struct GuestConnectionSetupView: View {
                                         .foregroundStyle(.secondary)
                                 }
                                 Spacer()
+                                if model.vmBundleURL(for: vm) != nil {
+                                    Button("Show in Finder") { model.revealVMInFinder(vm) }
+                                }
                                 Button("Use This VM") { model.selectVM(vm.id) }
                             }
                         }
@@ -393,9 +402,8 @@ private struct GuestConnectionSetupView: View {
             SetupPhaseBox(number: 3, title: "Check and configure Tailscale inside the VM", symbol: "network") {
                 VStack(alignment: .leading, spacing: 7) {
                     Text("1. In UTM, attach **Tether Guest Setup.iso** to the running VM as a removable drive.")
-                    Text("2. Inside the VM, open the mounted disk and copy **Tether Host for Mac** to Applications.")
-                    Text("3. Launch it inside the VM and choose **Run Guest Setup**.")
-                    Text("Tether checks the guest’s Tailscale app and connection. If either is missing, it installs Tailscale or guides sign-in and Apple approval inside the VM.")
+                    Text("2. Inside the VM, open the mounted disk and double-click **Set up Tether Guest.command**. Do not install a second copy of Tether Host.")
+                    Text("3. The helper checks guest Internet access, then Tailscale and Hermes. Follow sign-in and Apple approval prompts inside the VM.")
                 }
                 .foregroundStyle(.secondary)
             }

@@ -25,15 +25,17 @@ codesign --verify --deep --strict "$APP_PATH"
 mkdir "$STAGING_DIRECTORY/content"
 ditto "$APP_PATH" "$STAGING_DIRECTORY/content/Tether Host for Mac.app"
 mkdir "$STAGING_DIRECTORY/guest-disk"
-ditto --norsrc --noextattr --noqtn --noacl "$APP_PATH" "$STAGING_DIRECTORY/guest-disk/Tether Host for Mac.app"
+ditto --norsrc --noextattr --noqtn --noacl "$APP_PATH/Contents/Resources/GuestSetup" "$STAGING_DIRECTORY/guest-disk"
 xattr -cr "$STAGING_DIRECTORY/guest-disk"
-codesign --verify --deep --strict "$STAGING_DIRECTORY/guest-disk/Tether Host for Mac.app"
+test -x "$STAGING_DIRECTORY/guest-disk/Set up Tether Guest.command"
+test -f "$STAGING_DIRECTORY/guest-disk/guest_setup.py"
+test -f "$STAGING_DIRECTORY/guest-disk/components.json"
 printf 'Tether Guest Setup — version %s (%s)\nRun only inside the VM.\n\n' \
     "$APP_VERSION" "$APP_BUILD" > "$STAGING_DIRECTORY/guest-disk/Read Me.txt"
 cat >> "$STAGING_DIRECTORY/guest-disk/Read Me.txt" <<'GUEST_NOTE'
 
-Copy Tether Host for Mac into this VM's Applications folder and launch it.
-Open Setup Assistant and choose Run Guest Setup. The installer checks Tailscale
+Double-click Set up Tether Guest.command from this disk inside the VM. Do not
+install a second copy of Tether Host. The helper checks guest Internet and Tailscale
 inside this VM first and installs or configures it as needed. It then checks
 Hermes inside this VM, installing it when absent or configuring a working
 existing installation for API access, model login, computer use, and final
@@ -57,16 +59,16 @@ UTM remains available as a backup for existing VMs. The four checks are:
 3. Check/install/configure Tailscale inside the VM.
 4. Check/install/configure Hermes inside the VM, then verify it.
 
-The included Tether Guest Setup.iso transfers the app into the VM without
+The included Tether Guest Setup.iso carries only a small guest helper, without
 enabling host folder or clipboard sharing. Built-in VM attaches a generated
-copy automatically. In the guest, copy the app to Applications and choose
-Run Guest Setup. UTM backup users attach the ISO manually.
+copy automatically. In the guest, double-click Set up Tether Guest.command.
+UTM backup users attach the ISO manually.
 
 Dependency detection for Tailscale and Hermes runs inside the VM. Software on
 the physical Mac never satisfies those checks. The installer guides Tailscale
 sign-in, model login, guest permissions, service configuration, and verification.
-Load Guest Connection to verify the URL/token.
-Enter the URL/token in Tether iOS with the phone on the same tailnet.
+The helper verifies the URL/token in the VM. Enter those connection details in
+Tether iOS with the phone on the same tailnet.
 
 Existing Hermes installations are preserved: the guest installer refuses
 to overwrite unmanaged data. You can verify an existing connection manually.

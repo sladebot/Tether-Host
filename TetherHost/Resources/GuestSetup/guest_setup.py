@@ -1,4 +1,4 @@
-"""Guest-local configuration and real API verification; never prints credentials."""
+"""Guest-local configuration and real API verification."""
 import json
 import os
 import plistlib
@@ -183,6 +183,16 @@ def main(action):
     model = subprocess.check_output(['/usr/sbin/sysctl', '-n', 'hw.model'], text=True).strip()
     if not model.startswith('VirtualMac'):
         raise SetupFailure('Guest configuration is allowed only inside a macOS VM.')
+    if action == 'show-connection':
+        receipt = STATE / 'connection.json'
+        if not receipt.is_file():
+            raise SetupFailure('No verified guest connection is available yet.')
+        details = json.loads(receipt.read_text())
+        print('\nEnter these details in Tether on your iPhone:')
+        print('URL: ' + details['endpoint'])
+        print('API token: ' + details['token'])
+        print('Keep this token private. It is also saved in the guest connection.json file.\n')
+        return
     if action == 'configure':
         configure()
         return

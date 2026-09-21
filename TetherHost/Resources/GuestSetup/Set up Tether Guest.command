@@ -30,6 +30,13 @@ rm -f "$TETHER_GUEST_STATE/connection.json"
 stage() { CURRENT_STAGE="$1"; printf '\n%s\n' "$1"; printf '%s\n' "$1" > "$TETHER_GUEST_STATE/status.txt"; }
 wait_for_user() { printf '\n%s\nPress Return when finished, or Control-C to stop. ' "$1"; read -r _; }
 
+stage 'Step 3 of 4 — Checking Internet from inside this VM'
+if ! /usr/bin/curl --proto '=https' --tlsv1.2 -sSI --connect-timeout 10 --max-time 20 \
+    https://pkgs.tailscale.com/stable/ > /dev/null; then
+    fail 'This VM cannot reach the Tailscale package server over HTTPS. Check that the physical Mac is online and the VM Ethernet interface has an address, then rerun guest setup.'
+fi
+printf 'Guest HTTPS access is working.\n'
+
 stage 'Step 3 of 4 — Checking Tailscale inside this VM'
 TAILSCALE_BIN='/Applications/Tailscale.app/Contents/MacOS/Tailscale'
 if [ ! -x "$TAILSCALE_BIN" ]; then
@@ -104,6 +111,7 @@ stage 'Step 4 of 4 — Verifying private HTTPS and model access'
 "$TAILSCALE_BIN" serve --bg --https=443 http://127.0.0.1:8642
 "$TAILSCALE_BIN" serve status --json > "$TETHER_GUEST_STATE/serve-after.json"
 "$PYTHON_BIN" "$SCRIPT_DIRECTORY/guest_setup.py" verify
-stage 'Installation complete — backend verified. Return to Tether Host and choose Load Guest Connection.'
-printf '\nIn Tether iOS, add a Hermes API Server connection using the URL and token shown by Tether Host.\nKeep Tailscale connected on your phone and this guest.\n'
+stage 'Installation complete — backend verified'
+"$PYTHON_BIN" "$SCRIPT_DIRECTORY/guest_setup.py" show-connection
+printf 'Keep Tailscale connected on your phone and this guest.\n'
 wait_for_user 'The setup has finished. The guest must remain running and logged in for the gateway and computer use to stay available.'

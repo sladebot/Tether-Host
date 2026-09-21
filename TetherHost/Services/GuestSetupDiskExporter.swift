@@ -2,6 +2,7 @@ import Foundation
 
 public enum GuestSetupDiskError: Error, LocalizedError, Sendable {
     case invalidApplication
+    case missingGuestHelper
     case invalidDestination
     case missingDiskUtility
     case creationFailed(String)
@@ -10,6 +11,8 @@ public enum GuestSetupDiskError: Error, LocalizedError, Sendable {
         switch self {
         case .invalidApplication:
             "The running Tether Host application bundle could not be packaged."
+        case .missingGuestHelper:
+            "The guest setup helper is missing from the Tether Host application bundle."
         case .invalidDestination:
             "Choose a local filename ending in .iso."
         case .missingDiskUtility:
@@ -42,13 +45,20 @@ public enum GuestSetupDiskExporter {
                 .appendingPathComponent("tether-guest-setup-\(UUID().uuidString)", isDirectory: true)
             defer { try? manager.removeItem(at: staging) }
             try manager.createDirectory(at: staging, withIntermediateDirectories: false)
-            let stagedApp = staging.appendingPathComponent("Tether Host for Mac.app", isDirectory: true)
-            try manager.copyItem(at: appURL, to: stagedApp)
-            // HFS metadata on hybrid images can add FinderInfo to signed Mach-O
-            // files and invalidate their resource envelope after guest transfer.
+            let guestResources = appURL.appendingPathComponent("Contents/Resources/GuestSetup", isDirectory: true)
+            let helperFiles = ["Set up Tether Guest.command", "guest_setup.py", "components.json"]
+            guard helperFiles.allSatisfy({ manager.fileExists(atPath: guestResources.appendingPathComponent($0).path) }) else {
+                throw GuestSetupDiskError.missingGuestHelper
+            }
+            for filename in helperFiles {
+                try manager.copyItem(at: guestResources.appendingPathComponent(filename),
+                                     to: staging.appendingPathComponent(filename))
+            }
+            // Keep the guest helper independent of the host app and free of
+            // transfer-only metadata on the mounted image.
             let xattr = Process()
             xattr.executableURL = URL(fileURLWithPath: "/usr/bin/xattr")
-            xattr.arguments = ["-cr", stagedApp.path]
+            xattr.arguments = ["-cr", staging.path]
             xattr.standardOutput = FileHandle.nullDevice
             xattr.standardError = FileHandle.nullDevice
             try xattr.run()
@@ -59,11 +69,13 @@ public enum GuestSetupDiskExporter {
             let instructions = """
             Tether Guest Setup
 
-            1. Copy Tether Host for Mac to this VM's Applications folder.
-            2. Open the copied app.
-            3. Choose Setup Assistant, then Run Guest Setup.
-            4. Configure Tailscale inside this VM when prompted.
-            5. Configure Hermes, model login, and guest permissions.
+            1. In this VM, double-click Set up Tether Guest.command on this disk.
+            2. Confirm the guest Internet check succeeds.
+            3. Configure Tailscale inside this VM when prompted.
+            4. Configure Hermes, model login, and guest permissions.
+
+            Install Tether Host for Mac only on the physical Mac. This disk
+            carries a small guest helper, not a second copy of the host app.
 
             Run this only inside the macOS virtual machine.
             """

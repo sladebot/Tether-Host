@@ -2,16 +2,16 @@
 
 ## Current preview
 
-- App: `/Applications/Tether Host for Mac.app`, version 1.0.0, build 8.
-- DMG: `build/Tether-Host-for-Mac-v1.0.0-build-8-preview.dmg`.
-- SHA-256: `1af639f76b2582e38b71323fd8c6199cc055a7bfeec20f6609c4b770566becb7`.
+- App: `/Applications/Tether Host for Mac.app`, version 1.0.0, build 9.
+- DMG: `build/Tether-Host-for-Mac-v1.0.0-build-9-preview.dmg`.
+- SHA-256: see the matching `.sha256` file beside the DMG.
 - Rebuild: `./scripts/build-preview.sh`.
 - Signing: local ad-hoc Debug build, not Developer ID signed or notarized.
 
-The DMG checksum and `hdiutil verify` passed. The app inside the DMG and the
-copy installed in Applications passed strict deep code-signature verification.
-The old preview DMGs and temporary Tether Host app copies were removed. No older
-Tether Host process remained when build 8 was launched.
+The build 9 DMG checksum and `hdiutil verify` passed. The app inside the DMG
+passed strict deep code-signature verification. Its nested guest ISO mounted
+read-only with an executable setup command and supporting files, without a
+second copy of the host app.
 
 ## Tested on this Mac Studio
 
@@ -39,8 +39,7 @@ the VM. **Return to Setup Guide** is available before setup is finished;
 display without stopping the VM. **Show VM** returns to the guest. A fresh VM
 has no guest helper yet, so desktop readiness is confirmed by the user.
 
-The app builds successfully, 43 Swift package tests pass, and `git diff
---check` passes. The computer-use service repeatedly closed its native pipe
+The app builds successfully. The computer-use service repeatedly closed its native pipe
 when clicking the return control, so that UI action could not be verified by
 automation. Tether Host itself remained running and the VM disk stayed open.
 
@@ -54,9 +53,19 @@ Build 8 places a second **Create New VM** action directly above the existing-VM
 checks on the UTM Setup Assistant screen shown in user testing. It changes to
 the built-in Apple VM creation guide. The compatible macOS IPSW already stored
 by Tether Host is offered for reuse rather than presented as a fresh download.
-The installed app is build 8 and remains running. The computer-use service again
+The installed app was build 8 during this test. The computer-use service again
 closed its native pipe while reading this particular guide after navigation;
 this did not terminate Tether Host.
+
+Build 9 adds **Show in Finder** for exact local VM bundles on the Virtual
+Machines page and beside matching VM rows in Setup Assistant. It resolves the
+VM UUID from the native manifest or UTM `config.plist`; duplicate VM names are
+not used as a path. One local UTM bundle matched a registration by UUID. A
+second registration had no discoverable exact local bundle, so its Finder action
+is unavailable. Build 9 also refreshes the small guest-only ISO at each native
+VM boot. The guest helper checks HTTPS from inside the VM before trying to
+install Tailscale or Hermes. The network check still needs to run after Apple's
+guest account setup is finished.
 
 ## Still to test with the user
 

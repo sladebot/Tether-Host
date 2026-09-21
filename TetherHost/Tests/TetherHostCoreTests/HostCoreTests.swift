@@ -282,13 +282,81 @@ final class HostCoreTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let app = root.appendingPathComponent("Tether Host for Mac.app", isDirectory: true)
         try FileManager.default.createDirectory(at: app, withIntermediateDirectories: true)
-        try Data("test-app".utf8).write(to: app.appendingPathComponent("marker.txt"))
+        let helper = app.appendingPathComponent("Contents/Resources/GuestSetup", isDirectory: true)
+        try FileManager.default.createDirectory(at: helper, withIntermediateDirectories: true)
+        for filename in ["Set up Tether Guest.command", "guest_setup.py", "components.json"] {
+            try Data("guest-helper".utf8).write(to: helper.appendingPathComponent(filename))
+        }
         let image = root.appendingPathComponent("Tether Guest Setup.iso")
 
         try await GuestSetupDiskExporter.export(appURL: app, to: image)
 
         let attributes = try FileManager.default.attributesOfItem(atPath: image.path)
         XCTAssertGreaterThan((attributes[.size] as? NSNumber)?.intValue ?? 0, 0)
+        let mount = root.appendingPathComponent("mounted", isDirectory: true)
+        try FileManager.default.createDirectory(at: mount, withIntermediateDirectories: false)
+        let attach = Process()
+        attach.executableURL = URL(fileURLWithPath: "/usr/bin/hdiutil")
+        attach.arguments = ["attach", "-readonly", "-nobrowse", "-mountpoint", mount.path, image.path]
+        attach.standardOutput = FileHandle.nullDevice
+        try attach.run()
+        attach.waitUntilExit()
+        XCTAssertEqual(attach.terminationStatus, 0)
+        defer {
+            let detach = Process()
+            detach.executableURL = URL(fileURLWithPath: "/usr/bin/hdiutil")
+            detach.arguments = ["detach", mount.path]
+            detach.standardOutput = FileHandle.nullDevice
+            if (try? detach.run()) != nil { detach.waitUntilExit() }
+        }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: mount.appendingPathComponent("guest_setup.py").path))
+        XCTAssertTrue(FileManager.default.isExecutableFile(atPath: mount.appendingPathComponent("Set up Tether Guest.command").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: mount.appendingPathComponent("Tether Host for Mac.app").path))
+    }
+
+    func testGuestSetupDiskExporterRequiresHelperResources() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("tether-missing-helper-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let app = root.appendingPathComponent("Tether Host for Mac.app", isDirectory: true)
+        try FileManager.default.createDirectory(at: app, withIntermediateDirectories: true)
+        do {
+            try await GuestSetupDiskExporter.export(appURL: app, to: root.appendingPathComponent("Guest.iso"))
+            XCTFail("Expected a missing helper to be rejected")
+        } catch let error as GuestSetupDiskError {
+            guard case .missingGuestHelper = error else { return XCTFail("Unexpected error: \(error)") }
+        }
+    }
+
+    func testFinderLocatorUsesExactUTMIdentityAndRejectsAmbiguousCopies() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("tether-vm-locator-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let firstID = VirtualMachineID(rawValue: UUID())
+        let secondID = VirtualMachineID(rawValue: UUID())
+        func makeUTM(_ name: String, id: VirtualMachineID) throws -> URL {
+            let bundle = root.appendingPathComponent("\(name).utm", isDirectory: true)
+            try FileManager.default.createDirectory(at: bundle, withIntermediateDirectories: false)
+            let plist: [String: Any] = ["Information": ["UUID": id.description, "Name": "Same display name"]]
+            let data = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
+            try data.write(to: bundle.appendingPathComponent("config.plist"))
+            return bundle
+        }
+        let first = try makeUTM("first", id: firstID)
+        _ = try makeUTM("second", id: secondID)
+        let locator = VirtualMachineBundleLocator(nativeRoot: root, utmRoots: [root])
+        XCTAssertEqual(locator.locate(firstID, provider: .utm)?.resolvingSymlinksInPath(),
+                       first.resolvingSymlinksInPath())
+        XCTAssertNil(locator.locate(VirtualMachineID(rawValue: UUID()), provider: .utm))
+        let otherRoot = root.appendingPathComponent("another", isDirectory: true)
+        try FileManager.default.createDirectory(at: otherRoot, withIntermediateDirectories: false)
+        let duplicate = otherRoot.appendingPathComponent("duplicate.utm", isDirectory: true)
+        try FileManager.default.createDirectory(at: duplicate, withIntermediateDirectories: false)
+        try FileManager.default.copyItem(at: first.appendingPathComponent("config.plist"),
+                                         to: duplicate.appendingPathComponent("config.plist"))
+        let ambiguous = VirtualMachineBundleLocator(nativeRoot: root, utmRoots: [root, otherRoot])
+        XCTAssertNil(ambiguous.locate(firstID, provider: .utm))
     }
 
     func testGuestSetupDiskExporterRejectsWrongExtension() async {

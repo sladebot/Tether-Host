@@ -14,6 +14,7 @@ enum NativeVMError: LocalizedError {
     case invalidVM
     case anotherVMRunning
     case anotherHostCopyRunning
+    case guestDiskUnavailable
 
     var errorDescription: String? {
         switch self {
@@ -26,6 +27,7 @@ enum NativeVMError: LocalizedError {
         case .invalidVM: "The Tether VM is incomplete or damaged. Create a new VM from an IPSW."
         case .anotherVMRunning: "Another Tether VM is already running. Shut it down before starting this one."
         case .anotherHostCopyRunning: "Another Tether Host for Mac copy is open. Quit it before starting this VM."
+        case .guestDiskUnavailable: "The guest setup disk could not be prepared. Check the Tether Host installation and try Start VM again."
         }
     }
 }
@@ -238,8 +240,6 @@ final class NativeVMManager: ObservableObject {
                 to: stage.appendingPathComponent(NativeVirtualMachineStore.manifestFilename), options: .atomic
             )
             try FileManager.default.moveItem(at: stage, to: destination)
-            status = "macOS installed. Preparing its Tether guest setup disk…"
-            await prepareGuestDisk()
             status = "Starting the fresh VM…"
             try await boot(id)
             return id
@@ -247,6 +247,10 @@ final class NativeVMManager: ObservableObject {
             virtualMachine = nil
             showsDisplay = false
             try? FileManager.default.removeItem(at: stage)
+            if FileManager.default.fileExists(atPath: destination.appendingPathComponent(NativeVirtualMachineStore.manifestFilename).path) {
+                status = "macOS is installed, but the VM could not start: \(error.localizedDescription)"
+                return id
+            }
             status = "VM installation failed: \(error.localizedDescription)"
             return nil
         }
@@ -259,6 +263,7 @@ final class NativeVMManager: ObservableObject {
         guard !hasOtherHostCopy else { throw NativeVMError.anotherHostCopyRunning }
         let bundle = rootURL.appendingPathComponent(id.description, isDirectory: true)
         guard FileManager.default.fileExists(atPath: bundle.path) else { throw NativeVMError.missingVM }
+        guard await prepareGuestDisk() else { throw NativeVMError.guestDiskUnavailable }
         let hardwareData = try Data(contentsOf: bundle.appendingPathComponent("hardware.bin"))
         let machineData = try Data(contentsOf: bundle.appendingPathComponent("machine.bin"))
         guard let hardware = VZMacHardwareModel(dataRepresentation: hardwareData),
@@ -333,13 +338,18 @@ final class NativeVMManager: ObservableObject {
         return configuration
     }
 
-    func prepareGuestDisk() async {
+    @discardableResult
+    func prepareGuestDisk() async -> Bool {
         let destination = rootURL.deletingLastPathComponent().appendingPathComponent("Tether Guest Setup.iso")
         do {
             status = "Preparing the guest setup disk…"
             try await GuestSetupDiskExporter.export(appURL: Bundle.main.bundleURL, to: destination)
             status = "Guest setup disk is ready. It will appear when the VM next starts."
-        } catch { status = "Guest setup disk failed: \(error.localizedDescription)" }
+            return true
+        } catch {
+            status = "Guest setup disk failed: \(error.localizedDescription)"
+            return false
+        }
     }
 
     fileprivate func guestStopped(error: Error?) {

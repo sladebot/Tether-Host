@@ -246,6 +246,26 @@ final class AppViewModel: ObservableObject {
         preferences.removeObject(forKey: "setup.vmID")
     }
 
+    func vmBundleURL(for record: VirtualMachineRecord) -> URL? {
+        guard !isInsideGuest, inventory.contains(where: { $0.id == record.id }) else { return nil }
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        let locator = VirtualMachineBundleLocator(
+            nativeRoot: support.appendingPathComponent("Tether Host for Mac/Virtual Machines"),
+            utmRoots: [
+                home.appendingPathComponent("Library/Containers/com.utmapp.UTM/Data/Documents"),
+                home.appendingPathComponent("Documents/UTM"),
+                home.appendingPathComponent("Documents")
+            ]
+        )
+        return locator.locate(record.id, provider: providerSetup.provider)
+    }
+
+    func revealVMInFinder(_ record: VirtualMachineRecord) {
+        guard let bundle = vmBundleURL(for: record) else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([bundle])
+    }
+
     func openUTM() {
         guard UTMInstallation.detect() == .installed else {
             guestSetupDiskStatus = "UTM is not installed in Applications."

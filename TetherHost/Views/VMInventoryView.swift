@@ -27,7 +27,10 @@ struct VMInventoryView: View {
                 )
             } else {
                 List(model.inventory) { vm in
-                    VMRecordRow(vm: vm, duplicate: model.isDuplicate(vm))
+                    VMRecordRow(vm: vm, duplicate: model.isDuplicate(vm),
+                                canReveal: model.vmBundleURL(for: vm) != nil) {
+                        model.revealVMInFinder(vm)
+                    }
                 }
                 .listStyle(.inset)
             }
@@ -52,6 +55,8 @@ struct VMInventoryView: View {
 private struct VMRecordRow: View {
     let vm: VirtualMachineRecord
     let duplicate: Bool
+    let canReveal: Bool
+    let reveal: () -> Void
 
     var body: some View {
         HStack(spacing: 14) {
@@ -81,14 +86,10 @@ private struct VMRecordRow: View {
                 .padding(.horizontal, 9)
                 .padding(.vertical, 5)
                 .background(.quaternary, in: Capsule())
-            Button("Designate") {}
-                .disabled(true)
-                .help(duplicate
-                    ? "Resolve duplicate registrations before designating an exact VM UUID."
-                    : "VM designation is unavailable in the read-only observation build.")
+            Button("Show in Finder", action: reveal)
+                .disabled(!canReveal)
+                .help(canReveal ? "Reveal the exact VM bundle in Finder" : "This registration's exact local bundle could not be found")
         }
         .padding(.vertical, 8)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(vm.name), UUID \(vm.id.rawValue.uuidString), state \(vm.state.rawValue)\(duplicate ? ", duplicate name" : "")")
     }
 }
