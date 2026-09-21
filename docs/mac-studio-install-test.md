@@ -1,17 +1,17 @@
-# Mac Studio installation test — 2026-09-20
+# Mac Studio installation test — 2026-09-21
 
 ## Current preview
 
-- App: `/Applications/Tether Host for Mac.app`, version 1.0.0, build 6.
-- DMG: `build/Tether-Host-for-Mac-v1.0.0-build-6-preview.dmg`.
-- SHA-256: `7798e625dd17bbcc9a54a38c01ec6243257def10b8c6c27d1ee1a4445e10c896`.
+- App: `/Applications/Tether Host for Mac.app`, version 1.0.0, build 7.
+- DMG: `build/Tether-Host-for-Mac-v1.0.0-build-7-preview.dmg`.
+- SHA-256: `caa51ff8423417affc517ca4811ae882bf5d437cf90168926699e58f01da2afe`.
 - Rebuild: `./scripts/build-preview.sh`.
 - Signing: local ad-hoc Debug build, not Developer ID signed or notarized.
 
 The DMG checksum and `hdiutil verify` passed. The app inside the DMG and the
 copy installed in Applications passed strict deep code-signature verification.
-The old build 5 DMG and temporary Tether Host app copies were removed. No older
-Tether Host process remained when build 6 was launched.
+The old preview DMGs and temporary Tether Host app copies were removed. No older
+Tether Host process remained when build 7 was launched.
 
 ## Tested on this Mac Studio
 
@@ -43,6 +43,12 @@ The app builds successfully, 43 Swift package tests pass, and `git diff
 --check` passes. The computer-use service repeatedly closed its native pipe
 when clicking the return control, so that UI action could not be verified by
 automation. Tether Host itself remained running and the VM disk stayed open.
+
+Build 7 adds **Create New VM** to the Virtual Machines page. This button was
+visible in the installed app even when UTM was the previously selected provider.
+It routes to the built-in macOS creation guide; the guide explicitly labels the
+IPSW choice and creation action. The computer-use service crashed while reading
+that guide after clicking the button, but the Tether Host process remained live.
 
 ## Still to test with the user
 

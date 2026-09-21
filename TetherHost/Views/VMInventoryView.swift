@@ -7,11 +7,22 @@ struct VMInventoryView: View {
     @EnvironmentObject private var model: AppViewModel
 
     var body: some View {
-        Group {
+        VStack(spacing: 0) {
+            HStack {
+                Text("Virtual machines on this Mac")
+                    .font(.headline)
+                Spacer()
+                if !model.isInsideGuest {
+                    Button("Create New VM") { model.startNewNativeVMSetup() }
+                        .buttonStyle(.borderedProminent)
+                        .accessibilityHint("Opens the built-in macOS VM creation guide")
+                }
+            }
+            .padding()
             if model.inventory.isEmpty {
                 EmptyEvidenceView(
-                    title: "No VM inventory",
-                    message: "No VM was found for the selected provider. Choose Built-in VM or UTM in Setup Assistant.",
+                    title: "No VM found",
+                    message: "Choose Create New VM to install macOS inside Tether Host.",
                     symbol: "macpro.gen3"
                 )
             } else {

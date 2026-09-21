@@ -81,7 +81,9 @@ struct SetupAssistantView: View {
                     Text("Continue to create or select a VM, then install the guest components and verify the phone connection.")
                         .font(.callout).foregroundStyle(.secondary)
                     Spacer(minLength: 24)
-                    Button("Continue") { model.continueProviderSetup() }
+                    Button(model.providerSetup.provider == .builtIn ? "Create New VM…" : "Continue with UTM") {
+                        model.continueProviderSetup()
+                    }
                         .buttonStyle(.borderedProminent)
                         .controlSize(.large)
                         .keyboardShortcut(.defaultAction)
@@ -119,7 +121,7 @@ private struct NativeVMSetupView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            SetupPhaseBox(number: 1, title: "Install a fresh macOS VM", symbol: "internaldrive") {
+            SetupPhaseBox(number: 1, title: "Create a new macOS VM", symbol: "internaldrive") {
                 Text("Choose a local Apple macOS IPSW. Tether Host checks that this Mac supports it, creates a new virtual disk and identity, and installs macOS. Existing VMs are left alone.")
                     .foregroundStyle(.secondary)
                 HStack {
@@ -134,7 +136,7 @@ private struct NativeVMSetupView: View {
                     }
                     .disabled(manager.isBusy)
                 }
-                Button(manager.isBusy ? "Installing…" : "Create and Install Tether Host VM") {
+                Button(manager.isBusy ? "Installing…" : "Create New VM from Selected IPSW") {
                     Task {
                         if let id = await manager.install() {
                             await model.refresh()
@@ -144,6 +146,11 @@ private struct NativeVMSetupView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(manager.imageURL == nil || manager.isBusy)
+                if manager.imageURL == nil {
+                    Text("First choose an IPSW above or download the compatible image. Then Create New VM becomes available.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
                 if manager.isBusy { ProgressView().controlSize(.small) }
                 Text(manager.status).font(.callout).textSelection(.enabled)
             }

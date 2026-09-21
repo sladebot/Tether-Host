@@ -204,6 +204,12 @@ final class AppViewModel: ObservableObject {
 
     func changeSetupProvider() { providerSetup.back() }
 
+    func startNewNativeVMSetup() {
+        selectProvider(.builtIn)
+        continueProviderSetup()
+        selection = .setup
+    }
+
     var expectedVMName: String {
         providerSetup.provider == .builtIn ? "Tether Host VM" : "a UTM"
     }
