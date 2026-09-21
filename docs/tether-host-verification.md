@@ -1,9 +1,33 @@
 # Tether Host for Mac verification — 2026-09-20
 
-This began as evidence for the initial read-only milestone and now also records
-the local guest-installer preview. It is not evidence that the production native
-VM installer, privileged helper, network boundary, pairing exchange, or
-signed/notarized DMG is complete.
+This began as evidence for the initial read-only milestone. The section below
+records the build-5 native VM integration check; later sections preserve the
+initial milestone's historical observations.
+
+## Build 5 native VM integration check
+
+- On the macOS 26.2 host, Apple's restore-image API loaded the supplied macOS
+  27.0 IPSW and reported hardware support, but installation failed with “a
+  software update is required.” The app now rejects a newer major-version IPSW
+  before it creates a disk.
+- The in-app download code fetched Apple's macOS 26.2 (25C56) IPSW and checked
+  its pinned SHA-256 digest. The image was stored under Tether Host's application
+  support directory; the user's macOS 27 IPSW was left untouched.
+- A temporary signed integration harness built from the same `NativeVMManager`
+  source installed macOS 26.2 into a fresh 64 GB sparse disk with a new hardware
+  identity. It registered VM `CA7A81D2-490B-4012-AA37-6676330B982F` as
+  `Tether Host VM` and started it successfully.
+- The harness packaged the actual Tether Host app as `Tether Guest Setup.iso`,
+  attached the ISO to that VM, started it again, and stopped it cleanly. The
+  original UTM VMs were not modified.
+- The build-5 preview DMG was built, mounted read-only, verified with `hdiutil`
+  and `codesign`, and its SHA-256 checksum matched. Core tests passed 43/43.
+- The macOS welcome screen, interactive setup inside the guest, Tailscale,
+  Hermes, and phone connection have not been visually verified. The computer
+  control service crashed while reading Tether Host's next setup screen; the
+  native VM install and boot checks ran through the temporary harness.
+
+## Historical initial milestone
 
 ## Implemented and verified
 
