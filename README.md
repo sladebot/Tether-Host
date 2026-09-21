@@ -4,6 +4,13 @@ Tether Host for Mac is the macOS companion for the Tether iOS app. Its first-lau
 Setup Assistant offers a built-in Apple VM and UTM as a backup. The built-in
 path accepts a local macOS IPSW, checks compatibility, creates a new VM identity
 and sparse disk, installs macOS, and starts the VM in a Tether Host window.
+Built-in VMs are saved under the user's Tether Host application support folder;
+they are separate from UTM and do not appear in UTM's library. The **Virtual
+Machines** page can switch between Tether Host and UTM inventories and reveal
+an exact local VM bundle in Finder. For built-in VMs, the bundle's Finder
+modified date is updated when Tether Host starts or stops the VM.
+Existing built-in VMs with the same saved name are distinguished by their UUID
+prefix in the inventory, and new VMs receive a unique name when created.
 The **Virtual Machines** page has a **Create New VM** button that opens this
 built-in creation guide even if UTM was selected previously. Choose an IPSW or
 use the in-app macOS download before creating the VM.
@@ -69,7 +76,7 @@ for My Mac. The deployment target is macOS 14 and the bundle identifier is
 
 Build the ad-hoc signed development DMG with `./scripts/build-preview.sh`.
 The output filename includes the app marketing version and build number, for
-example `build/Tether-Host-for-Mac-v1.0.0-build-9-preview.dmg`, with a matching
+example `build/Tether-Host-for-Mac-v1.0.0-build-11-preview.dmg`, with a matching
 `.sha256` checksum file. Bump `MARKETING_VERSION` for a product release and
 `CURRENT_PROJECT_VERSION` for every distributed build. The script verifies the
 app signature and DMG checksum; this is not a notarized public release.

@@ -24,6 +24,9 @@ codesign --force --deep --sign - --preserve-metadata=identifier,entitlements,fla
 codesign --verify --deep --strict "$APP_PATH"
 mkdir "$STAGING_DIRECTORY/content"
 ditto "$APP_PATH" "$STAGING_DIRECTORY/content/Tether Host for Mac.app"
+# Finder shows the bundle directory timestamp; set it to this packaged build.
+touch -m "$STAGING_DIRECTORY/content/Tether Host for Mac.app"
+codesign --verify --deep --strict "$STAGING_DIRECTORY/content/Tether Host for Mac.app"
 mkdir "$STAGING_DIRECTORY/guest-disk"
 ditto --norsrc --noextattr --noqtn --noacl "$APP_PATH/Contents/Resources/GuestSetup" "$STAGING_DIRECTORY/guest-disk"
 xattr -cr "$STAGING_DIRECTORY/guest-disk"

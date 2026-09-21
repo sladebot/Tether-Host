@@ -127,7 +127,18 @@ public struct NativeVirtualMachineStore: VirtualMachineReading, Sendable {
         if let duplicate = Dictionary(grouping: records, by: \.id).first(where: { $0.value.count > 1 })?.key {
             throw NativeVirtualMachineStoreError.duplicateID(duplicate)
         }
-        return records
+        let nameCounts = Dictionary(grouping: records) {
+            $0.name.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+        }.mapValues(\.count)
+        return records.map { record in
+            let key = record.name.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+            guard nameCounts[key, default: 0] > 1 else { return record }
+            return VirtualMachineRecord(
+                id: record.id,
+                name: "\(record.name) · \(record.id.description.prefix(8))",
+                state: record.state
+            )
+        }
     }
 
     public func status(of id: VirtualMachineID) async throws -> VirtualMachineState {

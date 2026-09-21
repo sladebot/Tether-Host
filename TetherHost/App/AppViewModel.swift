@@ -66,9 +66,7 @@ struct LiveHostStatusProvider: HostStatusProviding {
             evidenceSource = .utm
         }
         let now = Date()
-        let matches = evidenceSource == .appleVirtualization
-            ? inventory.filter { $0.name == "Tether Host VM" }
-            : inventory
+        let matches = inventory
         let vmState: HealthState = matches.count == 1 ? .healthy : .degraded
         let detail: String
         if matches.count == 1 {
@@ -210,14 +208,8 @@ final class AppViewModel: ObservableObject {
         selection = .setup
     }
 
-    var expectedVMName: String {
-        providerSetup.provider == .builtIn ? "Tether Host VM" : "a UTM"
-    }
-
     var candidateVMs: [VirtualMachineRecord] {
-        providerSetup.provider == .builtIn
-            ? inventory.filter { $0.name == expectedVMName }
-            : inventory
+        inventory
     }
 
     var designatedVM: VirtualMachineRecord? {

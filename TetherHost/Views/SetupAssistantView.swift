@@ -40,7 +40,7 @@ struct SetupAssistantView: View {
                     get: { model.providerSetup.provider },
                     set: { model.selectProvider($0) }
                 )) {
-                    Text("Built-in Apple VM — setup inside Tether Host").tag(VMProvider.builtIn)
+                    Text("Built-in Apple VM — saved in Tether Host").tag(VMProvider.builtIn)
                     Text("UTM — backup for existing VMs").tag(VMProvider.utm)
                 }
                 .pickerStyle(.radioGroup)
@@ -49,7 +49,7 @@ struct SetupAssistantView: View {
                 VStack(alignment: .leading, spacing: 12) {
                     Text(model.providerSetup.provider == .utm
                          ? "Keep an existing UTM VM as a backup. Tether Host can select and inspect it."
-                         : "Choose an IPSW in Tether Host; it creates, installs, and starts a fresh macOS VM without UTM.")
+                         : "Choose an IPSW in Tether Host; it saves, installs, and runs a fresh macOS VM here. Built-in VMs do not appear in UTM.")
                     if model.providerSetup.provider == .utm {
                         Text("This build requires UTM \(UTMInstallation.supportedVersion) in Applications.")
                             .font(.callout).foregroundStyle(.secondary)
@@ -122,7 +122,7 @@ private struct NativeVMSetupView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             SetupPhaseBox(number: 1, title: "Create a new macOS VM", symbol: "internaldrive") {
-                Text("Choose a local Apple macOS IPSW. Tether Host checks that this Mac supports it, creates a new virtual disk and identity, and installs macOS. Existing VMs are left alone.")
+                Text("Choose a local Apple macOS IPSW. Tether Host checks compatibility, saves a new VM in its own Virtual Machines folder, and installs macOS. You can reopen it from Tether Host's Virtual Machines page or Show in Finder. Built-in VMs are separate from UTM and will not appear there.")
                     .foregroundStyle(.secondary)
                 HStack {
                     Button("Choose macOS IPSW…") { manager.chooseIPSW() }
@@ -381,7 +381,7 @@ private struct GuestConnectionSetupView: View {
                         .disabled(model.isRefreshing)
                 }
                 Divider()
-                Text("Once the VM is running, create a read-only ISO containing Tether Host. Attach it as a removable drive; host folders and shared clipboard can stay disabled.")
+                Text("Once the VM is running, create a read-only ISO containing the small Tether guest helper. Attach it as a removable drive; host folders and shared clipboard can stay disabled.")
                     .foregroundStyle(.secondary)
                 HStack {
                     Button(model.isExportingGuestSetupDisk ? "Creating…" : "Create Guest Setup Disk…") {

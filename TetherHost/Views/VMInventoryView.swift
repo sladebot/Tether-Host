@@ -8,21 +8,41 @@ struct VMInventoryView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                Text("Virtual machines on this Mac")
-                    .font(.headline)
-                Spacer()
-                if !model.isInsideGuest {
-                    Button("Create New VM") { model.startNewNativeVMSetup() }
-                        .buttonStyle(.borderedProminent)
-                        .accessibilityHint("Opens the built-in macOS VM creation guide")
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Text("Virtual machines on this Mac")
+                        .font(.headline)
+                    Spacer()
+                    if !model.isInsideGuest {
+                        Button("Create New VM") { model.startNewNativeVMSetup() }
+                            .buttonStyle(.borderedProminent)
+                            .accessibilityHint("Creates a Tether Host VM, which does not appear in UTM")
+                    }
                 }
+                Picker("Show VMs from", selection: Binding(
+                    get: { model.providerSetup.provider },
+                    set: { source in
+                        model.selectProvider(source)
+                        Task { await model.refresh() }
+                    }
+                )) {
+                    Text("Tether Host").tag(VMProvider.builtIn)
+                    Text("UTM").tag(VMProvider.utm)
+                }
+                .pickerStyle(.segmented)
+                Text(model.providerSetup.provider == .builtIn
+                     ? "Tether Host saves these Apple VMs locally. They do not appear in UTM."
+                     : "These are VMs registered with UTM. VMs created by Tether Host appear under Tether Host instead.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
             }
             .padding()
             if model.inventory.isEmpty {
                 EmptyEvidenceView(
                     title: "No VM found",
-                    message: "Choose Create New VM to install macOS inside Tether Host.",
+                    message: model.providerSetup.provider == .builtIn
+                        ? "Choose Create New VM to install macOS inside Tether Host."
+                        : "No UTM VM is registered here. Switch to Tether Host to see VMs created in this app.",
                     symbol: "macpro.gen3"
                 )
             } else {

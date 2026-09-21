@@ -230,7 +230,7 @@ final class NativeVMManager: ObservableObject {
 
             let version = restoreImage.operatingSystemVersion
             let manifest = NativeVirtualMachineManifest(
-                id: id, name: "Tether Host VM",
+                id: id, name: "Tether Host VM · \(id.description.prefix(8))",
                 guestImageVersion: "\(version.majorVersion).\(version.minorVersion) (\(restoreImage.buildVersion))"
             )
             let encoder = JSONEncoder()
@@ -282,6 +282,7 @@ final class NativeVMManager: ObservableObject {
             runningID = id
             isRunning = true
             showsDisplay = true
+            markBundleUsed(id)
             status = "Tether Host VM started. Finish the macOS welcome screens in this window."
         } catch {
             virtualMachine = nil
@@ -353,11 +354,17 @@ final class NativeVMManager: ObservableObject {
     }
 
     fileprivate func guestStopped(error: Error?) {
+        if let runningID { markBundleUsed(runningID) }
         isRunning = false
         runningID = nil
         virtualMachine = nil
         showsDisplay = false
         status = error.map { "The VM stopped: \($0.localizedDescription)" } ?? "The VM shut down. Select Start / Show to boot it again."
+    }
+
+    private func markBundleUsed(_ id: VirtualMachineID) {
+        let bundle = rootURL.appendingPathComponent(id.description, isDirectory: true)
+        try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: bundle.path)
     }
 }
 

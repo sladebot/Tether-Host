@@ -2,13 +2,13 @@
 
 ## Current preview
 
-- App: `/Applications/Tether Host for Mac.app`, version 1.0.0, build 9.
-- DMG: `build/Tether-Host-for-Mac-v1.0.0-build-9-preview.dmg`.
+- App: `/Applications/Tether Host for Mac.app`, version 1.0.0, build 11.
+- DMG: `build/Tether-Host-for-Mac-v1.0.0-build-11-preview.dmg`.
 - SHA-256: see the matching `.sha256` file beside the DMG.
 - Rebuild: `./scripts/build-preview.sh`.
 - Signing: local ad-hoc Debug build, not Developer ID signed or notarized.
 
-The build 9 DMG checksum and `hdiutil verify` passed. The app inside the DMG
+The build 11 DMG checksum and `hdiutil verify` passed. The app inside the DMG
 passed strict deep code-signature verification. Its nested guest ISO mounted
 read-only with an executable setup command and supporting files, without a
 second copy of the host app.
@@ -66,6 +66,23 @@ is unavailable. Build 9 also refreshes the small guest-only ISO at each native
 VM boot. The guest helper checks HTTPS from inside the VM before trying to
 install Tailscale or Hermes. The network check still needs to run after Apple's
 guest account setup is finished.
+
+Build 10 labels the built-in and UTM inventories separately and lets the user
+switch the Virtual Machines page between them. A VM created by Tether Host is
+persisted under `~/Library/Application Support/Tether Host for Mac/Virtual Machines/`
+and is not registered with UTM. The build script stamps the packaged app bundle
+with the build time for Finder; Tether Host updates its own VM folder date on
+successful boot and stop. Finder's date for an existing VM folder was reconciled
+to the newest VM file timestamp. The guest installation and phone connection
+still need the user steps below.
+
+Build 11 found two saved built-in Tether Host VMs on this Mac. Their manifests
+had the same display name, which made the inventory ambiguous. Existing
+same-name native VMs now show a short UUID suffix, and newly created native VMs
+receive a unique display name at creation. Exact UUID selection remains in
+place. The UTM inventory is separate and cannot display these native VM
+bundles as UTM registrations. The installed build 11 UI showed both saved VMs
+with distinct names and exact UUIDs in the Tether Host inventory.
 
 ## Still to test with the user
 

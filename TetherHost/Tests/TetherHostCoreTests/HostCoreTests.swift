@@ -249,6 +249,29 @@ final class HostCoreTests: XCTestCase {
         )
     }
 
+    func testNativeVMStoreDistinguishesSavedVMsWithSameName() async throws {
+        guard AppleVirtualizationSupport.isAvailable else {
+            throw XCTSkip("Apple virtualization is unavailable on this test host")
+        }
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("tether-native-vm-tests-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = NativeVirtualMachineStore(rootURL: root)
+        let secondID = VirtualMachineID(rawValue: UUID())
+        _ = try store.createBundle(for: NativeVirtualMachineManifest(
+            id: vmID, name: "Tether Host VM", guestImageVersion: "test-1"
+        ))
+        _ = try store.createBundle(for: NativeVirtualMachineManifest(
+            id: secondID, name: "Tether Host VM", guestImageVersion: "test-1"
+        ))
+
+        let records = try await store.list()
+        XCTAssertEqual(records.count, 2)
+        XCTAssertEqual(Set(records.map(\.id)), Set([vmID, secondID]))
+        XCTAssertEqual(Set(records.map(\.name)).count, 2)
+        XCTAssertTrue(records.allSatisfy { $0.name.contains(String($0.id.description.prefix(8))) })
+    }
+
     func testNativeVMStoreRejectsManifestDirectoryIdentityMismatch() async throws {
         guard AppleVirtualizationSupport.isAvailable else {
             throw XCTSkip("Apple virtualization is unavailable on this test host")
