@@ -11,7 +11,7 @@ struct VMInventoryView: View {
             if model.inventory.isEmpty {
                 EmptyEvidenceView(
                     title: "No VM inventory",
-                    message: "UTM has not returned an inventory. No virtual machine has been selected or modified.",
+                    message: "No Tether VM is installed yet. Setup will create one with Apple's native virtualization; UTM is optional and used only for migration or recovery.",
                     symbol: "macpro.gen3"
                 )
             } else {

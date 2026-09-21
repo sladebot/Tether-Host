@@ -1,9 +1,10 @@
 import Foundation
 
 public enum HostNetworkAttachment: String, Codable, Sendable {
-    /// UTM's supported shared-network attachment. The helper resolves the live interface;
-    /// callers never supply an interface name.
+    /// Legacy UTM attachment retained for migration and recovery only.
     case utmSharedNetwork
+    /// Tether-owned NAT attachment created with Apple's Virtualization.framework.
+    case tetherNativeNAT
 }
 
 public enum NetworkAddressFamily: String, Codable, Sendable {
@@ -63,7 +64,7 @@ public struct HostFirewallRequest: Codable, Equatable, Sendable {
         installationID: UUID,
         virtualMachineID: VirtualMachineID,
         policyRevision: Int = Self.supportedPolicyRevision,
-        attachment: HostNetworkAttachment = .utmSharedNetwork,
+        attachment: HostNetworkAttachment = .tetherNativeNAT,
         guestAddresses: [NetworkAddress],
         egressAllowances: [EgressAllowance]
     ) {

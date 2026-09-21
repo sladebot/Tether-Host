@@ -225,4 +225,54 @@ final class HostCoreTests: XCTestCase {
         XCTAssertEqual(plan.pending.count, 2)
         XCTAssertFalse(plan.pending.contains(components[0]))
     }
+
+    func testNativeVMStoreCreatesAndReadsOwnedBundle() async throws {
+        guard AppleVirtualizationSupport.isAvailable else {
+            throw XCTSkip("Apple virtualization is unavailable on this test host")
+        }
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("tether-native-vm-tests-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = NativeVirtualMachineStore(rootURL: root)
+        let manifest = NativeVirtualMachineManifest(
+            id: vmID,
+            guestImageVersion: "test-1",
+            createdAt: Date(timeIntervalSince1970: 123)
+        )
+
+        let bundle = try store.createBundle(for: manifest)
+        let records = try await store.list()
+        XCTAssertEqual(bundle.lastPathComponent, vmID.description)
+        XCTAssertEqual(
+            records,
+            [VirtualMachineRecord(id: vmID, name: "Tether Sandbox", state: .stopped)]
+        )
+    }
+
+    func testNativeVMStoreRejectsManifestDirectoryIdentityMismatch() async throws {
+        guard AppleVirtualizationSupport.isAvailable else {
+            throw XCTSkip("Apple virtualization is unavailable on this test host")
+        }
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("tether-native-vm-tests-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let directory = root.appendingPathComponent(vmID.description)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let manifest = NativeVirtualMachineManifest(
+            id: VirtualMachineID(rawValue: UUID()),
+            guestImageVersion: "test-1"
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        try encoder.encode(manifest).write(
+            to: directory.appendingPathComponent(NativeVirtualMachineStore.manifestFilename)
+        )
+
+        do {
+            _ = try await NativeVirtualMachineStore(rootURL: root).list()
+            XCTFail("Expected a mismatched identity to fail closed")
+        } catch let error as NativeVirtualMachineStoreError {
+            XCTAssertEqual(error, .identityMismatch)
+        }
+    }
 }

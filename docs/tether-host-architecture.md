@@ -9,10 +9,17 @@ a versioned pairing and capability contract. The current Mac milestone is read
 only; there is no privileged daemon, guest bootstrap transport, or completed
 Developer ID distribution artifact yet.
 
-The working UTM guest must be adopted, never recreated. The migration notes report
-two registrations named Hermes Sandbox, formerly pointing to the same package.
-Names and a single config.plist are insufficient identity/sharing evidence: UTM's
-registry held a live shared-directory bookmark independently of that plist.
+New installations use a Tether-owned Linux guest through Apple's
+`Virtualization.framework`; UTM is not a customer prerequisite. First-run setup
+will download a Tether-signed guest image, verify the release manifest and digest,
+create an application-owned VM bundle, and boot it natively. The UTM adapter is
+retained as a migration and recovery backend for existing installations.
+
+An existing working UTM guest must be adopted or migrated without destructive
+recreation. The migration notes report two registrations named Hermes Sandbox,
+formerly pointing to the same package. Names and a single config.plist are
+insufficient identity/sharing evidence: UTM's registry held a live
+shared-directory bookmark independently of that plist.
 
 The existing Python PF generator and audit tests are useful offline tools. They
 explicitly do not establish a guest-root-resistant network boundary. The current
@@ -25,14 +32,15 @@ results in the migration document are not current app-generated observations.
 
 ## Phased plan and release gates
 
-1. **Observe:** native macOS target; typed services; bounded, read-only UTM
-   discovery; exact-ID selection; persistent setup journal; evidence dashboard;
-   unit tests; release tooling. No helper installation or live policy changes.
+1. **Observe:** native macOS target; typed services; fail-closed inventory for
+   Tether-owned Apple VM bundles; bounded, read-only UTM fallback; exact-ID
+   selection; persistent setup journal; evidence dashboard; unit tests; release
+   tooling. No helper installation or live policy changes.
 2. **Establish containment:** prove an exclusive, externally enforced attachment
    with IPv4/IPv6, source-spoofing, existing-state and reload tests. Show the exact
-   host/tailnet diff and obtain approval before any live policy change. If UTM's
-   Apple backend cannot provide this boundary, block production setup and move
-   network ownership to a tested Virtualization.framework implementation.
+   host/tailnet diff and obtain approval before any live policy change. The
+   Tether-owned native attachment is the production path; the UTM fallback may
+   be migrated only after equivalent boundary evidence passes.
 3. **Privileged service:** embed an SMAppService daemon with authenticated XPC
    peers, root-owned identity inventory, journaled scoped policy transactions,
    boot ordering, drift detection and rollback. Never accept commands, paths,
@@ -59,11 +67,11 @@ flowchart TB
       KC[Host Keychain]
       Helper[Signed privileged helper]
       Policy[Externally enforced VM network boundary]
-      UTM[UTM / future Virtualization backend]
+      VM[Apple Virtualization backend / optional UTM migration]
       GUI --> KC
       GUI -->|Typed authenticated XPC|Helper
       Helper -->|Only Tether-owned policy|Policy
-      GUI -->|Exact VM identity; supported automation|UTM
+      GUI -->|Exact VM identity; native lifecycle|VM
     end
     subgraph Guest[Untrusted guest; assume Hermes compromise]
       Serve[Tailscale Serve; Funnel disabled]
@@ -71,7 +79,7 @@ flowchart TB
       CUA[CUA; guest desktop only]
       Serve --> Hermes --> CUA
     end
-    UTM --> Guest
+    VM --> Guest
     Guest -->|Default deny; approved destinations only|Policy
     Policy --> Providers[Approved model / update / bootstrap services]
     Manifest[Signed release manifest] -->|Signature + version + digest validation|GUI
@@ -106,20 +114,22 @@ One prominent isolation summary anchors the dashboard. Unknown is never green.
 Setup is a real ordered checklist with persisted progress and explicit blockers.
 Actions explain the missing prerequisite instead of pretending setup succeeded.
 
-## Second generation
+## Native VM implementation
 
-Keep VMReading separate from lifecycle/provisioning. Replace the UTM adapter with
-Virtualization.framework after a safe migration path exists. Download compatible
-restore images through Apple's APIs; persist hardware model, machine identifier,
-auxiliary storage and disk ownership atomically. Omit directory/clipboard and
-other sharing devices by construction. Own a tested network attachment and stop
-networked execution synchronously when its trusted identity or policy changes.
-NAT alone does not establish host isolation. Import/migrate only while stopped,
-retain the original disk until verification, and validate FileVault/login behavior.
+Keep VM reading separate from lifecycle and provisioning. Use
+`Virtualization.framework` as the primary backend and retain UTM only for explicit
+migration or recovery. The signed Linux guest release owns the kernel, initrd,
+root disk and versioned manifest. Persist VM identity and disk ownership
+atomically. Omit directory, clipboard and other sharing devices by construction.
+Own a tested network attachment and stop networked execution synchronously when
+its trusted identity or policy changes. NAT alone does not establish host
+isolation. Import or migrate only while stopped and retain the original disk
+until verification succeeds.
 
 ## Primary references
 
 - [UTM supported automation](https://docs.getutm.app/scripting/scripting/)
+- [Apple Virtualization framework](https://developer.apple.com/documentation/virtualization)
 - [SMAppService](https://developer.apple.com/documentation/servicemanagement/smappservice)
 - [Tailscale Serve](https://tailscale.com/docs/reference/tailscale-cli/serve)
 - [Apple notarization](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution)

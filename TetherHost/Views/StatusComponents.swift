@@ -36,6 +36,7 @@ extension EvidenceSource {
     var label: String {
         switch self {
         case .notChecked: "Not checked"
+        case .appleVirtualization: "Apple Virtualization"
         case .utm: "UTM"
         case .guest: "Guest report"
         case .hostHelper: "Host helper"

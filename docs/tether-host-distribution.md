@@ -4,6 +4,13 @@ This repository contains a release pipeline scaffold. It has not produced a
 signed or notarized artifact, and no release is ready to distribute until the
 checks below pass on a clean machine.
 
+The customer distribution is one DMG containing one application. UTM is not a
+prerequisite. On first launch, Tether Host downloads the pinned Tether guest
+image from the release service, verifies its signature and digest, stores it in
+the app-owned VM directory, and runs it with Apple's `Virtualization.framework`.
+An installed UTM copy is consulted only when the user chooses to migrate or
+recover an existing guest.
+
 ## Release identity and one-time setup
 
 The app, every nested framework/tool, and the privileged network helper must be

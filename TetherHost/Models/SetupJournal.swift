@@ -21,7 +21,7 @@ public enum SetupStage: String, Codable, CaseIterable, Sendable {
     public var title: String {
         switch self {
         case .systemCompatibility: "System compatibility"
-        case .utmDetection: "UTM detection"
+        case .utmDetection: "Virtualization support"
         case .vmPreparation: "VM preparation"
         case .privilegedHelperAuthorization: "Authorize network helper"
         case .hostIsolationInstallation: "Install host isolation"
@@ -42,8 +42,8 @@ public enum SetupStage: String, Codable, CaseIterable, Sendable {
     public var requirement: String {
         switch self {
         case .systemCompatibility: "Requires Apple silicon and macOS 14 or later."
-        case .utmDetection: "Checks the supported UTM automation interface."
-        case .vmPreparation: "Bind the exact UUID and resolve duplicate registrations."
+        case .utmDetection: "Checks Apple's native virtualization support and any optional UTM migration source."
+        case .vmPreparation: "Create or adopt the exact VM identity and verify its signed guest image."
         case .privilegedHelperAuthorization: "Requires the signed helper and administrator approval."
         case .hostIsolationInstallation: "Requires a reviewed policy and external negative tests."
         case .guestBoot: "Networked boot stays blocked until isolation is verified."

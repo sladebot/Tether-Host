@@ -25,23 +25,31 @@ protocol HostStatusProviding: Sendable {
 }
 
 struct LiveHostStatusProvider: HostStatusProviding {
-    private let reader: (any VirtualMachineReading)?
+    private let nativeReader: (any VirtualMachineReading)?
+    private let legacyReader: (any VirtualMachineReading)?
     private let journalStore: FileSetupJournalStore?
 
     init() {
-        if let executor = try? UTMCTLProcessExecutor() {
-            reader = UTMCTLAdapter(executor: executor)
-        } else {
-            reader = nil
-        }
+        var applicationSupport: URL?
         if let support = FileManager.default.urls(
             for: .applicationSupportDirectory,
             in: .userDomainMask
         ).first {
+            applicationSupport = support.appendingPathComponent("Tether Host for Mac", isDirectory: true)
+            nativeReader = NativeVirtualMachineStore(
+                rootURL: applicationSupport!.appendingPathComponent("Virtual Machines", isDirectory: true)
+            )
+        } else {
+            nativeReader = nil
+        }
+        if let executor = try? UTMCTLProcessExecutor() {
+            legacyReader = UTMCTLAdapter(executor: executor)
+        } else {
+            legacyReader = nil
+        }
+        if let applicationSupport {
             journalStore = FileSetupJournalStore(
-                fileURL: support
-                    .appendingPathComponent("Tether Host for Mac", isDirectory: true)
-                    .appendingPathComponent("setup-journal.json")
+                fileURL: applicationSupport.appendingPathComponent("setup-journal.json")
             )
         } else {
             journalStore = nil
@@ -49,21 +57,34 @@ struct LiveHostStatusProvider: HostStatusProviding {
     }
 
     func snapshot() async throws -> HostDashboardSnapshot {
-        guard let reader else { throw UTMAdapterError.executableUnavailable }
-        let inventory = try await reader.list()
+        guard let nativeReader else { throw NativeVirtualMachineStoreError.invalidRoot }
+        var inventory = try await nativeReader.list()
+        var evidenceSource: EvidenceSource = .appleVirtualization
+        if inventory.isEmpty, let legacyReader {
+            inventory = try await legacyReader.list()
+            evidenceSource = .utm
+        }
         let now = Date()
-        let matches = inventory.filter { $0.name == "Hermes Sandbox" }
+        let expectedName = evidenceSource == .appleVirtualization ? "Tether Sandbox" : "Hermes Sandbox"
+        let matches = inventory.filter { $0.name == expectedName }
         let vmState: HealthState = matches.count == 1 ? .healthy : .degraded
-        let detail = matches.count == 1
-            ? "Exact VM UUID is available for designation."
-            : "Found \(matches.count) registrations named Hermes Sandbox; exact designation is required."
+        let detail: String
+        if matches.count == 1 {
+            detail = evidenceSource == .appleVirtualization
+                ? "Tether's native Apple VM is available by exact UUID."
+                : "A legacy UTM VM is available for migration by exact UUID."
+        } else if inventory.isEmpty {
+            detail = "No VM is installed yet. Setup will create a native Apple VM without UTM."
+        } else {
+            detail = "Found \(matches.count) matching VMs; exact designation is required."
+        }
         var observations = HostDashboardSnapshot.unobserved.observations
         if let index = observations.firstIndex(where: { $0.component == .virtualMachine }) {
             observations[index] = HealthObservation(
                 component: .virtualMachine,
                 state: vmState,
                 summary: detail,
-                source: .utm,
+                source: evidenceSource,
                 observedAt: now,
                 validFor: 60
             )

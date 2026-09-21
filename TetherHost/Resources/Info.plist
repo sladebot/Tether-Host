@@ -10,5 +10,4 @@
     <key>LSMinimumSystemVersion</key><string>$(MACOSX_DEPLOYMENT_TARGET)</string>
     <key>LSApplicationCategoryType</key><string>public.app-category.utilities</string>
     <key>NSPrincipalClass</key><string>NSApplication</string>
-    <key>NSAppleEventsUsageDescription</key><string>Tether Host for Mac reads the status of your designated UTM virtual machine. This observation build does not start, stop or change virtual machines.</string>
 </dict></plist>

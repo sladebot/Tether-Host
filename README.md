@@ -1,12 +1,21 @@
 # Tether Host for Mac
 
 Tether Host for Mac is the trusted macOS companion for the Tether iOS app. It
-discovers and manages the designated UTM guest, coordinates provisioning and
-health evidence, and will own the narrowly scoped privileged networking helper.
+owns and runs the guest directly with Apple's Virtualization framework,
+coordinates provisioning and health evidence, and will own the narrowly scoped
+privileged networking helper. UTM is not an installation dependency; its adapter
+is retained only to migrate or recover an existing guest.
 
-The current milestone is read only. It lists UTM virtual machines by exact UUID,
-shows setup and health evidence, and deliberately keeps management actions
-disabled until their security and recovery gates are implemented.
+The current milestone is read only. It inventories Tether-owned native VM bundles
+by exact UUID, can fall back to read-only UTM discovery for migration, shows setup
+and health evidence, and deliberately keeps management actions disabled until
+their security and recovery gates are implemented.
+
+The intended customer flow is one app install. First-run setup downloads a
+Tether-signed guest image, verifies its manifest and digest, creates the native
+VM bundle, and boots it through `Virtualization.framework`. The guest image and
+provisioning implementation are still release gates; the current repository is
+not yet a distributable one-click build.
 
 ## Build the app
 

@@ -32,6 +32,7 @@ public enum HealthState: String, Codable, Sendable {
 
 public enum EvidenceSource: String, Codable, Sendable {
     case notChecked
+    case appleVirtualization
     case utm
     case guest
     case hostHelper

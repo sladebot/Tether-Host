@@ -8,15 +8,16 @@ provisioner, pairing exchange, or signed/notarized DMG is complete.
 
 - The Xcode project has a shared macOS application target and scheme named
   `Tether Host for Mac`, with bundle identifier `app.tether.host`, macOS 14 minimum,
-  hardened runtime enabled in target settings, and an explicit empty entitlement
-  baseline.
+  hardened runtime enabled in target settings, and only the Apple virtualization
+  entitlement on the host target.
 - The host now builds from its own `TetherHost.xcodeproj`; the project contains
   no iOS application or test target.
 - Debug and optimized Release builds succeeded for Apple silicon with code
   signing disabled for local verification. The Release build produced
-  `/tmp/tether-host-split-release/Build/Products/Release/Tether Host for Mac.app`.
-- The Debug app launched and remained running. Its provider is read-only and
-  invokes only fixed `utmctl list` and exact-UUID `status` arguments.
+  `/tmp/tether-host-native-release/Build/Products/Release/Tether Host for Mac.app`.
+- The provider now prefers the fail-closed inventory of Tether-owned native VM
+  bundles. It uses fixed `utmctl list` and exact-UUID `status` arguments only as
+  a read-only migration/recovery fallback when no native VM is installed.
 - The installed UTM version is 4.7.5. A live read-only `utmctl list` returned:
   - running `Hermes Sandbox`: `738EECC5-6357-43D9-BE03-298E0B3DE206`
   - stopped `Hermes Sandbox`: `DBAD34AA-6E6F-41BB-A23D-2C57DC8B3334`
@@ -24,7 +25,8 @@ provisioner, pairing exchange, or signed/notarized DMG is complete.
 - Exact status lookup for the running Hermes UUID returned `started`. This is
   current lifecycle evidence, not containment evidence. The app displays the
   duplicate name and refuses to infer identity from the name alone.
-- The standalone core suite passed 28/28 tests. Coverage includes setup journal
+- The standalone core suite passes 30/30 tests. Coverage includes native VM
+  bundle creation, exact manifest/directory identity enforcement, setup journal
   recovery, exact identity and duplicates, endpoint rejection, secret redaction,
   two-phase token rotation, signed manifest verification, component digests,
   idempotent receipts, deterministic dual-stack firewall plans, insecure Serve
@@ -52,8 +54,8 @@ provisioner, pairing exchange, or signed/notarized DMG is complete.
   recovery, fresh-Mac install, update, repair, token rotation, or uninstall
   acceptance test has run through Tether Host for Mac.
 
-The existing iOS regression suite was rerun after the Xcode project changes.
+The existing iOS regression suite was rerun after the repositories were split.
 All 39 tests passed; the result bundle is
-`/tmp/tether-host-for-mac-rename-ios.xcresult`. Historical VM evidence in
+`/tmp/tether-ios-split.xcresult`. Historical VM evidence in
 `hermes-sandbox-migration.md` remains separate and was not reclassified as
 Tether Host for Mac acceptance in this milestone.

@@ -1,21 +1,24 @@
 # Tether Host for Mac entitlements and approvals
 
-The committed entitlement files are deliberately empty baselines:
+The committed entitlement files use separate least-privilege baselines:
 
 - `Config/TetherHost.entitlements`
 - `Config/TetherHostNetworkHelper.entitlements`
 
-Hardened runtime is a code-signing option and Xcode build setting, not an
-entitlement key. Regular per-app Keychain storage also needs no entitlement.
-Empty baselines make every future capability addition visible in review and
-avoid granting access before an implementation proves it is needed.
+The host app has only `com.apple.security.virtualization`, which is required to
+run a VM with Apple's Virtualization framework. The future network helper file
+remains empty. Hardened runtime is a code-signing option and Xcode build setting,
+not an entitlement key. Regular per-app Keychain storage also needs no
+entitlement.
 
 ## Host application
 
-The initial host app should manage UTM through `utmctl`, using absolute executable
-resolution, fixed argument arrays, exact VM identity matching, bounded output,
-and no shell interpolation. That path needs no Apple Events entitlement. If a
-future release requires UTM AppleScript, add
+The primary host path manages its application-owned VM through
+`Virtualization.framework`; users do not install UTM. The compatibility adapter
+may inspect an existing UTM installation through `utmctl`, using absolute
+executable resolution, fixed argument arrays, exact VM identity matching,
+bounded output, and no shell interpolation. That path needs no Apple Events
+entitlement. If a future migration release requires UTM AppleScript, add
 `com.apple.security.automation.apple-events` only after the implementation and
 usage description are reviewed. It creates a visible Automation consent prompt
 and must be scoped to UTM. Do not add temporary Apple Events exception
@@ -82,7 +85,7 @@ production requirement.
 | Accessibility | Guest macOS | Allows CUA to drive the guest UI | CUA can control the guest desktop session. It must have no path to the host desktop. |
 | Screen Recording | Guest macOS | Allows CUA to observe the guest display | CUA can capture guest display contents, which may contain user data. |
 | Provider login | Guest or user-owned browser flow | Authorizes model/provider access | Grants provider-specific account and data access. Store resulting credentials only in the intended guest store. |
-| Automation, only if AppleScript is adopted | Host macOS | Lets Tether Host for Mac send Apple Events to UTM | Lets the host app automate actions exposed by UTM; avoid by preferring `utmctl`. |
+| Automation, only if AppleScript migration is adopted | Host macOS | Lets Tether Host for Mac send Apple Events to UTM | Applies only to optional migration; avoid by preferring `utmctl`. |
 
 Tailscale account ACLs/grants are account-side controls. The app may generate and
 validate a proposed scoped policy, but it cannot silently approve or broaden the
