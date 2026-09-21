@@ -2,9 +2,8 @@
 
 ## Current preview
 
-- App: `/Applications/Tether Host for Mac.app`, version 1.0.0, build 11
-  remains open with a VM running.
-- DMG: `build/Tether-Host-for-Mac-v1.0.0-build-12-preview.dmg`.
+- App: `/Applications/Tether Host for Mac.app`, version 1.0.0, build 19.
+- DMG: `build/Tether-Host-for-Mac-v1.0.0-build-19-preview.dmg`.
 - SHA-256: see the matching `.sha256` file beside the DMG.
 - Rebuild: `./scripts/build-preview.sh`.
 - Signing: local ad-hoc Debug build, not Developer ID signed or notarized.
@@ -95,10 +94,49 @@ Build 12 compiled, its DMG verified, and all 48 core tests passed. The running
 build 11 VM was left intact, so build 12 has not yet replaced the copy in
 Applications or received a live UI smoke test on this Mac.
 
+Build 13 replaces the host navigation with a persistent two-column setup
+workspace. A native VM renders inline on the right while VM, Tailscale,
+Hermes, and phone setup appear as gated sections on the left. UTM VMs retain
+an always-visible state panel with an Open UTM control; UTM does not expose a
+live display view for embedding here. The guest installer continues to check
+Tailscale before Hermes, and the host only records user confirmation of the
+guest desktop and Tailscale sign-in, not host-side dependency detection.
+
+The installed workspace booted saved VM `0253CD80-65C6-4613-9D6B-DB3BFD3063C5`
+and showed the macOS welcome screen inline. Its display remained visible when
+switching to the VM library. Build 15 corrected the library's immediate live
+state to **Started** for that VM while the other VM remained **Stopped**.
+Tailscale, Hermes, and phone steps stayed locked until their prerequisites.
+The macOS language screen did not honor a graceful shutdown request, so build
+15 also offers a separately confirmed **Force Power Off** action after a
+shutdown request. Its warning was shown during testing. A force-off attempt
+remained in the “Powering off” state; quitting the host app stopped the VM.
+The VM was not marked desktop-ready.
+Build 15 passed the Xcode build, signature and DMG checks; 49 core tests passed.
+Build 16 also resets the token reveal control when leaving the Hermes section.
+Build 17 names the two providers Apple Virtualization and UTM and defaults to
+UTM. It migrates the old saved built-in default once, then retains later user
+selections. The build 17 DMG passed its packaging and signature checks, and
+the installed build 17 opened with UTM selected and both existing UTM VMs
+listed. The later VM library navigation check was interrupted by a computer
+use timeout; the provider labels were verified in the compiled source.
+Build 19 adds **Create UTM VM** in the default UTM section. Tether Host installs
+macOS, creates an Apple-backend `.utm` package with a clone of the installed
+disk, and registers it in UTM. A separate **Move this VM to UTM** action handles
+stopped VMs previously created by Tether Host. It removes the native bundle
+only after UTM lists the same UUID. The app was installed from the build 19
+DMG. The existing stopped test VM `0253CD80-65C6-4613-9D6B-DB3BFD3063C5`
+was moved with that control; `utmctl list` showed the exact UUID and name,
+and its original native bundle was removed. `utmctl start` reached **started**,
+and UTM displayed the macOS account-creation screen. The user is completing
+that guest setup; we did not enter or inspect credentials. There was too little
+free disk space for another fresh VM installation, so the new-VM UTM route has
+not been run through a second full IPSW install on this Mac.
+
 ## Still to test with the user
 
 Finish Apple's account creation inside this fresh VM, confirm the desktop in
 Tether Host, and run the bundled guest setup there. Verify Tailscale and Hermes
 inside the VM, then complete a real Tether iPhone connection and interaction.
 Those user and guest steps are not claimed as completed by the host-side boot
-and packaging checks. UTM remains the backup for existing VMs.
+and packaging checks.

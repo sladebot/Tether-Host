@@ -40,15 +40,15 @@ struct SetupAssistantView: View {
                     get: { model.providerSetup.provider },
                     set: { model.selectProvider($0) }
                 )) {
-                    Text("Built-in Apple VM — saved in Tether Host").tag(VMProvider.builtIn)
-                    Text("UTM — backup for existing VMs").tag(VMProvider.utm)
+                    Text("Apple Virtualization — saved in Tether Host").tag(VMProvider.builtIn)
+                    Text("UTM — VMs registered with UTM").tag(VMProvider.utm)
                 }
                 .pickerStyle(.radioGroup)
                 .disabled(model.isRefreshing)
 
                 VStack(alignment: .leading, spacing: 12) {
                     Text(model.providerSetup.provider == .utm
-                         ? "Keep an existing UTM VM as a backup. Tether Host can select and inspect it."
+                         ? "Use a VM registered with UTM. Tether Host can select and inspect it."
                          : "Choose an IPSW in Tether Host; it saves, installs, and runs a fresh macOS VM here. Built-in VMs do not appear in UTM.")
                     if model.providerSetup.provider == .utm {
                         Text("This build requires UTM \(UTMInstallation.supportedVersion) in Applications.")

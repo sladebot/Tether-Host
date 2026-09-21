@@ -19,13 +19,14 @@ final class VMProviderSetupTests: XCTestCase {
 
     func testSwitchingProviderInvalidatesPreviousApproval() {
         var setup = VMProviderSetup()
+        XCTAssertEqual(setup.provider, .utm)
         XCTAssertTrue(setup.advance { _ in .ready })
-        setup.select(.utm)
+        setup.select(.builtIn)
         XCTAssertEqual(setup.availability, .unchecked)
         XCTAssertFalse(setup.hasContinued)
         XCTAssertFalse(setup.advance { _ in .blocked("Install UTM") })
-        setup.select(.builtIn)
-        XCTAssertTrue(setup.advance { provider in provider == .builtIn ? .ready : .blocked("Install UTM") })
+        setup.select(.utm)
+        XCTAssertTrue(setup.advance { provider in provider == .utm ? .ready : .blocked("Install UTM") })
     }
 
     func testInstallationIsReadFreshAndRequiresCompatibleExecutable() throws {

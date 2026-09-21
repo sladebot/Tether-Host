@@ -118,7 +118,16 @@ struct HostDashboardView: View {
                     ReadOnlyAction(title: "Run diagnostics", symbol: "stethoscope", reason: readOnlyReason)
                     ReadOnlyAction(title: "Repair installation", symbol: "wrench.and.screwdriver", reason: readOnlyReason)
                     ReadOnlyAction(title: "Rotate token", symbol: "key", reason: "Token rotation requires a Keychain-backed implementation and explicit confirmation.")
-                    Button("Connect Tether", systemImage: "iphone") { model.selection = .setup }
+                    Button("Connect Tether", systemImage: "iphone") {
+                        if model.isInsideGuest {
+                            model.selection = .setup
+                        } else {
+                            let gates = model.setupDependencies
+                            model.workspaceSection = !gates.vmReady ? .vm
+                                : !gates.tailscaleReady ? .tailscale
+                                : !gates.hermesReady ? .hermes : .phone
+                        }
+                    }
                     ReadOnlyAction(title: "Uninstall", symbol: "trash", reason: "Uninstall requires an ownership inventory and a separate confirmation before VM data deletion.")
                 }
             }

@@ -1,0 +1,98 @@
+import Foundation
+import Darwin
+
+public enum UTMApplePackageError: LocalizedError {
+    case invalidNativeVM
+    case packageAlreadyExists
+    case cloneUnavailable
+
+    public var errorDescription: String? {
+        switch self {
+        case .invalidNativeVM: "The installed Apple VM is incomplete; its UTM package was not created."
+        case .packageAlreadyExists: "A UTM package with this exact VM identity already exists."
+        case .cloneUnavailable: "The VM disk could not be cloned on this volume. The original Apple VM is safe."
+        }
+    }
+}
+
+/// Converts a stopped Tether-created macOS VM into UTM 4.7's Apple backend
+/// package. APFS cloning keeps the original intact until UTM confirms it has
+/// registered the package; the two writable disks are never used concurrently.
+public enum UTMApplePackageWriter {
+    public static func createPackage(nativeBundle: URL, in root: URL) throws -> URL {
+        let manifestURL = nativeBundle.appendingPathComponent(NativeVirtualMachineStore.manifestFilename)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        guard let manifestData = try? Data(contentsOf: manifestURL),
+              let manifest = try? decoder.decode(NativeVirtualMachineManifest.self, from: manifestData),
+              nativeBundle.lastPathComponent == manifest.id.description,
+              manifest.schemaVersion == NativeVirtualMachineManifest.currentSchemaVersion,
+              let hardware = try? Data(contentsOf: nativeBundle.appendingPathComponent("hardware.bin")),
+              let machine = try? Data(contentsOf: nativeBundle.appendingPathComponent("machine.bin")),
+              !hardware.isEmpty, !machine.isEmpty else { throw UTMApplePackageError.invalidNativeVM }
+
+        let files = ["disk.img", "auxiliary.img"]
+        for file in files {
+            let values = try? nativeBundle.appendingPathComponent(file)
+                .resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+            guard values?.isRegularFile == true, values?.isSymbolicLink != true else {
+                throw UTMApplePackageError.invalidNativeVM
+            }
+        }
+
+        let fm = FileManager.default
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        let destination = root.appendingPathComponent("\(manifest.id.description).utm", isDirectory: true)
+        guard !fm.fileExists(atPath: destination.path) else { throw UTMApplePackageError.packageAlreadyExists }
+        let stage = root.appendingPathComponent(".creating-\(manifest.id.description).utm", isDirectory: true)
+        guard !fm.fileExists(atPath: stage.path) else { throw UTMApplePackageError.packageAlreadyExists }
+        let dataDirectory = stage.appendingPathComponent("Data", isDirectory: true)
+        let driveID = UUID().uuidString
+        do {
+            try fm.createDirectory(at: dataDirectory, withIntermediateDirectories: true)
+            try clone(nativeBundle.appendingPathComponent("disk.img"),
+                      to: dataDirectory.appendingPathComponent("\(driveID).img"))
+            try clone(nativeBundle.appendingPathComponent("auxiliary.img"),
+                      to: dataDirectory.appendingPathComponent("AuxiliaryStorage"))
+            let config: [String: Any] = [
+                "Backend": "Apple",
+                "ConfigurationVersion": 4,
+                "Information": ["Name": manifest.name, "UUID": manifest.id.description,
+                                "Icon": "mac", "IconCustom": false],
+                "System": [
+                    "Architecture": "aarch64", "Boot": ["OperatingSystem": "macOS", "UEFIBoot": false],
+                    "CPUCount": 4, "MemorySize": 8192,
+                    "MacPlatform": ["AuxiliaryStoragePath": "AuxiliaryStorage",
+                                    "HardwareModel": hardware, "MachineIdentifier": machine]
+                ],
+                "Virtualization": ["Audio": true, "Balloon": true,
+                                   "ClipboardSharing": false, "Entropy": true,
+                                   "Keyboard": "Mac", "Pointer": "Trackpad"],
+                "Display": [["DynamicResolution": true, "HeightPixels": 1000,
+                             "PixelsPerInch": 144, "WidthPixels": 1600]],
+                "Drive": [["Identifier": driveID, "ImageName": "\(driveID).img",
+                           "Nvme": false, "ReadOnly": false]],
+                "Network": [["MacAddress": randomMACAddress(), "Mode": "Shared"]],
+                "Serial": []
+            ]
+            let plist = try PropertyListSerialization.data(fromPropertyList: config, format: .xml, options: 0)
+            try plist.write(to: stage.appendingPathComponent("config.plist"), options: .atomic)
+            try fm.moveItem(at: stage, to: destination)
+            return destination
+        } catch {
+            try? fm.removeItem(at: stage)
+            throw error
+        }
+    }
+
+    private static func clone(_ source: URL, to destination: URL) throws {
+        guard clonefile(source.path, destination.path, 0) == 0 else {
+            throw UTMApplePackageError.cloneUnavailable
+        }
+    }
+
+    private static func randomMACAddress() -> String {
+        let bytes = (0..<5).map { _ in UInt8.random(in: 0...255) }
+        return ([UInt8(0x02)] + bytes).map { String(format: "%02x", $0) }.joined(separator: ":")
+    }
+}

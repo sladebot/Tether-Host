@@ -3,6 +3,38 @@ import XCTest
 @testable import TetherHostCore
 
 final class TetherHostCoreTests: XCTestCase {
+    func testHostSetupDependenciesUnlockInGuestOrder() {
+        let absent = HostSetupDependencies(
+            vmSelected: false, vmRunning: false, desktopConfirmed: false,
+            tailscaleConfirmed: false, backendVerified: false
+        )
+        XCTAssertEqual(HostSetupDependency.allCases.filter(absent.isUnlocked), [.vm])
+
+        let runningWithoutDesktop = HostSetupDependencies(
+            vmSelected: true, vmRunning: true, desktopConfirmed: false,
+            tailscaleConfirmed: true, backendVerified: true
+        )
+        XCTAssertEqual(HostSetupDependency.allCases.filter(runningWithoutDesktop.isUnlocked), [.vm])
+
+        let desktopReady = HostSetupDependencies(
+            vmSelected: true, vmRunning: true, desktopConfirmed: true,
+            tailscaleConfirmed: false, backendVerified: false
+        )
+        XCTAssertEqual(HostSetupDependency.allCases.filter(desktopReady.isUnlocked), [.vm, .tailscale])
+
+        let tailnetReady = HostSetupDependencies(
+            vmSelected: true, vmRunning: true, desktopConfirmed: true,
+            tailscaleConfirmed: true, backendVerified: false
+        )
+        XCTAssertEqual(HostSetupDependency.allCases.filter(tailnetReady.isUnlocked), [.vm, .tailscale, .hermes])
+
+        let verified = HostSetupDependencies(
+            vmSelected: true, vmRunning: true, desktopConfirmed: true,
+            tailscaleConfirmed: true, backendVerified: true
+        )
+        XCTAssertEqual(HostSetupDependency.allCases.filter(verified.isUnlocked), HostSetupDependency.allCases)
+    }
+
     private let vmID = VirtualMachineID(rawValue: UUID(uuidString: "738EECC5-6357-43D9-BE03-298E0B3DE206")!)
 
     func testUTMParsesSupportedTableAndPreservesExactUUID() throws {

@@ -1,22 +1,21 @@
 # Tether Host for Mac
 
 Tether Host for Mac is the macOS companion for the Tether iOS app. Its first-launch
-Setup Assistant offers a built-in Apple VM and UTM as a backup. The built-in
-path accepts a local macOS IPSW, checks compatibility, creates a new VM identity
-and sparse disk, installs macOS, and starts the VM in a Tether Host window.
-Built-in VMs are saved under the user's Tether Host application support folder;
-they are separate from UTM and do not appear in UTM's library. The **Virtual
-Machines** page can switch between Tether Host and UTM inventories and reveal
+Setup Assistant defaults to UTM and also offers Apple Virtualization. Both paths
+accept a compatible macOS IPSW and install a fresh VM in Tether Host. For UTM,
+the app creates a UTM Apple-backend package, registers it in UTM, and removes
+the original installer bundle only after UTM reports the exact VM UUID. The
+Apple Virtualization path keeps the VM in Tether Host and renders its display
+inline. The **Virtual Machines** page can switch between Apple Virtualization
+and UTM inventories and reveal
 an exact local VM bundle in Finder. For built-in VMs, the bundle's Finder
 modified date is updated when Tether Host starts or stops the VM.
 Existing built-in VMs with the same saved name are distinguished by their UUID
 prefix in the inventory, and new VMs receive a unique name when created.
-The **Virtual Machines** page has a **Create New VM** button that opens this
-built-in creation guide even if UTM was selected previously. Choose an IPSW or
-use the in-app macOS download before creating the VM.
-The UTM setup screen also offers **Create New VM** above its existing-VM checks;
-it switches to the built-in creation path without making the user leave Setup
-Assistant. A previously downloaded compatible IPSW is labeled for reuse.
+The **Virtual Machines** page has a **Create New VM** button that opens creation
+for the selected provider. The Apple Virtualization section can also move a
+stopped Tether-created VM into UTM, preserving its exact identity and disk.
+Choose an IPSW or use the in-app macOS download before creating a new VM.
 The built-in VM has a Virtio network adapter attached to Apple's NAT, which
 routes guest traffic through the Mac's network connection. Guest internet
 reachability still needs a check inside macOS after first-run setup.
@@ -28,8 +27,7 @@ on a macOS 26 host before creating a disk. Apple's installer also reported a
 required host software update for that combination in local testing. On a
 macOS 26.2 host, setup can download Apple's macOS 26.2 IPSW in-app and verify
 its pinned SHA-256 digest before installation.
-The UTM path continues to work with a compatible installation in
-`/Applications/UTM.app` for existing VMs.
+The UTM path requires a compatible installation in `/Applications/UTM.app`.
 
 The welcome screen links to the official UTM download, a macOS IPSW download
 index, and UTM's macOS setup guide. UTM can download a compatible restore image
@@ -62,8 +60,10 @@ masked reveal/copy controls for use in Tether iOS. The phone still needs Tailsca
 and its own Test Connection check. A host-side check does not certify phone reachability.
 
 For the built-in VM, Tether Host creates a read-only guest setup disk and
-refreshes and attaches it at every boot. UTM still requires manual VM creation and ISO attachment
-because UTM's public scripting interface cannot create a macOS VM from an IPSW.
+refreshes and attaches it at every boot. For UTM, Tether Host now creates the
+VM package and registers it, while the guest setup ISO still needs attachment
+inside UTM. UTM's public command-line interface does not create a macOS VM
+from an IPSW, so Tether Host installs macOS before creating the UTM package.
 The development DMG is
 not a notarized production installer, and the new guest installation flow has not
 yet passed a clean-VM, real-phone end-to-end run. See `docs/guest-setup-implementation.md`.
@@ -76,11 +76,24 @@ for My Mac. The deployment target is macOS 14 and the bundle identifier is
 
 Build the ad-hoc signed development DMG with `./scripts/build-preview.sh`.
 The output filename includes the app marketing version and build number, for
-example `build/Tether-Host-for-Mac-v1.0.0-build-12-preview.dmg`, with a matching
+example `build/Tether-Host-for-Mac-v1.0.0-build-19-preview.dmg`, with a matching
 `.sha256` checksum file. Bump `MARKETING_VERSION` for a product release and
 `CURRENT_PROJECT_VERSION` for every distributed build. The script verifies the
 app signature and DMG checksum; this is not a notarized public release.
 See `docs/mac-studio-install-test.md` for the installed-app test results.
+
+On the host, setup uses a two-column workspace. The selected dependency and
+its controls stay on the left; the built-in VM display, power state, and
+controls stay on the right as you move between steps. The order is VM desktop,
+Tailscale sign-in, Hermes verification, then iPhone connection. Later steps
+stay locked until the preceding state is ready. Tailscale sign-in and first
+desktop readiness are explicitly confirmed by the user because the host does
+not inspect the guest before its helper is installed. The guest helper still
+checks Tailscale inside the VM before configuring Hermes. For UTM VMs,
+Tether shows its power state, but UTM owns its live display window.
+The built-in VM has a graceful Shut Down control and, if the guest does not
+respond, a separately confirmed Force Power Off control that warns about
+unsaved work.
 
 The Virtual Machines page can permanently delete a stopped VM and its local
 files. It shows the exact VM UUID and requires its last eight characters before

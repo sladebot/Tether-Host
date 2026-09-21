@@ -4,6 +4,17 @@ struct HostRootView: View {
     @EnvironmentObject private var model: AppViewModel
 
     var body: some View {
+        Group {
+            if model.isInsideGuest {
+                guestNavigation
+            } else {
+                HostWorkspaceView(manager: model.nativeVM)
+            }
+        }
+        .tint(.accentColor)
+    }
+
+    private var guestNavigation: some View {
         NavigationSplitView {
             List(HostDestination.allCases, selection: $model.selection) { destination in
                 Label(destination.title, systemImage: destination.symbol)
@@ -37,7 +48,6 @@ struct HostRootView: View {
             }
         }
         .task { await model.refresh() }
-        .tint(.accentColor)
     }
 }
 

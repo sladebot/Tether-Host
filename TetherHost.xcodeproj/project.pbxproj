@@ -16,6 +16,7 @@
 		H10000000000000000000006 /* VMInventoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = I10000000000000000000006 /* VMInventoryView.swift */; };
 		H10000000000000000000007 /* DiagnosticsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = I10000000000000000000007 /* DiagnosticsView.swift */; };
 		H10000000000000000000008 /* StatusComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = I10000000000000000000008 /* StatusComponents.swift */; };
+		H1000000000000000000000E /* HostWorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = I1000000000000000000000E /* HostWorkspaceView.swift */; };
 		H10000000000000000000009 /* TetherHostCore in Frameworks */ = {isa = PBXBuildFile; productRef = Q20000000000000000000001 /* TetherHostCore */; };
         H1000000000000000000000B /* GuestSetup in Resources */ = {isa = PBXBuildFile; fileRef = I1000000000000000000000B /* GuestSetup */; };
 		H1000000000000000000000C /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = I1000000000000000000000C /* Assets.xcassets */; };
@@ -31,6 +32,7 @@
 		I10000000000000000000006 /* VMInventoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VMInventoryView.swift; sourceTree = "<group>"; };
 		I10000000000000000000007 /* DiagnosticsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticsView.swift; sourceTree = "<group>"; };
 		I10000000000000000000008 /* StatusComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusComponents.swift; sourceTree = "<group>"; };
+		I1000000000000000000000E /* HostWorkspaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostWorkspaceView.swift; sourceTree = "<group>"; };
 		I10000000000000000000009 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		I1000000000000000000000A /* Tether Host for Mac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Tether Host for Mac.app"; sourceTree = BUILT_PRODUCTS_DIR; };
         I1000000000000000000000B /* GuestSetup */ = {isa = PBXFileReference; lastKnownFileType = folder; path = GuestSetup; sourceTree = "<group>"; };
@@ -94,6 +96,7 @@
 				I10000000000000000000006 /* VMInventoryView.swift */,
 				I10000000000000000000007 /* DiagnosticsView.swift */,
 				I10000000000000000000008 /* StatusComponents.swift */,
+				I1000000000000000000000E /* HostWorkspaceView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -193,6 +196,7 @@
 				H10000000000000000000006 /* VMInventoryView.swift in Sources */,
 				H10000000000000000000007 /* DiagnosticsView.swift in Sources */,
 				H10000000000000000000008 /* StatusComponents.swift in Sources */,
+				H1000000000000000000000E /* HostWorkspaceView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -205,7 +209,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = Config/TetherHost.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 12;
+				CURRENT_PROJECT_VERSION = 19;
 				DEVELOPMENT_TEAM = 22BH2R3K7H;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -232,7 +236,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = Config/TetherHost.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 12;
+				CURRENT_PROJECT_VERSION = 19;
 				DEVELOPMENT_TEAM = 22BH2R3K7H;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = NO;

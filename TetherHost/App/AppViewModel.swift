@@ -120,6 +120,11 @@ enum HostDestination: String, CaseIterable, Identifiable {
     }
 }
 
+enum HostWorkspaceSection: String, CaseIterable, Identifiable {
+    case vm, tailscale, hermes, phone, library, overview, diagnostics
+    var id: String { rawValue }
+}
+
 private enum VMRemovalError: LocalizedError {
     case unavailable
     case filesRemain(URL)
@@ -136,6 +141,7 @@ private enum VMRemovalError: LocalizedError {
 @MainActor
 final class AppViewModel: ObservableObject {
     @Published var selection: HostDestination? = .overview
+    @Published var workspaceSection: HostWorkspaceSection = .vm
     @Published private(set) var observations: [HealthObservation]
     @Published private(set) var inventory: [VirtualMachineRecord]
     @Published private(set) var setup: SetupJournal
@@ -163,14 +169,28 @@ final class AppViewModel: ObservableObject {
     @Published private(set) var providerSetup: VMProviderSetup
     let nativeVM = NativeVMManager()
     @Published private(set) var selectedVMID: VirtualMachineID?
+    @Published private(set) var utmDesktopReadyVMID: VirtualMachineID?
+    @Published private(set) var tailscaleConfirmedVMID: VirtualMachineID?
+    @Published private(set) var verifiedForVMID: VirtualMachineID?
     private let preferences: UserDefaults
     private let provider: any HostStatusProviding
 
     init(provider: any HostStatusProviding = LiveHostStatusProvider(), preferences: UserDefaults = .standard) {
         self.preferences = preferences
         selectedVMID = preferences.string(forKey: "setup.vmID").flatMap(VirtualMachineID.init)
+        utmDesktopReadyVMID = preferences.string(forKey: "setup.utmDesktopReadyVMID").flatMap(VirtualMachineID.init)
+        tailscaleConfirmedVMID = preferences.string(forKey: "setup.tailscaleConfirmedVMID").flatMap(VirtualMachineID.init)
         let savedProvider = preferences.string(forKey: "setup.vmProvider").flatMap(VMProvider.init(rawValue:))
-        let initialProvider = savedProvider ?? .builtIn
+        // Older releases defaulted to Apple Virtualization. Migrate that implicit
+        // choice once, then preserve the user's subsequent provider selection.
+        let hasUTMDefault = preferences.bool(forKey: "setup.utmDefaultApplied")
+        let initialProvider: VMProvider = hasUTMDefault ? (savedProvider ?? .utm) : .utm
+        if !hasUTMDefault {
+            preferences.set(VMProvider.utm.rawValue, forKey: "setup.vmProvider")
+            preferences.set(true, forKey: "setup.utmDefaultApplied")
+            preferences.removeObject(forKey: "setup.vmID")
+            selectedVMID = nil
+        }
         providerSetup = VMProviderSetup(provider: initialProvider)
         selection = .setup
         self.provider = provider
@@ -222,10 +242,21 @@ final class AppViewModel: ObservableObject {
         selectProvider(.builtIn)
         continueProviderSetup()
         selection = .setup
+        workspaceSection = .vm
+    }
+
+    func startNewVMSetup() {
+        selection = .setup
+        workspaceSection = .vm
     }
 
     var candidateVMs: [VirtualMachineRecord] {
-        inventory
+        inventory.map { record in
+            if providerSetup.provider == .builtIn, record.id == nativeVM.runningVMID {
+                return VirtualMachineRecord(id: record.id, name: record.name, state: .started)
+            }
+            return record
+        }
     }
 
     var designatedVM: VirtualMachineRecord? {
@@ -241,6 +272,51 @@ final class AppViewModel: ObservableObject {
             return designatedVM?.id == nativeVM.runningVMID
         }
         return designatedVM?.state == .started
+    }
+
+    var setupDependencies: HostSetupDependencies {
+        let vm = designatedVM
+        let desktopConfirmed: Bool
+        if let vm {
+            desktopConfirmed = providerSetup.provider == .builtIn
+                ? nativeVM.isDesktopReady(for: vm.id)
+                : utmDesktopReadyVMID == vm.id
+        } else {
+            desktopConfirmed = false
+        }
+        return HostSetupDependencies(
+            vmSelected: vm != nil,
+            vmRunning: designatedVMIsRunning,
+            desktopConfirmed: desktopConfirmed,
+            tailscaleConfirmed: vm != nil && tailscaleConfirmedVMID == vm?.id,
+            backendVerified: vm != nil && connectionVerifiedAt != nil && verifiedForVMID == vm?.id
+        )
+    }
+
+    func confirmUTMDesktopReady() {
+        guard providerSetup.provider == .utm, designatedVMIsRunning,
+              let vm = designatedVM else { return }
+        utmDesktopReadyVMID = vm.id
+        preferences.set(vm.id.description, forKey: "setup.utmDesktopReadyVMID")
+    }
+
+    func clearUTMDesktopReady() {
+        guard providerSetup.provider == .utm, let vm = designatedVM,
+              utmDesktopReadyVMID == vm.id else { return }
+        utmDesktopReadyVMID = nil
+        preferences.removeObject(forKey: "setup.utmDesktopReadyVMID")
+    }
+
+    func confirmTailscaleSetup() {
+        guard setupDependencies.vmReady, let vm = designatedVM else { return }
+        tailscaleConfirmedVMID = vm.id
+        preferences.set(vm.id.description, forKey: "setup.tailscaleConfirmedVMID")
+    }
+
+    func clearTailscaleSetup() {
+        guard let vm = designatedVM, tailscaleConfirmedVMID == vm.id else { return }
+        tailscaleConfirmedVMID = nil
+        preferences.removeObject(forKey: "setup.tailscaleConfirmedVMID")
     }
 
     func selectVM(_ id: VirtualMachineID) {
@@ -263,6 +339,7 @@ final class AppViewModel: ObservableObject {
             utmRoots: [
                 home.appendingPathComponent("Library/Containers/com.utmapp.UTM/Data/Documents"),
                 home.appendingPathComponent("Documents/UTM"),
+                support.appendingPathComponent("Tether Host for Mac/UTM Virtual Machines"),
                 home.appendingPathComponent("Documents")
             ]
         )
@@ -280,7 +357,7 @@ final class AppViewModel: ObservableObject {
               inventory.contains(where: { $0.id == record.id }),
               vmBundleURL(for: record) != nil else { return false }
         if providerSetup.provider == .builtIn {
-            return !nativeVM.isBusy && !nativeVM.isRunning
+            return !nativeVM.isBusy && !nativeVM.isRunning && !nativeVM.hasOtherHostCopy
         }
         return true
     }
@@ -440,20 +517,29 @@ final class AppViewModel: ObservableObject {
 
     func verifyConnection() async {
         guard !isVerifyingConnection else { return }
+        if !isInsideGuest && !setupDependencies.isUnlocked(.hermes) {
+            connectionMessage = "Finish the VM and Tailscale steps before verifying Hermes."
+            return
+        }
         isVerifyingConnection = true
         connectionVerifiedAt = nil
+        verifiedForVMID = nil
         let endpoint = connectionURL
         let token = connectionToken
+        let vmID = designatedVM?.id
         defer { isVerifyingConnection = false }
         connectionMessage = "Checking HTTPS, API authentication, durable runs, and model discovery…"
         do {
             let result = try await ConnectionVerifier().verify(endpoint: endpoint, token: token)
-            guard endpoint == connectionURL, token == connectionToken else { return }
+            guard endpoint == connectionURL, token == connectionToken,
+                  isInsideGuest || (vmID == designatedVM?.id && setupDependencies.isUnlocked(.hermes)) else { return }
             try await connectionVault.store(SecretValue(data: Data(token.utf8)), for: .activeHermes(connectionID))
-            guard endpoint == connectionURL, token == connectionToken else { return }
+            guard endpoint == connectionURL, token == connectionToken,
+                  isInsideGuest || (vmID == designatedVM?.id && setupDependencies.isUnlocked(.hermes)) else { return }
             preferences.set(connectionID.description, forKey: "connection.id")
             preferences.set(result.endpoint.url.absoluteString, forKey: "connection.endpoint")
             connectionVerifiedAt = result.verifiedAt
+            verifiedForVMID = vmID
             connectionMessage = "Backend connection verified from this Mac. Now test the connection in Tether iOS on the same tailnet."
         } catch {
             // Do not render raw network/server errors; they can contain credentials or remote text.

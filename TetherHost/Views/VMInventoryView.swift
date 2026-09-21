@@ -16,9 +16,9 @@ struct VMInventoryView: View {
                         .font(.headline)
                     Spacer()
                     if !model.isInsideGuest {
-                        Button("Create New VM") { model.startNewNativeVMSetup() }
+                        Button("Create New VM") { model.startNewVMSetup() }
                             .buttonStyle(.borderedProminent)
-                            .accessibilityHint("Creates a Tether Host VM, which does not appear in UTM")
+                            .accessibilityHint("Opens creation for the selected VM provider")
                     }
                 }
                 Picker("Show VMs from", selection: Binding(
@@ -28,14 +28,14 @@ struct VMInventoryView: View {
                         Task { await model.refresh() }
                     }
                 )) {
-                    Text("Tether Host").tag(VMProvider.builtIn)
+                    Text("Apple Virtualization").tag(VMProvider.builtIn)
                     Text("UTM").tag(VMProvider.utm)
                 }
                 .pickerStyle(.segmented)
                 .disabled(model.isRemovingVM)
                 Text(model.providerSetup.provider == .builtIn
-                     ? "Tether Host saves these Apple VMs locally. They do not appear in UTM."
-                     : "These are VMs registered with UTM. VMs created by Tether Host appear under Tether Host instead.")
+                     ? "Apple Virtualization VMs are saved by Tether Host and do not appear in UTM."
+                     : "These VMs are registered with UTM. Apple Virtualization VMs appear in the other list.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                 if model.isRemovingVM { ProgressView("Deleting VM files…") }
@@ -44,16 +44,16 @@ struct VMInventoryView: View {
                 }
             }
             .padding()
-            if model.inventory.isEmpty {
+            if model.candidateVMs.isEmpty {
                 EmptyEvidenceView(
                     title: "No VM found",
                     message: model.providerSetup.provider == .builtIn
-                        ? "Choose Create New VM to install macOS inside Tether Host."
-                        : "No UTM VM is registered here. Switch to Tether Host to see VMs created in this app.",
+                        ? "Choose Create New VM to install macOS with Apple Virtualization."
+                        : "No UTM VM is registered here. Switch to Apple Virtualization to see VMs created in this app.",
                     symbol: "macpro.gen3"
                 )
             } else {
-                List(model.inventory) { vm in
+                List(model.candidateVMs) { vm in
                     VMRecordRow(vm: vm, duplicate: model.isDuplicate(vm),
                                 canReveal: model.vmBundleURL(for: vm) != nil,
                                 canDelete: model.canDeleteVM(vm),
@@ -129,39 +129,40 @@ private struct VMRecordRow: View {
     let delete: () -> Void
 
     var body: some View {
-        HStack(spacing: 14) {
-            Image(systemName: "macpro.gen3")
-                .font(.title2)
-                .foregroundStyle(duplicate ? .orange : .secondary)
-                .frame(width: 32)
-                .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 5) {
-                HStack {
-                    Text(vm.name)
-                        .font(.headline)
-                    if duplicate {
-                        Label("Duplicate name", systemImage: "exclamationmark.triangle.fill")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.orange)
-                    }
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "macpro.gen3")
+                    .font(.title2)
+                    .foregroundStyle(duplicate ? .orange : .secondary)
+                    .frame(width: 26)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(vm.name).font(.headline)
+                    Text(vm.id.rawValue.uuidString)
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
                 }
-                Text(vm.id.rawValue.uuidString)
-                    .font(.system(.caption, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
+                Spacer(minLength: 4)
+                Text(vm.state.rawValue.capitalized)
+                    .font(.caption.weight(.semibold))
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 5)
+                    .background(.quaternary, in: Capsule())
             }
-            Spacer()
-            Text(vm.state.rawValue.capitalized)
-                .font(.caption.weight(.semibold))
-                .padding(.horizontal, 9)
-                .padding(.vertical, 5)
-                .background(.quaternary, in: Capsule())
-            Button("Show in Finder", action: reveal)
-                .disabled(!canReveal)
-                .help(canReveal ? "Reveal the exact VM bundle in Finder" : "This registration's exact local bundle could not be found")
-            Button("Delete…", role: .destructive, action: delete)
-                .disabled(!canDelete)
-                .help(canDelete ? "Permanently delete this stopped VM and its files" : "Stop the VM and ensure its exact local bundle is available")
+            if duplicate {
+                Label("Duplicate VM name; use the UUID above.", systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption).foregroundStyle(.orange)
+            }
+            HStack {
+                Spacer()
+                Button("Show in Finder", action: reveal)
+                    .disabled(!canReveal)
+                    .help(canReveal ? "Reveal the exact VM bundle in Finder" : "This registration's exact local bundle could not be found")
+                Button("Delete…", role: .destructive, action: delete)
+                    .disabled(!canDelete)
+                    .help(canDelete ? "Permanently delete this stopped VM and its files" : "Stop the VM and ensure its exact local bundle is available with no other Tether Host copy open")
+            }
         }
         .padding(.vertical, 8)
     }

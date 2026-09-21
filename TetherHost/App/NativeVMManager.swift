@@ -53,6 +53,7 @@ final class NativeVMManager: ObservableObject {
     @Published private(set) var status = "No VM installation has started."
     @Published private(set) var isBusy = false
     @Published private(set) var isRunning = false
+    @Published private(set) var shutdownRequested = false
     @Published private(set) var virtualMachine: VZVirtualMachine?
     @Published private(set) var desktopReadyVMID: VirtualMachineID?
     @Published var showsDisplay = false
@@ -85,7 +86,6 @@ final class NativeVMManager: ObservableObject {
         guard isRunning, let runningID else { return }
         desktopReadyVMID = runningID
         preferences.set(runningID.description, forKey: "setup.nativeDesktopReadyVMID")
-        showsDisplay = false
         status = "macOS desktop confirmed by you. Continue with the guest setup disk in the VM."
     }
 
@@ -184,9 +184,13 @@ final class NativeVMManager: ObservableObject {
         }.value
     }
 
-    func install() async -> VirtualMachineID? {
+    func install(for provider: VMProvider = .builtIn) async -> VirtualMachineID? {
         guard !isBusy, let imageURL, let restoreImage,
               let requirements = restoreImage.mostFeaturefulSupportedConfiguration else { return nil }
+        if provider == .utm && UTMInstallation.detect() != .installed {
+            status = "Install a compatible UTM in Applications before creating a UTM VM."
+            return nil
+        }
         guard !hasOtherHostCopy else {
             status = NativeVMError.anotherHostCopyRunning.localizedDescription
             return nil
@@ -246,6 +250,16 @@ final class NativeVMManager: ObservableObject {
                 to: stage.appendingPathComponent(NativeVirtualMachineStore.manifestFilename), options: .atomic
             )
             try FileManager.default.moveItem(at: stage, to: destination)
+            if provider == .utm {
+                do {
+                    try await moveInstalledVMToUTM(id, nativeBundle: destination)
+                    status = "Fresh macOS VM registered with UTM. Open it in UTM to finish the welcome screens."
+                    return id
+                } catch {
+                    status = "macOS was installed, but UTM registration was not confirmed: \(error.localizedDescription) The Apple VM remains saved in Tether Host."
+                    return nil
+                }
+            }
             status = "Starting the fresh VM…"
             try await boot(id)
             return id
@@ -260,6 +274,73 @@ final class NativeVMManager: ObservableObject {
             status = "VM installation failed: \(error.localizedDescription)"
             return nil
         }
+    }
+
+    func moveToUTM(_ id: VirtualMachineID) async -> Bool {
+        guard !isBusy, !isRunning, !hasOtherHostCopy else {
+            status = "Shut down the Apple VM and quit any other Tether Host copy before moving it to UTM."
+            return false
+        }
+        guard UTMInstallation.detect() == .installed else {
+            status = "Install a compatible UTM in Applications before moving this VM."
+            return false
+        }
+        let nativeBundle = rootURL.appendingPathComponent(id.description, isDirectory: true)
+        let locator = VirtualMachineBundleLocator(nativeRoot: rootURL, utmRoots: [])
+        guard locator.locate(id, provider: .builtIn) == nativeBundle else {
+            status = "The exact Apple VM bundle could not be found. Refresh the VM list."
+            return false
+        }
+        isBusy = true
+        defer { isBusy = false }
+        do {
+            try await moveInstalledVMToUTM(id, nativeBundle: nativeBundle)
+            status = "VM \(id.description.prefix(8)) now appears in UTM."
+            return true
+        } catch {
+            status = "Could not confirm UTM registration: \(error.localizedDescription) The Apple VM is still saved in Tether Host."
+            return false
+        }
+    }
+
+    private func moveInstalledVMToUTM(_ id: VirtualMachineID, nativeBundle: URL) async throws {
+        let packageRoot = rootURL.deletingLastPathComponent()
+            .appendingPathComponent("UTM Virtual Machines", isDirectory: true)
+        let candidate = packageRoot.appendingPathComponent("\(id.description).utm", isDirectory: true)
+        let locator = VirtualMachineBundleLocator(nativeRoot: rootURL, utmRoots: [packageRoot])
+        let package: URL
+        if FileManager.default.fileExists(atPath: candidate.path) {
+            guard locator.locate(id, provider: .utm) == candidate else {
+                throw UTMApplePackageError.packageAlreadyExists
+            }
+            package = candidate
+        } else {
+            status = "Preparing a UTM package without changing the Apple VM…"
+            package = try UTMApplePackageWriter.createPackage(nativeBundle: nativeBundle, in: packageRoot)
+        }
+        status = "Registering the VM with UTM…"
+        try await registerWithUTM(package, id: id)
+        try FileManager.default.removeItem(at: nativeBundle)
+    }
+
+    private func registerWithUTM(_ package: URL, id: VirtualMachineID) async throws {
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = false
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            NSWorkspace.shared.open([package], withApplicationAt: UTMInstallation.applicationURL,
+                                    configuration: configuration) { _, error in
+                if let error { continuation.resume(throwing: error) }
+                else { continuation.resume() }
+            }
+        }
+        let adapter = UTMCTLAdapter(executor: try UTMCTLProcessExecutor())
+        for _ in 0..<20 {
+            if let inventory = try? await adapter.list(), inventory.contains(where: { $0.id == id }) {
+                return
+            }
+            try await Task.sleep(for: .seconds(1))
+        }
+        throw UTMAdapterError.vmNotFound(id)
     }
 
     func boot(_ id: VirtualMachineID) async throws {
@@ -287,6 +368,7 @@ final class NativeVMManager: ObservableObject {
             try await vm.start()
             runningID = id
             isRunning = true
+            shutdownRequested = false
             showsDisplay = true
             markBundleUsed(id)
             status = "Tether Host VM started. Finish the macOS welcome screens in this window."
@@ -305,6 +387,29 @@ final class NativeVMManager: ObservableObject {
         }
     }
 
+    func requestShutdown() {
+        guard isRunning, let virtualMachine else { return }
+        do {
+            try virtualMachine.requestStop()
+            shutdownRequested = true
+            status = "Asked macOS to shut down. Wait for the VM status to change to Off."
+        } catch {
+            status = "macOS did not accept the shutdown request: \(error.localizedDescription)"
+        }
+    }
+
+    func forcePowerOff() async {
+        guard isRunning, !isBusy, let virtualMachine else { return }
+        isBusy = true
+        status = "Powering off the VM…"
+        defer { isBusy = false }
+        do {
+            try await virtualMachine.stop()
+        } catch {
+            status = "Could not power off the VM: \(error.localizedDescription)"
+        }
+    }
+
     func deleteFiles(_ id: VirtualMachineID) throws {
         guard !isBusy else { throw NativeVMError.cannotRemoveDuringInstall }
         guard !isRunning else { throw NativeVMError.cannotRemoveRunningVM }
@@ -316,7 +421,7 @@ final class NativeVMManager: ObservableObject {
         status = "Tether Host VM \(id.description) and its files were deleted."
     }
 
-    private var hasOtherHostCopy: Bool {
+    var hasOtherHostCopy: Bool {
         NSRunningApplication.runningApplications(withBundleIdentifier: "app.tether.host")
             .contains { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }
     }
@@ -373,6 +478,7 @@ final class NativeVMManager: ObservableObject {
     fileprivate func guestStopped(error: Error?) {
         if let runningID { markBundleUsed(runningID) }
         isRunning = false
+        shutdownRequested = false
         runningID = nil
         virtualMachine = nil
         showsDisplay = false
