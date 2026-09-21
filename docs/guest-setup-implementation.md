@@ -81,4 +81,4 @@ Tether iOS connection screen is the requested handoff; no new iOS receiver is ne
 - `TetherHost/Resources/GuestSetup/components.json`
 - `TetherHost/Services/ConnectionVerifier.swift`
 - `TetherHost/Views/SetupAssistantView.swift`
-- `build/Tether-Host-Guest-Setup-Preview.dmg`
+- `build/Tether-Host-for-Mac-v<version>-build-<number>-preview.dmg`

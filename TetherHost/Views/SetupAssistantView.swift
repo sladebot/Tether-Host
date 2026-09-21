@@ -160,10 +160,16 @@ private struct GuestConnectionSetupView: View {
                 if let vm = model.designatedVM {
                     Label("VM found", systemImage: "checkmark.circle.fill")
                         .foregroundStyle(.green)
-                    Text(vm.id.description)
-                        .font(.system(.caption, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
+                    HStack {
+                        Text(vm.id.description)
+                            .font(.system(.caption, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                        Spacer()
+                        if model.candidateVMs.count > 1 {
+                            Button("Choose Different VM") { model.clearVMSelection() }
+                        }
+                    }
                 } else {
                     Label("No single \(model.expectedVMName) VM was found.", systemImage: "exclamationmark.triangle.fill")
                         .foregroundStyle(.orange)
@@ -192,6 +198,17 @@ private struct GuestConnectionSetupView: View {
                         .disabled(model.isRefreshing)
                     Button("Change Provider") { model.changeSetupProvider() }
                 }
+                Divider()
+                Text("Need a macOS restore image for a new UTM VM?")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                HStack {
+                    Link("Download macOS IPSW (IPSW.me)", destination: UTMInstallation.macOSImageURL)
+                    Link("UTM macOS setup guide", destination: UTMInstallation.macOSGuideURL)
+                }
+                Text("IPSW.me is a third-party index linking to Apple-hosted restore images. UTM can also download a compatible image automatically when you create a macOS VM.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             SetupPhaseBox(number: 2, title: "Check that the VM boots", symbol: "power") {

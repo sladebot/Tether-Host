@@ -46,8 +46,11 @@ for My Mac. The deployment target is macOS 14 and the bundle identifier is
 `app.tether.host`.
 
 Build the ad-hoc signed development DMG with `./scripts/build-preview.sh`.
-The output is `build/Tether-Host-Guest-Setup-Preview.dmg`. The script verifies
-the app signature and DMG checksum; this is not a notarized public release.
+The output filename includes the app marketing version and build number, for
+example `build/Tether-Host-for-Mac-v1.0.0-build-3-preview.dmg`, with a matching
+`.sha256` checksum file. Bump `MARKETING_VERSION` for a product release and
+`CURRENT_PROJECT_VERSION` for every distributed build. The script verifies the
+app signature and DMG checksum; this is not a notarized public release.
 See `docs/mac-studio-install-test.md` for the installed-app test results.
 
 ## Test the core

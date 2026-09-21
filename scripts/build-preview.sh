@@ -4,14 +4,20 @@ set -euo pipefail
 SCRIPT_DIRECTORY="$(cd "$(dirname "$0")" && pwd -P)"
 REPO_DIRECTORY="$(cd "$SCRIPT_DIRECTORY/.." && pwd -P)"
 TETHER_PREVIEW_BUILD_DIR="${TETHER_PREVIEW_BUILD_DIR:-$REPO_DIRECTORY/build/PreviewDerivedData}"
-TETHER_PREVIEW_DMG="${TETHER_PREVIEW_DMG:-$REPO_DIRECTORY/build/Tether-Host-Guest-Setup-Preview.dmg}"
-mkdir -p "$(dirname "$TETHER_PREVIEW_DMG")"
+mkdir -p "$REPO_DIRECTORY/build"
 STAGING_DIRECTORY="$(mktemp -d "${TMPDIR:-/tmp}/tether-preview.XXXXXX")"
 trap 'rm -rf "$STAGING_DIRECTORY"' EXIT
 xcodebuild -project "$REPO_DIRECTORY/TetherHost.xcodeproj" -scheme 'Tether Host for Mac' \
     -configuration Debug -derivedDataPath "$TETHER_PREVIEW_BUILD_DIR" \
     CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= build
 APP_PATH="$TETHER_PREVIEW_BUILD_DIR/Build/Products/Debug/Tether Host for Mac.app"
+APP_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_PATH/Contents/Info.plist")"
+APP_BUILD="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP_PATH/Contents/Info.plist")"
+case "$APP_VERSION" in ''|*[!0-9A-Za-z._-]*) printf 'Invalid app version: %s\n' "$APP_VERSION" >&2; exit 1 ;; esac
+case "$APP_BUILD" in ''|*[!0-9A-Za-z._-]*) printf 'Invalid app build: %s\n' "$APP_BUILD" >&2; exit 1 ;; esac
+DEFAULT_PREVIEW_DMG="$REPO_DIRECTORY/build/Tether-Host-for-Mac-v${APP_VERSION}-build-${APP_BUILD}-preview.dmg"
+TETHER_PREVIEW_DMG="${TETHER_PREVIEW_DMG:-$DEFAULT_PREVIEW_DMG}"
+mkdir -p "$(dirname "$TETHER_PREVIEW_DMG")"
 find "$APP_PATH/Contents/Resources/GuestSetup" -type d -name '__pycache__' -prune -exec rm -rf {} +
 find "$APP_PATH/Contents/Resources/GuestSetup" -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
 codesign --force --deep --sign - --preserve-metadata=identifier,entitlements,flags,runtime "$APP_PATH"
@@ -22,8 +28,9 @@ mkdir "$STAGING_DIRECTORY/guest-disk"
 ditto --norsrc --noextattr --noqtn --noacl "$APP_PATH" "$STAGING_DIRECTORY/guest-disk/Tether Host for Mac.app"
 xattr -cr "$STAGING_DIRECTORY/guest-disk"
 codesign --verify --deep --strict "$STAGING_DIRECTORY/guest-disk/Tether Host for Mac.app"
-cat > "$STAGING_DIRECTORY/guest-disk/Read Me.txt" <<'GUEST_NOTE'
-Tether Guest Setup — run only inside the VM
+printf 'Tether Guest Setup — version %s (%s)\nRun only inside the VM.\n\n' \
+    "$APP_VERSION" "$APP_BUILD" > "$STAGING_DIRECTORY/guest-disk/Read Me.txt"
+cat >> "$STAGING_DIRECTORY/guest-disk/Read Me.txt" <<'GUEST_NOTE'
 
 Copy Tether Host for Mac into this VM's Applications folder and launch it.
 Open Setup Assistant and choose Run Guest Setup. The installer checks Tailscale
@@ -38,8 +45,9 @@ hdiutil makehybrid -iso -joliet -iso-volume-name TETHERGUEST \
     -joliet-volume-name 'Tether Guest Setup' -o "$STAGING_DIRECTORY/content/Tether Guest Setup.iso" \
     "$STAGING_DIRECTORY/guest-disk"
 ln -s /Applications "$STAGING_DIRECTORY/content/Applications"
-cat > "$STAGING_DIRECTORY/content/Read Me.txt" <<'NOTE'
-Tether Host local development preview
+printf 'Tether Host local development preview\nVersion %s (%s)\n\n' \
+    "$APP_VERSION" "$APP_BUILD" > "$STAGING_DIRECTORY/content/Read Me.txt"
+cat >> "$STAGING_DIRECTORY/content/Read Me.txt" <<'NOTE'
 
 Drag Tether Host for Mac into Applications and launch it.
 Choose UTM in this preview and follow the four numbered setup checks:
@@ -69,4 +77,9 @@ hdiutil create -srcfolder "$STAGING_DIRECTORY/content" -volname 'Tether Host Gue
     -format UDZO -fs HFS+ "$STAGING_DIRECTORY/preview.dmg"
 hdiutil verify "$STAGING_DIRECTORY/preview.dmg"
 mv "$STAGING_DIRECTORY/preview.dmg" "$TETHER_PREVIEW_DMG"
-printf 'Preview ready: %s\n' "$TETHER_PREVIEW_DMG"
+CHECKSUM_PATH="${TETHER_PREVIEW_DMG}.sha256"
+(
+    cd "$(dirname "$TETHER_PREVIEW_DMG")"
+    shasum -a 256 "$(basename "$TETHER_PREVIEW_DMG")" > "$(basename "$CHECKSUM_PATH")"
+)
+printf 'Preview ready: %s\nChecksum: %s\n' "$TETHER_PREVIEW_DMG" "$CHECKSUM_PATH"

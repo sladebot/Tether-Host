@@ -60,7 +60,7 @@ The existing 4.7.x version restriction remains until newer adapters are validate
   all three links, Check Again, and Continue opening the journal with UTM shown.
 - Missing/invalid/unsupported/removal cases verified with isolated filesystem
   fixtures; the user's installed UTM was not moved or modified.
-- Preview DMG output: `build/Tether-Host-Guest-Setup-Preview.dmg`.
+- Preview DMG output: `build/Tether-Host-for-Mac-v<version>-build-<number>-preview.dmg`.
 - This preview is not Developer ID signed or notarized for public distribution.
 
 The expanded complete-installer requirement is tracked in `complete-installer-plan.md`.

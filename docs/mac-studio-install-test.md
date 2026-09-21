@@ -3,7 +3,7 @@
 ## Installed artifact
 
 - App: `/Applications/Tether Host for Mac.app`
-- DMG: `build/Tether-Host-Guest-Setup-Preview.dmg`
+- DMG: `build/Tether-Host-for-Mac-v<version>-build-<number>-preview.dmg`
 - Rebuild: `./scripts/build-preview.sh`
 - Signing: local ad-hoc Debug build, not Developer ID signed or notarized.
 
@@ -17,8 +17,9 @@ preview provider and the built-in Apple VM as the production target. Read-only
 therefore requires explicit UUID selection and does not enable guest transfer
 until the selected VM reports `started`.
 
-The final DMG SHA-256 is
-`c76a57d7abf378f57cd21c58b72b7584f0b92f2f3a6624beae1ac3e8adea4ee8`.
+The current versioned DMG is
+`Tether-Host-for-Mac-v1.0.0-build-3-preview.dmg`. Its SHA-256 is
+`09c2f8294bd7ec569a57b6d77a568fc46cdf1565d198c7f1d2ab5bfec28ff77e`.
 `hdiutil verify` passes. The outer app passes strict deep signature verification.
 The nested guest ISO was mounted read-only, its app passed strict verification,
 and a normal `ditto` copy out of the ISO retained its executable bit and valid

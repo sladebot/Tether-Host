@@ -226,6 +226,11 @@ final class AppViewModel: ObservableObject {
         preferences.set(id.description, forKey: "setup.vmID")
     }
 
+    func clearVMSelection() {
+        selectedVMID = nil
+        preferences.removeObject(forKey: "setup.vmID")
+    }
+
     func openUTM() {
         guard UTMInstallation.detect() == .installed else {
             guestSetupDiskStatus = "UTM is not installed in Applications."

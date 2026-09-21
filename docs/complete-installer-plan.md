@@ -102,4 +102,4 @@ The older Linux-image direction is not used by this guest installer.
 
 - Plan: docs/complete-installer-plan.md
 - Onboarding implementation: TetherHost/Views/SetupAssistantView.swift
-- Intermediate DMG: build/Tether-Host-Guest-Setup-Preview.dmg
+- Intermediate DMG: `build/Tether-Host-for-Mac-v<version>-build-<number>-preview.dmg`
