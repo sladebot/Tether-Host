@@ -35,9 +35,13 @@ struct HostWorkspaceView: View {
             }
         }
         .onChange(of: model.setupDependencies) { _, gates in
+            model.syncHostSleepAssertion()
             if let step = model.workspaceSection.dependency, !gates.isUnlocked(step) {
                 model.workspaceSection = .vm
             }
+        }
+        .onChange(of: manager.isRunning) { _, _ in
+            model.syncHostSleepAssertion()
         }
         .onChange(of: model.workspaceSection) { _, section in
             if section != .hermes { showToken = false }
@@ -321,7 +325,7 @@ struct HostWorkspaceView: View {
     private var tailscaleSection: some View {
         VStack(alignment: .leading, spacing: 16) {
             sectionHeader("Tailscale inside the VM", detail: "The physical Mac’s Tailscale installation does not count.")
-            Text("With the macOS desktop open on the right, run Set up Tether Guest.command inside the VM. It checks the VM’s Internet connection, installs Tailscale if needed, and waits for VPN approval and sign-in.")
+            Text("Once the macOS desktop is ready, run Keep Tether VM Awake.command from the guest setup disk. Then run Set up Tether Guest.command inside the VM to check Internet, install Tailscale if needed, and complete VPN sign-in.")
                 .foregroundStyle(.secondary)
             if model.providerSetup.provider == .builtIn {
                 Label("Tether Guest Setup disk is attached when the VM boots.", systemImage: "opticaldisc")
@@ -522,6 +526,10 @@ private struct VMMonitorView: View {
                 if model.setupDependencies.vmReady {
                     Label("Desktop ready for guest setup", systemImage: "checkmark.circle.fill")
                         .font(.caption).foregroundStyle(.green)
+                }
+                if model.preventsHostSleep {
+                    Label("Keeping this Mac awake while the VM runs", systemImage: "moon.zzz.slash")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
             }
             .padding(16)

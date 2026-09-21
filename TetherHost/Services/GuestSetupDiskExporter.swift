@@ -46,7 +46,10 @@ public enum GuestSetupDiskExporter {
             defer { try? manager.removeItem(at: staging) }
             try manager.createDirectory(at: staging, withIntermediateDirectories: false)
             let guestResources = appURL.appendingPathComponent("Contents/Resources/GuestSetup", isDirectory: true)
-            let helperFiles = ["Set up Tether Guest.command", "guest_setup.py", "components.json"]
+            let helperFiles = [
+                "Set up Tether Guest.command", "Keep Tether VM Awake.command",
+                "app.tether.keep-awake.plist", "guest_setup.py", "components.json"
+            ]
             guard helperFiles.allSatisfy({ manager.fileExists(atPath: guestResources.appendingPathComponent($0).path) }) else {
                 throw GuestSetupDiskError.missingGuestHelper
             }
@@ -69,10 +72,10 @@ public enum GuestSetupDiskExporter {
             let instructions = """
             Tether Guest Setup
 
-            1. In this VM, double-click Set up Tether Guest.command on this disk.
-            2. Confirm the guest Internet check succeeds.
-            3. Configure Tailscale inside this VM when prompted.
-            4. Configure Hermes, model login, and guest permissions.
+            1. Finish macOS account setup and reach the desktop.
+            2. Double-click Keep Tether VM Awake.command to prevent idle sleep and lock.
+            3. Double-click Set up Tether Guest.command. It also enables keep-awake.
+            4. Configure Tailscale, Hermes, model login, and guest permissions.
 
             Install Tether Host for Mac only on the physical Mac. This disk
             carries a small guest helper, not a second copy of the host app.

@@ -94,8 +94,8 @@ The post-login availability helper is:
 
 - `app.tether.keep-awake.plist` -> `~/Library/LaunchAgents/app.tether.keep-awake.plist`
 
-It runs `/usr/bin/caffeinate -i` as the guest user, preventing idle system sleep
-while leaving display sleep enabled. `RunAtLoad` and `KeepAlive` make the assertion
+It runs `/usr/bin/caffeinate -di` as the guest user, preventing idle system and
+display sleep. `RunAtLoad` and `KeepAlive` make the assertion
 return after login or an unexpected process exit. It cannot run before FileVault
 unlock because user LaunchAgents do not exist in that boot phase.
 

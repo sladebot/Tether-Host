@@ -1,7 +1,6 @@
 """Guest-local configuration and real API verification."""
 import json
 import os
-import plistlib
 from pathlib import Path
 import re
 import secrets
@@ -68,10 +67,6 @@ def configure():
     if 'computer_use' not in enabled:
         enabled.append('computer_use')
     private_write(config_path, yaml.safe_dump(config, sort_keys=False))
-    launch_agent = Path.home() / 'Library/LaunchAgents/app.tether.keep-awake.plist'
-    private_write(launch_agent, plistlib.dumps({'Label': 'app.tether.keep-awake',
-        'ProgramArguments': ['/usr/bin/caffeinate', '-i'], 'RunAtLoad': True,
-        'KeepAlive': True}).decode())
     identity = STATE / 'installation-id' 
     if not identity.exists():
         private_write(identity, str(uuid.uuid4()))

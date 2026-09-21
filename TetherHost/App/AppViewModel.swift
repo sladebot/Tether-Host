@@ -151,6 +151,8 @@ final class AppViewModel: ObservableObject {
     @Published private(set) var statusMessage = "No host evidence has been collected yet."
     @Published private(set) var isRemovingVM = false
     @Published private(set) var vmRemovalMessage: String?
+    @Published private(set) var preventsHostSleep = false
+    private var hostSleepActivity: NSObjectProtocol?
 
     @Published var connectionURL = "" { didSet { connectionVerifiedAt = nil; if connectionURL != oldValue { connectionToken = "" } } }
     @Published var connectionToken = "" { didSet { connectionVerifiedAt = nil } }
@@ -217,6 +219,7 @@ final class AppViewModel: ObservableObject {
         vmRemovalMessage = nil
         observations = HostDashboardSnapshot.unobserved.observations
         checkProviderInstallation()
+        syncHostSleepAssertion()
     }
 
     private static func availability(for provider: VMProvider) -> VMProviderAvailability {
@@ -323,11 +326,28 @@ final class AppViewModel: ObservableObject {
         guard candidateVMs.contains(where: { $0.id == id }) else { return }
         selectedVMID = id
         preferences.set(id.description, forKey: "setup.vmID")
+        syncHostSleepAssertion()
     }
 
     func clearVMSelection() {
         selectedVMID = nil
         preferences.removeObject(forKey: "setup.vmID")
+        syncHostSleepAssertion()
+    }
+
+    func syncHostSleepAssertion() {
+        let running = designatedVMIsRunning
+        guard running != preventsHostSleep else { return }
+        if running {
+            hostSleepActivity = ProcessInfo.processInfo.beginActivity(
+                options: .idleSystemSleepDisabled,
+                reason: "Keep the active Tether virtual machine running"
+            )
+        } else if let hostSleepActivity {
+            ProcessInfo.processInfo.endActivity(hostSleepActivity)
+            self.hostSleepActivity = nil
+        }
+        preventsHostSleep = running
     }
 
     func vmBundleURL(for record: VirtualMachineRecord) -> URL? {
@@ -613,6 +633,7 @@ final class AppViewModel: ObservableObject {
             diagnostics = next.diagnostics
             lastRefresh = Date()
             statusMessage = "Evidence refreshed. Review its source and collection time before acting."
+            syncHostSleepAssertion()
         } catch {
             guard selectedProvider == providerSetup.provider else { return }
             observations = HostDashboardSnapshot.unobserved.observations

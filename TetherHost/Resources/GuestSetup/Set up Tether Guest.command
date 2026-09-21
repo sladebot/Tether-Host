@@ -30,6 +30,9 @@ rm -f "$TETHER_GUEST_STATE/connection.json"
 stage() { CURRENT_STAGE="$1"; printf '\n%s\n' "$1"; printf '%s\n' "$1" > "$TETHER_GUEST_STATE/status.txt"; }
 wait_for_user() { printf '\n%s\nPress Return when finished, or Control-C to stop. ' "$1"; read -r _; }
 
+stage 'Keeping this macOS VM awake during setup'
+/bin/bash "$SCRIPT_DIRECTORY/Keep Tether VM Awake.command"
+
 stage 'Step 3 of 4 — Checking Internet from inside this VM'
 if ! /usr/bin/curl --proto '=https' --tlsv1.2 -sSI --connect-timeout 10 --max-time 20 \
     https://pkgs.tailscale.com/stable/ > /dev/null; then
@@ -94,11 +97,6 @@ while ! "$HERMES_BIN" computer-use doctor; do
     open 'x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility'
     wait_for_user 'Inside this VM, grant Accessibility and Screen Recording to the identity named by the doctor report. Restart that app if macOS asks. Permissions will be checked again.'
 done
-
-stage 'Step 4 of 4 — Configuring guest startup services'
-if ! launchctl print "gui/$(id -u)/app.tether.keep-awake" >/dev/null 2>&1; then
-    launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/app.tether.keep-awake.plist"
-fi
 
 stage 'Step 4 of 4 — Verifying the Hermes gateway'
 "$HERMES_BIN" gateway install

@@ -31,13 +31,16 @@ mkdir "$STAGING_DIRECTORY/guest-disk"
 ditto --norsrc --noextattr --noqtn --noacl "$APP_PATH/Contents/Resources/GuestSetup" "$STAGING_DIRECTORY/guest-disk"
 xattr -cr "$STAGING_DIRECTORY/guest-disk"
 test -x "$STAGING_DIRECTORY/guest-disk/Set up Tether Guest.command"
+test -x "$STAGING_DIRECTORY/guest-disk/Keep Tether VM Awake.command"
+test -f "$STAGING_DIRECTORY/guest-disk/app.tether.keep-awake.plist"
 test -f "$STAGING_DIRECTORY/guest-disk/guest_setup.py"
 test -f "$STAGING_DIRECTORY/guest-disk/components.json"
 printf 'Tether Guest Setup — version %s (%s)\nRun only inside the VM.\n\n' \
     "$APP_VERSION" "$APP_BUILD" > "$STAGING_DIRECTORY/guest-disk/Read Me.txt"
 cat >> "$STAGING_DIRECTORY/guest-disk/Read Me.txt" <<'GUEST_NOTE'
 
-Double-click Set up Tether Guest.command from this disk inside the VM. Do not
+After reaching the macOS desktop, double-click Keep Tether VM Awake.command.
+Then double-click Set up Tether Guest.command from this disk inside the VM. Do not
 install a second copy of Tether Host. The helper checks guest Internet and Tailscale
 inside this VM first and installs or configures it as needed. It then checks
 Hermes inside this VM, installing it when absent or configuring a working
@@ -55,8 +58,8 @@ printf 'Tether Host local development preview\nVersion %s (%s)\n\n' \
 cat >> "$STAGING_DIRECTORY/content/Read Me.txt" <<'NOTE'
 
 Drag Tether Host for Mac into Applications and launch it.
-Choose Built-in VM, select a compatible macOS IPSW, and follow setup in this app.
-UTM remains available as a backup for existing VMs. The four checks are:
+UTM is the default VM provider; choose a compatible macOS IPSW and follow setup
+in this app. Built-in Apple Virtualization is also available. The four checks are:
 1. Create or select the exact VM.
 2. Install and boot macOS.
 3. Check/install/configure Tailscale inside the VM.

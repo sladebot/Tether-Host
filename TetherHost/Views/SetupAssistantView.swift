@@ -402,8 +402,8 @@ private struct GuestConnectionSetupView: View {
             SetupPhaseBox(number: 3, title: "Check and configure Tailscale inside the VM", symbol: "network") {
                 VStack(alignment: .leading, spacing: 7) {
                     Text("1. In UTM, attach **Tether Guest Setup.iso** to the running VM as a removable drive.")
-                    Text("2. Inside the VM, open the mounted disk and double-click **Set up Tether Guest.command**. Do not install a second copy of Tether Host.")
-                    Text("3. The helper checks guest Internet access, then Tailscale and Hermes. Follow sign-in and Apple approval prompts inside the VM.")
+                    Text("2. After the macOS desktop appears, double-click **Keep Tether VM Awake.command** on the disk. This keeps the guest awake and prevents its automatic screen saver.")
+                    Text("3. Double-click **Set up Tether Guest.command**. It checks guest Internet, then Tailscale and Hermes. Do not install a second copy of Tether Host.")
                 }
                 .foregroundStyle(.secondary)
             }

@@ -307,7 +307,10 @@ final class HostCoreTests: XCTestCase {
         try FileManager.default.createDirectory(at: app, withIntermediateDirectories: true)
         let helper = app.appendingPathComponent("Contents/Resources/GuestSetup", isDirectory: true)
         try FileManager.default.createDirectory(at: helper, withIntermediateDirectories: true)
-        for filename in ["Set up Tether Guest.command", "guest_setup.py", "components.json"] {
+        for filename in [
+            "Set up Tether Guest.command", "Keep Tether VM Awake.command",
+            "app.tether.keep-awake.plist", "guest_setup.py", "components.json"
+        ] {
             try Data("guest-helper".utf8).write(to: helper.appendingPathComponent(filename))
         }
         let image = root.appendingPathComponent("Tether Guest Setup.iso")
@@ -334,6 +337,7 @@ final class HostCoreTests: XCTestCase {
         }
         XCTAssertTrue(FileManager.default.fileExists(atPath: mount.appendingPathComponent("guest_setup.py").path))
         XCTAssertTrue(FileManager.default.isExecutableFile(atPath: mount.appendingPathComponent("Set up Tether Guest.command").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: mount.appendingPathComponent("Keep Tether VM Awake.command").path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: mount.appendingPathComponent("Tether Host for Mac.app").path))
     }
 
