@@ -151,6 +151,8 @@ final class AppViewModel: ObservableObject {
     @Published private(set) var statusMessage = "No host evidence has been collected yet."
     @Published private(set) var isRemovingVM = false
     @Published private(set) var vmRemovalMessage: String?
+    @Published private(set) var locatedVMBundles: [VirtualMachineID: URL] = [:]
+    private var bundleLookupRevision = UUID()
     @Published private(set) var preventsHostSleep = false
     private var hostSleepActivity: NSObjectProtocol?
 
@@ -216,6 +218,8 @@ final class AppViewModel: ObservableObject {
         selectedVMID = nil
         preferences.removeObject(forKey: "setup.vmID")
         inventory = []
+        locatedVMBundles = [:]
+        bundleLookupRevision = UUID()
         vmRemovalMessage = nil
         observations = HostDashboardSnapshot.unobserved.observations
         checkProviderInstallation()
@@ -353,6 +357,13 @@ final class AppViewModel: ObservableObject {
 
     func vmBundleURL(for record: VirtualMachineRecord) -> URL? {
         guard !isInsideGuest, inventory.contains(where: { $0.id == record.id }) else { return nil }
+        return locatedVMBundles[record.id]
+    }
+
+    private func locateVMBundles(_ ids: [VirtualMachineID], provider: VMProvider) {
+        bundleLookupRevision = UUID()
+        let revision = bundleLookupRevision
+        locatedVMBundles = [:]
         let home = FileManager.default.homeDirectoryForCurrentUser
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         let locator = VirtualMachineBundleLocator(
@@ -364,7 +375,19 @@ final class AppViewModel: ObservableObject {
                 home.appendingPathComponent("Documents")
             ]
         )
-        return locator.locate(record.id, provider: providerSetup.provider)
+        Task.detached(priority: .utility) { [weak self] in
+            var located: [VirtualMachineID: URL] = [:]
+            for id in ids {
+                if let bundle = locator.locate(id, provider: provider) {
+                    located[id] = bundle
+                }
+            }
+            await MainActor.run {
+                guard let self, self.bundleLookupRevision == revision,
+                      self.providerSetup.provider == provider else { return }
+                self.locatedVMBundles = located
+            }
+        }
     }
 
     func revealVMInFinder(_ record: VirtualMachineRecord) {
@@ -637,6 +660,7 @@ final class AppViewModel: ObservableObject {
                     ? $0.id.rawValue.uuidString < $1.id.rawValue.uuidString
                     : order == .orderedAscending
             }
+            locateVMBundles(inventory.map(\.id), provider: selectedProvider)
             setup = next.setup
             diagnostics = next.diagnostics
             lastRefresh = Date()
@@ -646,6 +670,8 @@ final class AppViewModel: ObservableObject {
             guard selectedProvider == providerSetup.provider else { return }
             observations = HostDashboardSnapshot.unobserved.observations
             inventory = []
+            locatedVMBundles = [:]
+            bundleLookupRevision = UUID()
             lastRefresh = Date()
             statusMessage = (error as? LocalizedError)?.errorDescription
                 ?? "Host status is unavailable. No security claim can be made."
