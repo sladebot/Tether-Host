@@ -203,6 +203,12 @@ final class AppViewModel: ObservableObject {
             }
         }
         providerSetup = VMProviderSetup(provider: initialProvider)
+        if initialProvider == .builtIn {
+            // The guest can be offline or on a different tailnet after a host
+            // restart. Only a fresh guest status reply can restore this gate.
+            tailscaleConfirmedVMID = nil
+            preferences.removeObject(forKey: "setup.tailscaleConfirmedVMID")
+        }
         selection = .setup
         self.provider = provider
         let initial = HostDashboardSnapshot.unobserved
@@ -215,7 +221,8 @@ final class AppViewModel: ObservableObject {
            let id = VirtualMachineID(idString) {
             connectionID = id
             connectionURL = endpoint
-            Task { await restoreConnectionToken() }
+            let revision = connectionInputRevision
+            Task { await restoreConnectionToken(for: id, endpoint: endpoint, revision: revision) }
         }
     }
 
@@ -333,6 +340,10 @@ final class AppViewModel: ObservableObject {
         guard let vm = designatedVM, tailscaleConfirmedVMID == vm.id else { return }
         tailscaleConfirmedVMID = nil
         preferences.removeObject(forKey: "setup.tailscaleConfirmedVMID")
+        // A previous backend check cannot unlock the phone again after the
+        // guest's network configuration has been changed or reconfirmed.
+        connectionVerifiedAt = nil
+        verifiedForVMID = nil
     }
 
     func selectVM(_ id: VirtualMachineID) {
@@ -359,6 +370,9 @@ final class AppViewModel: ObservableObject {
         verifiedForVMID = nil
         connectionURL = ""
         connectionToken = ""
+        connectionID = VirtualMachineID(rawValue: UUID())
+        preferences.removeObject(forKey: "connection.id")
+        preferences.removeObject(forKey: "connection.endpoint")
     }
 
     func setConnectionURLFromUser(_ value: String) {
@@ -374,6 +388,7 @@ final class AppViewModel: ObservableObject {
     }
 
     func useDetectedGuestConnection() {
+        connectionInputRevision += 1
         hasManualConnectionOverride = false
         lastAutomaticVerificationAt = nil
         Task { await refreshVerifiedGuestConnection() }
@@ -420,18 +435,26 @@ final class AppViewModel: ObservableObject {
                nativeVM.runningVMID == vmID,
                connectionInputRevision == revision {
                 invalidateLiveGuestReadiness()
+                connectionMessage = "Guest handoff stopped. In the VM, open the guest installer’s Verify connection step and choose Retry host handoff."
+            } else if connectionURL.isEmpty && !hasManualConnectionOverride,
+                      connectionMessage == "Verify the guest endpoint before connecting your phone." {
+                connectionMessage = "Waiting for the guest’s final Verify connection step. If it is already complete, choose Retry host handoff in the VM."
             }
         }
     }
 
     func invalidateLiveGuestReadiness() {
         guard providerSetup.provider == .builtIn else { return }
-        connectionVerifiedAt = nil
-        verifiedForVMID = nil
+        invalidateConnectionVerification()
         lastAutomaticVerificationAt = nil
         hasDetectedGuestConnection = false
         tailscaleConfirmedVMID = nil
         preferences.removeObject(forKey: "setup.tailscaleConfirmedVMID")
+    }
+
+    private func invalidateConnectionVerification() {
+        connectionVerifiedAt = nil
+        verifiedForVMID = nil
     }
 
     func syncHostSleepAssertion() {
@@ -584,9 +607,13 @@ final class AppViewModel: ObservableObject {
         )
     }
 
-    private func restoreConnectionToken() async {
+    private func restoreConnectionToken(for id: VirtualMachineID, endpoint: String, revision: Int) async {
         // Saved credentials are restored, but verification is never restored as a success.
-        guard let secret = try? await connectionVault.load(.activeHermes(connectionID)), connectionToken.isEmpty else { return }
+        guard let secret = try? await connectionVault.load(.activeHermes(id)),
+              connectionInputRevision == revision,
+              connectionID == id,
+              connectionURL == endpoint,
+              connectionToken.isEmpty else { return }
         connectionToken = secret.withUnsafeBytes { String(decoding: $0, as: UTF8.self) }
     }
 
@@ -674,6 +701,8 @@ final class AppViewModel: ObservableObject {
         let endpoint = connectionURL
         let token = connectionToken
         let vmID = designatedVM?.id
+        let vmProvider = providerSetup.provider
+        let secretID = isInsideGuest ? connectionID : (vmID ?? connectionID)
         let revision = connectionInputRevision
         defer { isVerifyingConnection = false }
         connectionMessage = "Checking HTTPS, API authentication, durable runs, and model discovery…"
@@ -681,12 +710,15 @@ final class AppViewModel: ObservableObject {
             let result = try await ConnectionVerifier().verify(endpoint: endpoint, token: token)
             guard revision == connectionInputRevision,
                   endpoint == connectionURL, token == connectionToken,
-                  isInsideGuest || (vmID == designatedVM?.id && setupDependencies.isUnlocked(.hermes)) else { return }
-            try await connectionVault.store(SecretValue(data: Data(token.utf8)), for: .activeHermes(connectionID))
+                  isInsideGuest || (vmProvider == providerSetup.provider && vmID == designatedVM?.id
+                      && setupDependencies.tailscaleReady) else { return }
+            try await connectionVault.store(SecretValue(data: Data(token.utf8)), for: .activeHermes(secretID))
             guard revision == connectionInputRevision,
                   endpoint == connectionURL, token == connectionToken,
-                  isInsideGuest || (vmID == designatedVM?.id && setupDependencies.isUnlocked(.hermes)) else { return }
-            preferences.set(connectionID.description, forKey: "connection.id")
+                  isInsideGuest || (vmProvider == providerSetup.provider && vmID == designatedVM?.id
+                      && setupDependencies.tailscaleReady) else { return }
+            connectionID = secretID
+            preferences.set(secretID.description, forKey: "connection.id")
             preferences.set(result.endpoint.url.absoluteString, forKey: "connection.endpoint")
             connectionVerifiedAt = result.verifiedAt
             verifiedForVMID = vmID
@@ -742,6 +774,7 @@ final class AppViewModel: ObservableObject {
         guard !isRefreshing else { return }
         checkProviderInstallation()
         let selectedProvider = providerSetup.provider
+        let wasDesignatedVMRunning = designatedVMIsRunning
         isRefreshing = true
         defer { isRefreshing = false }
         do {
@@ -758,6 +791,18 @@ final class AppViewModel: ObservableObject {
                 return order == .orderedSame
                     ? $0.id.rawValue.uuidString < $1.id.rawValue.uuidString
                     : order == .orderedAscending
+            }
+            if wasDesignatedVMRunning && !designatedVMIsRunning {
+                // UTM is observed through inventory polling rather than the
+                // native VM's isRunning notification. Never reuse a prior
+                // network/backend check after that VM has stopped.
+                invalidateConnectionVerification()
+                if selectedProvider == .utm {
+                    tailscaleConfirmedVMID = nil
+                    preferences.removeObject(forKey: "setup.tailscaleConfirmedVMID")
+                    utmDesktopReadyVMID = nil
+                    preferences.removeObject(forKey: "setup.utmDesktopReadyVMID")
+                }
             }
             locateVMBundles(inventory.map(\.id), provider: selectedProvider)
             setup = next.setup

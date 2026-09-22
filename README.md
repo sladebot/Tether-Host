@@ -61,6 +61,9 @@ for a private, user-owned `connection.json`, accepts an existing endpoint manual
 API authentication/capabilities, stores the credential in Keychain, and provides
 masked reveal/copy controls for use in Tether iOS. The phone still needs Tailscale
 and its own Test Connection check. A host-side check does not certify phone reachability.
+If the guest helper cannot start, the guest Verify step keeps the connection
+verified but shows **Retry host handoff**. The same action can restart the helper
+after a later failure without reinstalling macOS, Tailscale, or Hermes.
 
 For the built-in VM, Tether Host creates a read-only guest setup disk and
 refreshes and attaches it at every boot. Updating Tether Host refreshes the

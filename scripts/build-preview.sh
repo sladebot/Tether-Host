@@ -93,6 +93,8 @@ sign-in, model login, guest permissions, service configuration, and verification
 After guest Verify connection succeeds, a built-in VM sends its private URL and
 token directly to Tether Host. Tether Host fills them and tests Hermes from this
 Mac before enabling the iPhone step. UTM retains manual entry and file import.
+If the helper fails to start, use Retry host handoff in the guest Verify step;
+this does not reinstall macOS, Tailscale, or Hermes.
 Enter those connection details in Tether iOS with the phone on the same tailnet.
 
 Existing Hermes installations are preserved: the guest installer refuses
@@ -103,7 +105,9 @@ The built-in VM path has not yet completed a clean-VM, real-phone end-to-end
 test. UTM remains a manual backup path.
 NOTE
 hdiutil create -srcfolder "$STAGING_DIRECTORY/content" -volname 'Tether Host Guest Setup' \
-    -format UDZO -fs HFS+ "$STAGING_DIRECTORY/preview.dmg"
+    -format UDRW -fs HFS+ "$STAGING_DIRECTORY/preview-rw.dmg"
+hdiutil convert "$STAGING_DIRECTORY/preview-rw.dmg" -format UDZO \
+    -o "$STAGING_DIRECTORY/preview.dmg"
 hdiutil verify "$STAGING_DIRECTORY/preview.dmg"
 mv "$STAGING_DIRECTORY/preview.dmg" "$TETHER_PREVIEW_DMG"
 CHECKSUM_PATH="${TETHER_PREVIEW_DMG}.sha256"
