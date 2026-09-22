@@ -341,7 +341,7 @@ final class HostCoreTests: XCTestCase {
             "Set up Tether Guest.command", "Keep Tether VM Awake.command",
             "01 Check Internet.command", "02 Set up Tailscale.command",
             "03 Install Hermes.command", "04 Configure Hermes.command",
-            "05 Verify Connection.command",
+            "05 Enable Computer Use.command", "06 Verify Connection.command",
             "app.tether.keep-awake.plist", "guest_setup.py", "components.json",
             "terminal.html", "xterm.js", "xterm.css", "LICENSE"
         ] {

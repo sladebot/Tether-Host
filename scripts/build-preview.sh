@@ -37,7 +37,7 @@ test -x "$STAGING_DIRECTORY/guest-disk/Tether Guest Installer.app/Contents/Resou
 test -x "$STAGING_DIRECTORY/guest-disk/Tether Guest Installer.app/Contents/Resources/Keep Tether VM Awake.command"
 for guest_step in '01 Check Internet.command' '02 Set up Tailscale.command' \
     '03 Install Hermes.command' '04 Configure Hermes.command' \
-    '05 Verify Connection.command'; do
+    '05 Enable Computer Use.command' '06 Verify Connection.command'; do
     test -x "$STAGING_DIRECTORY/guest-disk/Tether Guest Installer.app/Contents/Resources/$guest_step"
 done
 test -f "$STAGING_DIRECTORY/guest-disk/Tether Guest Installer.app/Contents/Resources/guest_setup.py"
@@ -49,11 +49,11 @@ printf 'Tether Guest Setup — version %s (%s)\nRun only inside the VM.\n\n' \
 cat >> "$STAGING_DIRECTORY/guest-disk/Read Me.txt" <<'GUEST_NOTE'
 
 After reaching the macOS desktop, double-click Tether Guest Installer.app on
-this disk and follow its five separate steps. Interactive setup runs in the
+this disk and follow its six separate steps. Interactive setup runs in the
 installer's own console. Do not install a second copy of Tether Host. Existing
 Tailscale and Hermes installations are reused when healthy. The guide checks
 guest Internet, connects Tailscale, installs Hermes if needed, configures
-model login and computer use, then verifies the private connection.
+model login, installs computer use in the VM, then verifies the private connection.
 
 Run this only inside the macOS virtual machine.
 GUEST_NOTE
@@ -78,7 +78,7 @@ or a new VM that appears in UTM. The four checks are:
 The included Tether Guest Setup.iso carries only a small guest helper, without
 enabling host folder or clipboard sharing. Tether-created built-in and UTM VMs
 include a read-only copy. In the guest, open Tether Guest Installer.app and
-follow its five checks. Updating this installer does not reinstall the VM.
+follow its six checks. Updating this installer does not reinstall the VM.
 For a pre-existing UTM VM, attach the included ISO manually once.
 
 Dependency detection for Tailscale and Hermes runs inside the VM. Software on

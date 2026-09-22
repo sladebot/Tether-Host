@@ -43,7 +43,7 @@ Hermes, Tailscale, or developer tools.
 
 The app creates a read-only `Tether Guest Setup.iso` containing a small
 guest helper, without shared host folders or clipboard. Inside the macOS guest,
-double-click **Tether Guest Installer.app** on that disk and follow its five-step
+double-click **Tether Guest Installer.app** on that disk and follow its six-step
 guide; no second Tether Host installation is needed. The helper first checks real guest HTTPS access through
 the host's NAT, then checks Tailscale, verifies its publisher signature, and
 guides sign-in when needed.

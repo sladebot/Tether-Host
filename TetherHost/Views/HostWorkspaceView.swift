@@ -435,7 +435,7 @@ struct HostWorkspaceView: View {
     private var tailscaleSection: some View {
         VStack(alignment: .leading, spacing: 16) {
             sectionHeader("Tailscale inside the VM", detail: "The physical Mac’s Tailscale installation does not count.")
-            Text("Once the macOS desktop is ready, open Tether Guest Installer.app from the setup disk in the VM. Its five-step guide checks Internet, reuses or installs Tailscale, installs Hermes, then verifies the connection.")
+            Text("Once the macOS desktop is ready, open Tether Guest Installer.app from the setup disk in the VM. Its six-step guide checks Internet, reuses or installs Tailscale, installs Hermes and computer use, then verifies the connection.")
                 .foregroundStyle(.secondary)
             if model.providerSetup.provider == .builtIn {
                 Label("Tether Guest Setup disk is attached when the VM boots.", systemImage: "opticaldisc")

@@ -52,7 +52,7 @@ public enum GuestSetupDiskExporter {
             let helperFiles = ["Set up Tether Guest.command", "Keep Tether VM Awake.command",
                                "01 Check Internet.command", "02 Set up Tailscale.command",
                                "03 Install Hermes.command", "04 Configure Hermes.command",
-                               "05 Verify Connection.command",
+                               "05 Enable Computer Use.command", "06 Verify Connection.command",
                                "app.tether.keep-awake.plist", "guest_setup.py", "components.json",
                                "terminal.html", "xterm.js", "xterm.css", "LICENSE"]
             guard manager.isExecutableFile(atPath: executable.path),
@@ -77,7 +77,7 @@ public enum GuestSetupDiskExporter {
 
             1. Finish macOS account setup and reach the desktop.
             2. Double-click Tether Guest Installer.app on this disk.
-            3. Follow the five steps shown in the guest installer.
+            3. Follow the six steps shown in the guest installer.
             4. Complete sign-in and permission prompts in the VM when asked.
                Existing Tailscale and Hermes installations are reused.
 

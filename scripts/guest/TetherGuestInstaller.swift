@@ -3,7 +3,7 @@ import Darwin
 import WebKit
 
 private enum SetupStep: Int, CaseIterable {
-    case internet, tailscale, hermesInstall, hermesConfigure, verify
+    case internet, tailscale, hermesInstall, hermesConfigure, computerUse, verify
 
     var title: String {
         switch self {
@@ -11,6 +11,7 @@ private enum SetupStep: Int, CaseIterable {
         case .tailscale: "Connect Tailscale"
         case .hermesInstall: "Install Hermes"
         case .hermesConfigure: "Set up Hermes"
+        case .computerUse: "Enable computer use"
         case .verify: "Verify connection"
         }
     }
@@ -24,7 +25,9 @@ private enum SetupStep: Int, CaseIterable {
         case .hermesInstall:
             "Install the pinned Hermes runtime and API support. Existing Hermes data is preserved."
         case .hermesConfigure:
-            "Sign in to a model, grant computer-use permissions, and start the private Hermes gateway."
+            "Sign in to a model and start the authenticated Hermes gateway inside this VM."
+        case .computerUse:
+            "Install Hermes computer use in this VM, grant its macOS permissions, and check that it is ready."
         case .verify:
             "Check private HTTPS, authentication, computer use, and a real model response before connecting your phone."
         }
@@ -39,7 +42,9 @@ private enum SetupStep: Int, CaseIterable {
         case .hermesInstall:
             "The console shows installation output. An optional Chromium download can be quiet for up to 10 minutes; existing Hermes data is preserved."
         case .hermesConfigure:
-            "Hermes may open a browser for model sign-in and System Settings for permissions. Follow the prompts in this VM."
+            "Hermes may open a browser for model sign-in. Complete that sign-in inside this VM."
+        case .computerUse:
+            "The guide opens this VM’s System Settings when needed. Grant Accessibility and Screen Recording to the app named by the doctor check, then return here."
         case .verify:
             "A successful check creates a private connection file in this VM. Keep its token private when adding your phone."
         }
@@ -51,6 +56,7 @@ private enum SetupStep: Int, CaseIterable {
         case .tailscale: "Set up Tailscale"
         case .hermesInstall: "Install Hermes"
         case .hermesConfigure: "Configure Hermes"
+        case .computerUse: "Install computer use"
         case .verify: "Verify Tether connection"
         }
     }
@@ -61,7 +67,8 @@ private enum SetupStep: Int, CaseIterable {
         case .tailscale: "02 Set up Tailscale.command"
         case .hermesInstall: "03 Install Hermes.command"
         case .hermesConfigure: "04 Configure Hermes.command"
-        case .verify: "05 Verify Connection.command"
+        case .computerUse: "05 Enable Computer Use.command"
+        case .verify: "06 Verify Connection.command"
         }
     }
 
@@ -71,6 +78,7 @@ private enum SetupStep: Int, CaseIterable {
         case .tailscale: "tailscale"
         case .hermesInstall: "hermes-install"
         case .hermesConfigure: "hermes-configure"
+        case .computerUse: "computer-use"
         case .verify: "verify"
         }
     }
@@ -81,6 +89,7 @@ private enum SetupStep: Int, CaseIterable {
         case .tailscale: "tailscale.ready"
         case .hermesInstall: "hermes-installed.ready"
         case .hermesConfigure: "hermes-configured.ready"
+        case .computerUse: "computer-use.ready"
         case .verify: "verified.ready"
         }
     }
@@ -133,7 +142,7 @@ final class TetherGuestInstaller: NSObject, NSApplicationDelegate, WKScriptMessa
 
         addLabel("Set up Tether in this VM", to: content, frame: NSRect(x: 28, y: 627, width: 830, height: 33),
                  font: .boldSystemFont(ofSize: 24))
-        addLabel("Keep your existing macOS account and installed apps. Complete these five checks in order.",
+        addLabel("Keep your existing macOS account and installed apps. Complete these six checks in order.",
                  to: content, frame: NSRect(x: 29, y: 599, width: 830, height: 22),
                  font: .systemFont(ofSize: 13), color: .secondaryLabelColor)
         addRule(to: content, frame: NSRect(x: 24, y: 584, width: 852, height: 1))
@@ -145,7 +154,7 @@ final class TetherGuestInstaller: NSObject, NSApplicationDelegate, WKScriptMessa
             button.isBordered = false
             button.alignment = .left
             button.font = .systemFont(ofSize: 14, weight: .medium)
-            button.frame = NSRect(x: 30, y: 515 - step.rawValue * 70, width: 196, height: 48)
+            button.frame = NSRect(x: 30, y: 515 - step.rawValue * 67, width: 196, height: 48)
             content.addSubview(button)
             stepButtons.append(button)
         }
@@ -361,7 +370,8 @@ final class TetherGuestInstaller: NSObject, NSApplicationDelegate, WKScriptMessa
         case .internet: return true
         case .tailscale, .hermesInstall: return isComplete(.internet)
         case .hermesConfigure: return isComplete(.hermesInstall)
-        case .verify: return isComplete(.tailscale) && isComplete(.hermesConfigure)
+        case .computerUse: return isComplete(.hermesConfigure)
+        case .verify: return isComplete(.tailscale) && isComplete(.computerUse)
         }
     }
 

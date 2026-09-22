@@ -8,7 +8,7 @@ CURRENT_STAGE="Checking this guest"
 fail() { printf '\nSetup stopped: %s\n' "$1"; exit 1; }
 ACTION="${1:-}"
 case "$ACTION" in
-    internet|tailscale|hermes-install|hermes-configure|verify) ;;
+    internet|tailscale|hermes-install|hermes-configure|computer-use|verify) ;;
     *) fail 'Open Tether Guest Installer.app and choose a setup step.' ;;
 esac
 # This bundle must never provision the physical Mac by mistake.
@@ -46,10 +46,10 @@ complete() {
 }
 
 if [ "$ACTION" = internet ]; then
-stage '1 of 5 — Keeping this macOS VM awake'
+stage '1 of 6 — Keeping this macOS VM awake'
 /bin/bash "$SCRIPT_DIRECTORY/Keep Tether VM Awake.command"
 
-stage '1 of 5 — Checking Internet inside this VM'
+stage '1 of 6 — Checking Internet inside this VM'
 check_guest_https() {
     /usr/bin/curl --proto '=https' --tlsv1.2 -sSI --connect-timeout 10 --max-time 20 \
         https://pkgs.tailscale.com/stable/ > /dev/null 2>&1
@@ -85,10 +85,10 @@ fi
 [ -f "$TETHER_GUEST_STATE/internet.ready" ] || fail 'Complete the Internet step in Tether Guest Installer first.'
 
 if [ "$ACTION" = tailscale ]; then
-stage '2 of 5 — Checking Tailscale inside this VM'
+stage '2 of 6 — Checking Tailscale inside this VM'
 TAILSCALE_BIN='/Applications/Tailscale.app/Contents/MacOS/Tailscale'
 if [ ! -x "$TAILSCALE_BIN" ]; then
-    stage '2 of 5 — Installing Tailscale inside this VM'
+    stage '2 of 6 — Installing Tailscale inside this VM'
     curl --proto '=https' --tlsv1.2 -fL --retry 2 --connect-timeout 15 --max-time 600 \
         https://pkgs.tailscale.com/stable/Tailscale-latest-macos.pkg -o "$TETHER_GUEST_STATE/Tailscale.pkg"
     pkgutil --check-signature "$TETHER_GUEST_STATE/Tailscale.pkg" > "$TETHER_GUEST_STATE/package-signature.txt"
@@ -101,7 +101,7 @@ printf '%s\n' "$SIGNATURE_INFO" | /usr/bin/grep -qx 'TeamIdentifier=W5364U7YZB' 
 printf '%s\n' "$SIGNATURE_INFO" | /usr/bin/grep -qx 'Identifier=io.tailscale.ipn.macos' || fail 'The Tailscale app identity is not recognized.'
 /usr/bin/codesign --verify --strict /Applications/Tailscale.app || fail 'Tailscale signature verification failed.'
 
-stage '2 of 5 — Connecting Tailscale inside this VM'
+stage '2 of 6 — Connecting Tailscale inside this VM'
 if ! "$TAILSCALE_BIN" status --json > "$TETHER_GUEST_STATE/tailscale-status.json" 2>/dev/null || \
    [ "$(/usr/bin/plutil -extract BackendState raw -o - "$TETHER_GUEST_STATE/tailscale-status.json" 2>/dev/null || true)" != 'Running' ]; then
     open /Applications/Tailscale.app
@@ -114,14 +114,14 @@ exit 0
 fi
 
 if [ "$ACTION" = hermes-install ]; then
-stage '3 of 5 — Checking Hermes inside this VM'
+stage '3 of 6 — Checking Hermes inside this VM'
 HERMES_BIN="$HOME/.hermes/hermes-agent/venv/bin/hermes"
 PYTHON_BIN="$HOME/.hermes/hermes-agent/venv/bin/python"
 if [ ! -x "$HERMES_BIN" ] || [ ! -x "$PYTHON_BIN" ]; then
     if [ -e "$HOME/.hermes" ] && [ ! -f "$TETHER_GUEST_STATE/managed-hermes" ]; then
         fail 'Hermes data exists in this VM, but its runtime is incomplete. Repair that installation, then run Tether setup again.'
     fi
-    stage '3 of 5 — Installing Hermes inside this VM'
+    stage '3 of 6 — Installing Hermes inside this VM'
     touch "$TETHER_GUEST_STATE/managed-hermes"
     HERMES_REVISION="$(/usr/bin/plutil -extract hermes_revision raw -o - "$SCRIPT_DIRECTORY/components.json")"
     INSTALLER_URL="$(/usr/bin/plutil -extract hermes_installer_url raw -o - "$SCRIPT_DIRECTORY/components.json")"
@@ -137,7 +137,7 @@ if [ ! -x "$HERMES_BIN" ] || [ ! -x "$PYTHON_BIN" ]; then
 fi
 [ -x "$HERMES_BIN" ] && [ -x "$PYTHON_BIN" ] || fail 'Hermes is incomplete. Repair it inside this VM, then run setup again.'
 
-stage '3 of 5 — Installing Hermes API support'
+stage '3 of 6 — Installing Hermes API support'
 HERMES_UV="$HOME/.hermes/bin/uv"
 [ -x "$HERMES_UV" ] || fail 'Hermes managed uv is missing. Repair the Hermes installation in this VM, then retry.'
 "$HERMES_UV" pip install --python "$PYTHON_BIN" -e "$HOME/.hermes/hermes-agent[messaging]"
@@ -151,33 +151,41 @@ PYTHON_BIN="$HOME/.hermes/hermes-agent/venv/bin/python"
 [ -x "$HERMES_BIN" ] && [ -x "$PYTHON_BIN" ] || fail 'Hermes is missing or incomplete. Re-run its installation step.'
 
 if [ "$ACTION" = hermes-configure ]; then
-stage '4 of 5 — Signing in to Hermes'
+stage '4 of 6 — Signing in to Hermes'
 "$HERMES_BIN" model
 "$PYTHON_BIN" "$SCRIPT_DIRECTORY/guest_setup.py" configure
 
-stage '4 of 5 — Configuring Hermes computer use'
+stage '4 of 6 — Starting the Hermes gateway'
+"$HERMES_BIN" gateway install
+"$HERMES_BIN" gateway restart
+"$PYTHON_BIN" "$SCRIPT_DIRECTORY/guest_setup.py" verify-loopback
+complete hermes-configured 'Hermes model sign-in and gateway'
+exit 0
+fi
+
+[ -f "$TETHER_GUEST_STATE/hermes-configured.ready" ] || fail 'Complete Hermes model sign-in and gateway setup first.'
+
+if [ "$ACTION" = computer-use ]; then
+stage '5 of 6 — Installing Hermes computer use inside this VM'
 "$HERMES_BIN" computer-use install
+stage '5 of 6 — Checking guest Accessibility and Screen Recording permissions'
 while ! "$HERMES_BIN" computer-use doctor; do
     open 'x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility'
     wait_for_user 'Inside this VM, grant Accessibility and Screen Recording to the identity named by the doctor report. Restart that app if macOS asks. Permissions will be checked again.'
 done
-
-stage '4 of 5 — Starting the Hermes gateway'
-"$HERMES_BIN" gateway install
-"$HERMES_BIN" gateway restart
-"$PYTHON_BIN" "$SCRIPT_DIRECTORY/guest_setup.py" verify-loopback
-complete hermes-configured 'Hermes sign-in and permissions'
+complete computer-use 'Hermes computer use and permissions'
 exit 0
 fi
 
-[ -f "$TETHER_GUEST_STATE/hermes-configured.ready" ] || fail 'Complete Hermes sign-in and permissions first.'
+[ -f "$TETHER_GUEST_STATE/computer-use.ready" ] || fail 'Complete the Hermes computer-use step in this VM first.'
+"$HERMES_BIN" computer-use doctor || fail 'Hermes computer use is not ready in this VM. Re-run its step and complete the guest permissions.'
 [ -f "$TETHER_GUEST_STATE/tailscale.ready" ] || fail 'Complete the Tailscale step before verifying the private connection.'
 TAILSCALE_BIN='/Applications/Tailscale.app/Contents/MacOS/Tailscale'
 [ -x "$TAILSCALE_BIN" ] || fail 'Tailscale is missing from this VM. Re-run its step.'
 "$TAILSCALE_BIN" status --json > "$TETHER_GUEST_STATE/tailscale-status.json" || fail 'Reconnect Tailscale inside this VM.'
 check_tailnet || fail 'Reconnect Tailscale inside this VM.'
 
-stage '5 of 5 — Verifying private HTTPS and model access'
+stage '6 of 6 — Verifying private HTTPS, computer use, and model access'
 "$TAILSCALE_BIN" serve status --json > "$TETHER_GUEST_STATE/serve-before.json"
 "$PYTHON_BIN" "$SCRIPT_DIRECTORY/guest_setup.py" check-serve-before
 "$TAILSCALE_BIN" serve --bg --https=443 http://127.0.0.1:8642
