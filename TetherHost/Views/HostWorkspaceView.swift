@@ -7,6 +7,7 @@ struct HostWorkspaceView: View {
     @ObservedObject var manager: NativeVMManager
     @Environment(\.scenePhase) private var scenePhase
     @State private var showToken = false
+    @State private var showsCreateVM = false
 
     var body: some View {
         HStack(spacing: 0) {
@@ -45,6 +46,10 @@ struct HostWorkspaceView: View {
         }
         .onChange(of: model.workspaceSection) { _, section in
             if section != .hermes { showToken = false }
+        }
+        .sheet(isPresented: $showsCreateVM) {
+            createVMSheet
+                .interactiveDismissDisabled(manager.isBusy)
         }
         .tint(.accentColor)
     }
@@ -160,39 +165,38 @@ struct HostWorkspaceView: View {
 
     private var vmSection: some View {
         VStack(alignment: .leading, spacing: 18) {
-            sectionHeader("Virtual machine", detail: "Choose one exact VM, boot macOS, and finish its desktop setup.")
-            Picker("VM provider", selection: Binding(
+            sectionHeader("Virtual machine", detail: "Choose a Mac or create a new one.")
+            Picker("Run with", selection: Binding(
                 get: { model.providerSetup.provider },
                 set: { provider in
                     model.selectProvider(provider)
                     Task { await model.refresh() }
                 }
             )) {
-                Text("Apple Virtualization").tag(VMProvider.builtIn)
                 Text("UTM").tag(VMProvider.utm)
+                Text("Built-in Apple").tag(VMProvider.builtIn)
             }
             .pickerStyle(.segmented)
-            .disabled(model.isRefreshing || model.isRemovingVM || manager.isRunning)
+            .disabled(model.isRefreshing || model.isRemovingVM || manager.isBusy || manager.isRunning)
             Text(model.providerSetup.provider == .utm
-                 ? "UTM provider: a new VM will appear in UTM and open its desktop there. Selecting an existing UTM VM needs no IPSW."
-                 : "Built-in Apple provider: Tether Host stores and displays the VM itself; UTM is not used. Selecting an existing built-in VM needs no IPSW.")
+                 ? "UTM opens and displays your Mac."
+                 : "Tether Host opens and displays your Mac.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
             providerAvailability
 
-            if model.providerSetup.provider == .builtIn {
-                nativeCreation
-            } else {
-                utmSetup
-                nativeCreation
+            HStack {
+                Text("Your virtual machines").font(.headline)
+                Spacer()
+                Button { showsCreateVM = true } label: {
+                    Label("Create new…", systemImage: "plus")
+                }
+                .disabled(manager.isBusy || manager.isRunning || manager.hasOtherHostCopy)
             }
-
-            Divider()
-            Text("Choose a VM").font(.headline)
             if model.candidateVMs.isEmpty {
                 Text(model.providerSetup.provider == .builtIn
-                     ? "No Tether Host VM is saved yet. Choose an IPSW above to create one."
-                     : "No UTM VM was found. Open UTM or refresh the list.")
+                     ? "No built-in VMs yet. Create one from a macOS image."
+                     : "No UTM VMs found. Create one or refresh the list.")
                     .foregroundStyle(.secondary)
             } else {
                 ForEach(model.candidateVMs) { vm in
@@ -203,25 +207,31 @@ struct HostWorkspaceView: View {
                             Image(systemName: model.designatedVM?.id == vm.id
                                   ? "checkmark.circle.fill" : "circle")
                                 .foregroundStyle(model.designatedVM?.id == vm.id ? Color.accentColor : .secondary)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(vm.name).fontWeight(.medium)
-                                Text(vm.id.description)
+                            Text(vm.name).fontWeight(.medium)
+                                .lineLimit(1)
+                            if model.isDuplicate(vm) {
+                                Text(String(vm.id.description.suffix(8)))
                                     .font(.caption.monospaced())
                                     .foregroundStyle(.secondary)
                             }
                             Spacer()
-                            if vm.state == .started { Circle().fill(.green).frame(width: 7, height: 7) }
+                            Text(vm.state == .started ? "Running" : "Off")
+                                .font(.caption)
+                                .foregroundStyle(vm.state == .started ? .green : .secondary)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(10)
+                        .padding(12)
                         .background(model.designatedVM?.id == vm.id ? Color.accentColor.opacity(0.10) : .clear,
                                     in: RoundedRectangle(cornerRadius: 8))
                     }
                     .buttonStyle(.plain)
+                    .disabled(manager.isBusy)
+                    .help(vm.id.description)
                 }
             }
 
             if let vm = model.designatedVM {
+                Divider()
                 Label(model.providerSetup.provider == .builtIn && manager.isRunning
                       && manager.runningVMID != vm.id
                       ? "Another VM is running. Shut it down before starting this one."
@@ -229,28 +239,47 @@ struct HostWorkspaceView: View {
                         ? "VM desktop is ready for guest setup."
                         : model.designatedVMIsRunning
                           ? "Finish macOS setup in the display, then confirm the desktop."
-                          : "Start this VM to continue.",
+                          : model.providerSetup.provider == .utm
+                            ? "Open UTM to start this VM."
+                            : "Start this VM to continue.",
                       systemImage: model.setupDependencies.vmReady ? "checkmark.circle.fill" : "hourglass")
                     .foregroundStyle(model.setupDependencies.vmReady ? .green : .orange)
                     .fixedSize(horizontal: false, vertical: true)
-                if model.vmBundleURL(for: vm) != nil {
-                    Button("Show VM files in Finder") { model.revealVMInFinder(vm) }
-                }
-                if model.providerSetup.provider == .builtIn, !manager.isRunning {
-                    Button("Move this VM to UTM") {
-                        Task {
-                            if await manager.moveToUTM(vm.id) {
-                                model.selectProvider(.utm)
-                                await model.refresh()
-                                model.selectVM(vm.id)
+                HStack {
+                    if model.vmBundleURL(for: vm) != nil {
+                        Button("Show in Finder") { model.revealVMInFinder(vm) }
+                    }
+                    if model.providerSetup.provider == .builtIn, !manager.isRunning {
+                        Button("Move to UTM") {
+                            Task {
+                                if await manager.moveToUTM(vm.id) {
+                                    model.selectProvider(.utm)
+                                    await model.refresh()
+                                    model.selectVM(vm.id)
+                                }
                             }
                         }
+                        .disabled(manager.isBusy || manager.hasOtherHostCopy)
+                        .help("Register this Apple VM with UTM after confirming its files")
                     }
-                    .disabled(manager.isBusy || manager.hasOtherHostCopy)
-                    .help("Register a separate Apple VM with UTM, then remove its original bundle after verification")
                 }
             }
-            Button("Manage VM files and deletion") { model.workspaceSection = .library }
+            Divider()
+            HStack {
+                if model.providerSetup.provider == .utm {
+                    Button("Open UTM") { model.openUTM() }
+                        .disabled(!model.providerSetup.availability.canContinue)
+                }
+                Button("Refresh") { Task { await model.refresh() } }
+                    .disabled(model.isRefreshing)
+                Spacer()
+                Button("Manage VMs") { model.workspaceSection = .library }
+            }
+            .buttonStyle(.borderless)
+            if model.providerSetup.provider == .utm {
+                Link("UTM setup guide", destination: UTMInstallation.macOSGuideURL)
+                    .font(.caption)
+            }
             if model.isRefreshing { ProgressView("Refreshing VMs…") }
         }
     }
@@ -264,67 +293,91 @@ struct HostWorkspaceView: View {
         case .ready:
             EmptyView()
         case .blocked(let reason):
-            Label(reason, systemImage: "exclamationmark.triangle.fill")
-                .font(.callout).foregroundStyle(.orange)
-                .fixedSize(horizontal: false, vertical: true)
+            VStack(alignment: .leading, spacing: 6) {
+                Label(reason, systemImage: "exclamationmark.triangle.fill")
+                    .font(.callout).foregroundStyle(.orange)
+                if model.providerSetup.provider == .utm {
+                    Link("Download UTM", destination: UTMInstallation.downloadURL)
+                }
+            }
+            .fixedSize(horizontal: false, vertical: true)
         }
     }
 
-    private var nativeCreation: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(model.providerSetup.provider == .utm ? "Create a new VM for UTM" : "Create a new built-in Apple VM")
-                .font(.headline)
-            Text(model.providerSetup.provider == .utm
-                 ? "An IPSW is Apple's macOS installer image, not a UTM-specific file. Tether Host uses it to install a new VM, then registers that VM in UTM. It appears and opens in UTM."
-                 : "Apple Virtualization also needs an IPSW to install a new macOS VM. Tether Host stores and opens this VM itself, without UTM. You can reuse a compatible IPSW already downloaded.")
+    private var createVMSheet: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            VStack(alignment: .leading, spacing: 5) {
+                Text("Create a macOS VM").font(.title2.bold())
+                Text(model.providerSetup.provider == .utm
+                     ? "Tether Host installs macOS, then adds the new VM to UTM."
+                     : "Tether Host installs macOS and opens the new VM here.")
                 .foregroundStyle(.secondary)
-            Button("Choose macOS IPSW…") { manager.chooseIPSW() }
-                .disabled(manager.isBusy)
-            if NativeVMManager.canDownloadHostImage {
-                Button(manager.hasCachedHostImage
-                       ? "Use downloaded macOS 26.2 IPSW"
-                       : "Download macOS 26.2 IPSW from Apple") {
-                    Task { await manager.downloadHostImage() }
-                }
-                .disabled(manager.isBusy)
             }
-            Text(manager.imageDescription).font(.callout).foregroundStyle(.secondary)
-            Button(manager.isBusy ? "Installing macOS…" : model.providerSetup.provider == .utm
-                   ? "Create UTM VM" : "Create Apple VM") {
-                Task {
-                    if let id = await manager.install(for: model.providerSetup.provider) {
-                        await model.refresh()
-                        model.selectVM(id)
+
+            if manager.isBusy {
+                VStack(alignment: .leading, spacing: 16) {
+                    if let progress = manager.installationProgress {
+                        ProgressView(value: progress)
+                    } else {
+                        ProgressView().controlSize(.large)
+                    }
+                    Text(manager.status)
+                        .font(.callout)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text("Keep Tether Host open until installation finishes.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, minHeight: 160, alignment: .leading)
+            } else {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("macOS installation image").font(.headline)
+                    Text("A new VM needs an Apple IPSW. Reuse a compatible download or get one below.")
+                        .font(.callout).foregroundStyle(.secondary)
+                    HStack {
+                        Button("Choose IPSW…") { manager.chooseIPSW() }
+                        if NativeVMManager.canDownloadHostImage {
+                            Button(manager.hasCachedHostImage
+                                   ? "Use downloaded macOS 26.2"
+                                   : "Download macOS 26.2") {
+                                Task { await manager.downloadHostImage() }
+                            }
+                        }
+                    }
+                    Text(manager.imageDescription).font(.callout).foregroundStyle(.secondary)
+                    Link("Find a macOS IPSW", destination: UTMInstallation.macOSImageURL)
+                        .font(.caption)
+                    if manager.status != "No VM installation has started." {
+                        Text(manager.status).font(.callout)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    if manager.hasOtherHostCopy {
+                        Label("Quit the other Tether Host copy before creating a VM.",
+                              systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
                     }
                 }
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(manager.imageURL == nil || manager.isBusy || manager.isRunning
-                || !model.providerSetup.availability.canContinue || manager.hasOtherHostCopy)
-            if manager.isBusy { ProgressView().controlSize(.small) }
-            Text(manager.status).font(.callout).textSelection(.enabled)
-            if manager.hasOtherHostCopy {
-                Label("Another Tether Host copy is open. Quit it before starting or deleting a VM.",
-                      systemImage: "exclamationmark.triangle.fill")
-                    .font(.callout).foregroundStyle(.orange)
+                Spacer(minLength: 12)
+                HStack {
+                    Button("Cancel") { showsCreateVM = false }
+                    Spacer()
+                    Button(model.providerSetup.provider == .utm ? "Create in UTM" : "Create built-in VM") {
+                        Task {
+                            if let id = await manager.install(for: model.providerSetup.provider) {
+                                await model.refresh()
+                                model.selectVM(id)
+                                showsCreateVM = false
+                            }
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(manager.imageURL == nil || manager.isRunning
+                        || !model.providerSetup.availability.canContinue || manager.hasOtherHostCopy)
+                }
             }
         }
-    }
-
-    private var utmSetup: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Use an existing UTM VM").font(.headline)
-            Text("Choose a VM already registered in UTM. No IPSW is needed to select or run it. Its display opens in UTM; Tether Host shows its power state at right.")
-                .foregroundStyle(.secondary)
-            HStack {
-                Button("Open UTM") { model.openUTM() }
-                    .disabled(!model.providerSetup.availability.canContinue)
-                Button("Refresh VM list") { Task { await model.refresh() } }
-                    .disabled(model.isRefreshing)
-            }
-            Link("UTM macOS setup guide", destination: UTMInstallation.macOSGuideURL)
-            Link("Download macOS IPSW", destination: UTMInstallation.macOSImageURL)
-        }
+        .padding(24)
+        .frame(width: 520)
+        .frame(minHeight: 340)
     }
 
     private var tailscaleSection: some View {

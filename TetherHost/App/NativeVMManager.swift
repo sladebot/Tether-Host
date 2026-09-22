@@ -52,6 +52,7 @@ final class NativeVMManager: ObservableObject {
     @Published private(set) var imageDescription = "Choose a macOS IPSW to create a fresh VM."
     @Published private(set) var status = "No VM installation has started."
     @Published private(set) var isBusy = false
+    @Published private(set) var installationProgress: Double?
     @Published private(set) var isRunning = false
     @Published private(set) var shutdownRequested = false
     @Published private(set) var virtualMachine: VZVirtualMachine?
@@ -233,6 +234,16 @@ final class NativeVMManager: ObservableObject {
             showsDisplay = true
             status = "Installing macOS from the selected IPSW. This can take a while; keep Tether Host open."
             let installer = VZMacOSInstaller(virtualMachine: vm, restoringFromImageAt: imageURL)
+            let progressMonitor = Task { [weak self] in
+                while !Task.isCancelled {
+                    self?.installationProgress = installer.progress.fractionCompleted
+                    try? await Task.sleep(for: .milliseconds(500))
+                }
+            }
+            defer {
+                progressMonitor.cancel()
+                installationProgress = nil
+            }
             try await installer.install()
             if vm.state == .running { try await vm.stop() }
             virtualMachine = nil

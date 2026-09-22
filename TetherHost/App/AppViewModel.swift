@@ -272,7 +272,8 @@ final class AppViewModel: ObservableObject {
 
     var designatedVMIsRunning: Bool {
         if providerSetup.provider == .builtIn {
-            return designatedVM?.id == nativeVM.runningVMID
+            guard let id = designatedVM?.id else { return false }
+            return id == nativeVM.runningVMID
         }
         return designatedVM?.state == .started
     }

@@ -57,8 +57,8 @@ struct HostSettingsView: View {
     var body: some View {
         Form {
             Section("Status collection") {
-                LabeledContent("Mode", value: "Built-in macOS VM with UTM backup")
-                Text("Tether Host can install and start a fresh Apple VM from an IPSW. Guest setup runs inside that VM. Verified connection credentials are stored in Keychain.")
+                LabeledContent("VM providers", value: "UTM or built-in Apple")
+                Text("Tether Host installs a new macOS VM from an Apple restore image, then opens it here or registers it in UTM. Guest setup runs inside the VM. Verified connection credentials are stored in Keychain.")
                     .foregroundStyle(.secondary)
             }
             Section("Last refresh") {
