@@ -186,11 +186,13 @@ fi
 
 [ -f "$TETHER_GUEST_STATE/computer-use.ready" ] || fail 'Complete the Hermes computer-use step in this VM first.'
 "$HERMES_BIN" computer-use doctor || fail 'Hermes computer use is not ready in this VM. Re-run its step and complete the guest permissions.'
-[ -f "$TETHER_GUEST_STATE/tailscale.ready" ] || fail 'Complete the Tailscale step before verifying the private connection.'
 TAILSCALE_BIN='/Applications/Tailscale.app/Contents/MacOS/Tailscale'
 [ -x "$TAILSCALE_BIN" ] || fail 'Tailscale is missing from this VM. Re-run its step.'
 "$TAILSCALE_BIN" status --json > "$TETHER_GUEST_STATE/tailscale-status.json" || fail 'Reconnect Tailscale inside this VM.'
 check_tailnet || fail 'Reconnect Tailscale inside this VM.'
+# A live connected tailnet is authoritative even when Tailscale was configured
+# before this installer created its local setup receipts.
+/usr/bin/touch "$TETHER_GUEST_STATE/tailscale.ready"
 
 stage '6 of 6 — Verifying private HTTPS, computer use, and model access'
 "$TAILSCALE_BIN" serve status --json > "$TETHER_GUEST_STATE/serve-before.json"

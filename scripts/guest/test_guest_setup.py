@@ -1,9 +1,12 @@
 import importlib.util
+import itertools
 import json
 from pathlib import Path
 import sys
 import tempfile
 import unittest
+import urllib.error
+from unittest.mock import patch
 
 sys.dont_write_bytecode = True
 
@@ -70,5 +73,35 @@ class GuestSetupTests(unittest.TestCase):
         guest.validate_capabilities(data)
         data['features']['runs_idempotency']['durable'] = False
         with self.assertRaises(guest.SetupFailure): guest.validate_capabilities(data)
+
+    def test_loopback_verification_waits_for_gateway_and_api(self):
+        with patch.object(guest, 'loopback_health_status', side_effect=[urllib.error.URLError('starting'), 200, 200]) as health, \
+             patch.object(guest, 'verify_api', side_effect=[guest.SetupFailure('The generated token was rejected by Hermes.'), None]) as api, \
+             patch.object(guest.time, 'monotonic', side_effect=itertools.count()), \
+             patch.object(guest.time, 'sleep'):
+            guest.verify_loopback('test-token')
+        self.assertEqual(health.call_count, 3)
+        self.assertEqual(api.call_count, 2)
+
+    def test_loopback_verification_reports_specific_final_failure(self):
+        with patch.object(guest, 'loopback_health_status', return_value=503), \
+             patch.object(guest, 'verify_api') as api, \
+             patch.object(guest.time, 'monotonic', side_effect=itertools.count()), \
+             patch.object(guest.time, 'sleep'):
+            with self.assertRaisesRegex(guest.SetupFailure, 'health check returned HTTP 503'):
+                guest.verify_loopback('test-token', timeout_seconds=3)
+        api.assert_not_called()
+
+    def test_hermes_loopback_setup_does_not_require_tailscale_receipt(self):
+        with tempfile.TemporaryDirectory() as folder:
+            hermes = Path(folder) / 'hermes'
+            hermes.mkdir()
+            (hermes / '.env').write_text('API_SERVER_KEY=test-token\n')
+            with patch.object(guest, 'HERMES', hermes), \
+                 patch.object(guest, 'STATE', Path(folder) / 'no-tailscale-status'), \
+                 patch.object(guest.subprocess, 'check_output', return_value='VirtualMac1,1'), \
+                 patch.object(guest, 'verify_loopback') as verify:
+                guest.main('verify-loopback')
+            verify.assert_called_once_with('test-token')
 
 if __name__ == '__main__': unittest.main()

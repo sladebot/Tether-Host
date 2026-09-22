@@ -98,7 +98,9 @@ private enum SetupStep: Int, CaseIterable {
     var previous: SetupStep? { SetupStep(rawValue: rawValue - 1) }
 }
 
+#if !TAILSCALE_STATUS_TESTS
 @main
+#endif
 final class TetherGuestInstaller: NSObject, NSApplicationDelegate, NSWindowDelegate, WKScriptMessageHandler, WKNavigationDelegate {
     private static let guideSize = NSSize(width: 900, height: 690)
     private let state = FileManager.default.homeDirectoryForCurrentUser
@@ -121,6 +123,13 @@ final class TetherGuestInstaller: NSObject, NSApplicationDelegate, NSWindowDeleg
     private var selected: SetupStep = .internet
     private var wasRunning = false
     private var refreshTimer: Timer?
+    private var tailnetConnected = false
+    private var tailnetName: String?
+    private var tailnetInstalled = false
+    private var tailnetProbeCompleted = false
+    private var tailnetProbeInFlight = false
+    private var tailnetLastProbe = Date.distantPast
+    private var userSelectedStep = false
 
     static func main() {
         let app = NSApplication.shared
@@ -252,6 +261,7 @@ final class TetherGuestInstaller: NSObject, NSApplicationDelegate, NSWindowDeleg
 
     @objc private func selectStep(_ sender: NSButton) {
         guard let step = SetupStep(rawValue: sender.tag) else { return }
+        userSelectedStep = true
         selected = step
         refresh()
     }
@@ -360,6 +370,7 @@ final class TetherGuestInstaller: NSObject, NSApplicationDelegate, NSWindowDeleg
     }
 
     private func refresh() {
+        refreshTailnetStatus()
         let running = isRunning
         if wasRunning && !running && isComplete(selected), let next = selected.next { selected = next }
         wasRunning = running
@@ -385,10 +396,20 @@ final class TetherGuestInstaller: NSObject, NSApplicationDelegate, NSWindowDeleg
             statusLabel.stringValue = current?.isEmpty == false ? current! : "A setup step is running in the console below."
             statusLabel.textColor = .secondaryLabelColor
         } else if isComplete(selected) {
-            statusLabel.stringValue = selected == .verify
-                ? "Guest connection verified. Add it to Tether on your iPhone."
-                : "Step complete. Select the next step on the left."
+            if selected == .tailscale {
+                statusLabel.stringValue = "Tailscale is connected in this VM\(tailnetName.map { " as \($0)" } ?? "")."
+            } else {
+                statusLabel.stringValue = selected == .verify
+                    ? "Guest connection verified. Add it to Tether on your iPhone."
+                    : "Step complete. Select the next step on the left."
+            }
             statusLabel.textColor = .systemGreen
+        } else if selected == .tailscale && !tailnetProbeCompleted {
+            statusLabel.stringValue = "Checking Tailscale inside this VM…"
+            statusLabel.textColor = .secondaryLabelColor
+        } else if selected == .tailscale && tailnetInstalled {
+            statusLabel.stringValue = "Tailscale is installed in this VM but is not connected. Sign in or reconnect."
+            statusLabel.textColor = .systemOrange
         } else if !isUnlocked(selected) {
             statusLabel.stringValue = "Complete the previous step to unlock this action."
             statusLabel.textColor = .secondaryLabelColor
@@ -412,8 +433,71 @@ final class TetherGuestInstaller: NSObject, NSApplicationDelegate, NSWindowDeleg
     }
 
     private func isComplete(_ step: SetupStep) -> Bool {
-        FileManager.default.fileExists(atPath: state.appendingPathComponent(step.receipt).path)
+        if step == .tailscale { return tailnetConnected }
+        return FileManager.default.fileExists(atPath: state.appendingPathComponent(step.receipt).path)
             && (step != .verify || FileManager.default.fileExists(atPath: state.appendingPathComponent("connection.json").path))
+    }
+
+    // Query the Tailscale daemon in this guest. A setup receipt is not evidence that it is still signed in.
+    private func refreshTailnetStatus() {
+        guard isVirtualMac, !tailnetProbeInFlight,
+              Date().timeIntervalSince(tailnetLastProbe) >= 5 else { return }
+        tailnetLastProbe = Date()
+        let executable = "/Applications/Tailscale.app/Contents/MacOS/Tailscale"
+        tailnetInstalled = FileManager.default.isExecutableFile(atPath: executable)
+        guard tailnetInstalled else {
+            tailnetConnected = false
+            tailnetName = nil
+            tailnetProbeCompleted = true
+            return
+        }
+        tailnetProbeInFlight = true
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: executable)
+            process.arguments = ["status", "--json"]
+            let output = Pipe()
+            process.standardOutput = output
+            process.standardError = FileHandle.nullDevice
+            let status: (connected: Bool, name: String?)
+            do {
+                try process.run()
+                let timeout = DispatchWorkItem { [weak process] in
+                    if process?.isRunning == true { process?.terminate() }
+                }
+                DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 4, execute: timeout)
+                let data = output.fileHandleForReading.readDataToEndOfFile()
+                process.waitUntilExit()
+                timeout.cancel()
+                status = process.terminationStatus == 0 ? Self.parseTailnetStatus(data) : (false, nil)
+            } catch {
+                status = (false, nil)
+            }
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.tailnetConnected = status.connected
+                self.tailnetName = status.name
+                if !self.tailnetProbeCompleted && status.connected && !self.userSelectedStep && self.selected == .tailscale {
+                    self.selected = SetupStep.allCases.first(where: { !self.isComplete($0) }) ?? .verify
+                }
+                self.tailnetProbeCompleted = true
+                self.tailnetProbeInFlight = false
+                self.refresh()
+            }
+        }
+    }
+
+    static func parseTailnetStatus(_ data: Data) -> (connected: Bool, name: String?) {
+        guard let status = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              status["BackendState"] as? String == "Running",
+              let ownNode = status["Self"] as? [String: Any],
+              let dnsName = ownNode["DNSName"] as? String else { return (false, nil) }
+        let name = dnsName.lowercased()
+        let pattern = #"^[a-z0-9-]+(\.[a-z0-9-]+)+\.ts\.net\.$"#
+        guard name.range(of: pattern, options: .regularExpression) != nil else {
+            return (false, nil)
+        }
+        return (true, String(name.dropLast()))
     }
 
     private func isUnlocked(_ step: SetupStep) -> Bool {

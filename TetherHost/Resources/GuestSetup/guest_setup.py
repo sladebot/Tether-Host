@@ -113,13 +113,46 @@ def request(endpoint, path, token=None, body=None, key=None):
     req = urllib.request.Request(endpoint + path,
         data=json.dumps(body).encode() if body is not None else None, headers=headers)
     try:
-        with urllib.request.build_opener(NoRedirect()).open(req, timeout=15) as response:
+        with urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect()).open(req, timeout=15) as response:
             data = response.read(1_048_577)
             if len(data) > 1_048_576:
                 raise SetupFailure('The API response exceeded the expected size.')
-            return response.status, json.loads(data)
+            try:
+                return response.status, json.loads(data)
+            except (ValueError, UnicodeError):
+                raise SetupFailure('Hermes returned an invalid JSON response for ' + path + '.')
     except urllib.error.HTTPError as error:
         return error.code, {}
+
+
+def loopback_health_status():
+    req = urllib.request.Request('http://127.0.0.1:8642/health')
+    try:
+        with urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect()).open(req, timeout=5) as response:
+            response.read(1024)
+            return response.status
+    except urllib.error.HTTPError as error:
+        return error.code
+
+
+def verify_loopback(token, timeout_seconds=60):
+    deadline = time.monotonic() + timeout_seconds
+    last_issue = 'The local gateway did not answer.'
+    while time.monotonic() < deadline:
+        try:
+            status = loopback_health_status()
+            if status == 200:
+                verify_api('http://127.0.0.1:8642', token)
+                return
+            last_issue = 'The gateway health check returned HTTP ' + str(status) + '.'
+        except SetupFailure as error:
+            last_issue = str(error)
+        except (urllib.error.URLError, TimeoutError, OSError):
+            last_issue = 'The gateway is not accepting local API requests yet.'
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
+            time.sleep(min(2, remaining))
+    raise SetupFailure('Hermes started, but local API verification did not pass: ' + last_issue)
 
 
 def validate_capabilities(data):
@@ -191,6 +224,13 @@ def main(action):
     if action == 'configure':
         configure()
         return
+    if action == 'verify-loopback':
+        # launchd starts asynchronously; wait for health and the authenticated API contract.
+        token = environment_values((HERMES / '.env').read_text()).get('API_SERVER_KEY')
+        if not token:
+            raise SetupFailure('Hermes API key is missing. Re-run the Configure Hermes step.')
+        verify_loopback(token)
+        return
     status = json.loads((STATE / 'tailscale-status.json').read_text())
     endpoint = tailnet_endpoint(status)
     if action == 'tailscale':
@@ -198,19 +238,11 @@ def main(action):
     if action == 'check-serve-before':
         validate_serve(json.loads((STATE / 'serve-before.json').read_text()), endpoint, allow_empty=True)
         return
-    token = environment_values((HERMES / '.env').read_text())['API_SERVER_KEY']
-    if action == 'verify-loopback':
-        # launchd starts asynchronously; retry liveness, then perform strict auth checks once.
-        for _ in range(30):
-            try:
-                request('http://127.0.0.1:8642', '/health')
-                break
-            except (urllib.error.URLError, TimeoutError):
-                time.sleep(1)
-        verify_api('http://127.0.0.1:8642', token)
-        return
     if action != 'verify':
         raise SetupFailure('Unknown setup action.')
+    token = environment_values((HERMES / '.env').read_text()).get('API_SERVER_KEY')
+    if not token:
+        raise SetupFailure('Hermes API key is missing. Re-run the Configure Hermes step.')
     subprocess.run([str(HERMES / 'hermes-agent/venv/bin/hermes'), 'computer-use', 'doctor'], check=True, timeout=90)
     validate_serve(json.loads((STATE / 'serve-after.json').read_text()), endpoint)
     verify_api(endpoint, token)
