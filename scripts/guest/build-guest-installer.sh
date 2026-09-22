@@ -15,6 +15,12 @@ mkdir -p "$APP_RESOURCES" "$APP/Contents/MacOS"
 xcrun swiftc -O -parse-as-library -target arm64-apple-macosx14.0 \
     -sdk "$SDK_PATH" -module-cache-path "$MODULE_CACHE" \
     "$SCRIPT_DIRECTORY/TetherGuestInstaller.swift" -o "$APP_EXECUTABLE"
+xcrun swiftc -O -parse-as-library -target arm64-apple-macosx14.0 \
+    -sdk "$SDK_PATH" -module-cache-path "$MODULE_CACHE" \
+    "$SCRIPT_DIRECTORY/TetherGuestClipboardHelper.swift" \
+    -o "$APP_RESOURCES/Tether Guest Clipboard Helper"
+cp "$SCRIPT_DIRECTORY/install-clipboard-helper.sh" "$APP_RESOURCES/install-clipboard-helper.sh"
+cp "$SCRIPT_DIRECTORY/app.tether.guest-clipboard.plist" "$APP_RESOURCES/app.tether.guest-clipboard.plist"
 for filename in 'Set up Tether Guest.command' 'Keep Tether VM Awake.command' \
     '01 Check Internet.command' '02 Set up Tailscale.command' \
     '03 Install Hermes.command' '04 Configure Hermes.command' \
@@ -29,6 +35,7 @@ for filename in xterm.js xterm.css LICENSE; do
     cp "$SCRIPT_DIRECTORY/vendor/xterm/$filename" "$APP_RESOURCES/$filename"
 done
 chmod 755 "$APP_RESOURCES"/*.command
+chmod 755 "$APP_RESOURCES/install-clipboard-helper.sh"
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -49,5 +56,6 @@ PLIST
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${CURRENT_PROJECT_VERSION:-1}" "$APP/Contents/Info.plist"
 SIGNING_IDENTITY="${EXPANDED_CODE_SIGN_IDENTITY:--}"
 if [ -z "$SIGNING_IDENTITY" ]; then SIGNING_IDENTITY='-'; fi
+codesign --force --sign "$SIGNING_IDENTITY" "$APP_RESOURCES/Tether Guest Clipboard Helper"
 codesign --force --sign "$SIGNING_IDENTITY" "$APP"
 codesign --verify --strict "$APP"

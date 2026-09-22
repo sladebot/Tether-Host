@@ -558,6 +558,8 @@ private struct VMMonitorView: View {
     let isFullScreen: Bool
     let toggleFullScreen: () -> Void
     @State private var showingForcePowerOff = false
+    @State private var clipboardIsBusy = false
+    @State private var clipboardMessage: String?
 
     private var isOn: Bool {
         model.providerSetup.provider == .builtIn ? manager.isRunning : model.designatedVMIsRunning
@@ -581,6 +583,14 @@ private struct VMMonitorView: View {
                 }
                 Spacer()
                 if model.providerSetup.provider == .builtIn, manager.isRunning {
+                    Menu {
+                        Button("Send host text to VM") { sendHostClipboard() }
+                        Button("Get VM text on host") { receiveGuestClipboard() }
+                    } label: {
+                        Label("Clipboard", systemImage: "doc.on.clipboard")
+                    }
+                    .disabled(clipboardIsBusy)
+                    .help("Transfer copied text only when you choose an action")
                     Button {
                         toggleFullScreen()
                     } label: {
@@ -628,6 +638,10 @@ private struct VMMonitorView: View {
                 if model.providerSetup.provider == .builtIn {
                     Text(manager.status).font(.callout).foregroundStyle(.secondary)
                         .lineLimit(3).textSelection(.enabled)
+                    if let clipboardMessage {
+                        Text(clipboardMessage).font(.caption).foregroundStyle(.secondary)
+                            .lineLimit(2).textSelection(.enabled)
+                    }
                     HStack {
                         Button(manager.isRunning ? "VM is running" : "Start VM") {
                             guard let vm = model.designatedVM else { return }
@@ -687,6 +701,42 @@ private struct VMMonitorView: View {
             }
         } message: {
             Text("Unsaved work inside macOS will be lost. Use this only when Shut Down does not finish.")
+        }
+    }
+
+    private func sendHostClipboard() {
+        guard let text = NSPasteboard.general.string(forType: .string), !text.isEmpty else {
+            clipboardMessage = "Copy text on this Mac first, then choose Send host text to VM."
+            return
+        }
+        clipboardIsBusy = true
+        Task {
+            defer { clipboardIsBusy = false }
+            do {
+                try await manager.writeGuestClipboardText(text)
+                clipboardMessage = "Text sent to the VM clipboard. Press Command-V inside the VM to paste it."
+            } catch {
+                clipboardMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func receiveGuestClipboard() {
+        clipboardIsBusy = true
+        Task {
+            defer { clipboardIsBusy = false }
+            do {
+                let text = try await manager.readGuestClipboardText()
+                let pasteboard = NSPasteboard.general
+                pasteboard.clearContents()
+                guard pasteboard.setString(text, forType: .string) else {
+                    clipboardMessage = "Could not copy the VM text to this Mac."
+                    return
+                }
+                clipboardMessage = "VM text is on this Mac's clipboard. Press Command-V here to paste it."
+            } catch {
+                clipboardMessage = error.localizedDescription
+            }
         }
     }
 }

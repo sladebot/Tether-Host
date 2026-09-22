@@ -343,9 +343,15 @@ final class HostCoreTests: XCTestCase {
             "03 Install Hermes.command", "04 Configure Hermes.command",
             "05 Enable Computer Use.command", "06 Verify Connection.command",
             "app.tether.keep-awake.plist", "guest_setup.py", "components.json",
-            "terminal.html", "xterm.js", "xterm.css", "LICENSE"
+            "terminal.html", "xterm.js", "xterm.css", "LICENSE",
+            "Tether Guest Clipboard Helper", "install-clipboard-helper.sh",
+            "app.tether.guest-clipboard.plist"
         ] {
             try Data("guest-helper".utf8).write(to: resources.appendingPathComponent(filename))
+        }
+        for filename in ["Tether Guest Clipboard Helper", "install-clipboard-helper.sh"] {
+            try FileManager.default.setAttributes([.posixPermissions: 0o755],
+                                                  ofItemAtPath: resources.appendingPathComponent(filename).path)
         }
         let image = root.appendingPathComponent("Tether Guest Setup.iso")
 
@@ -374,6 +380,8 @@ final class HostCoreTests: XCTestCase {
             mountedInstaller.appendingPathComponent("Contents/MacOS/Tether Guest Installer").path))
         XCTAssertTrue(FileManager.default.fileExists(atPath:
             mountedInstaller.appendingPathComponent("Contents/Resources/guest_setup.py").path))
+        XCTAssertTrue(FileManager.default.isExecutableFile(atPath:
+            mountedInstaller.appendingPathComponent("Contents/Resources/Tether Guest Clipboard Helper").path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: mount.appendingPathComponent("Set up Tether Guest.command").path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: mount.appendingPathComponent("Tether Host for Mac.app").path))
     }

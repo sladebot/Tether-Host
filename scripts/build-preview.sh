@@ -41,6 +41,9 @@ for guest_step in '01 Check Internet.command' '02 Set up Tailscale.command' \
     test -x "$STAGING_DIRECTORY/guest-disk/Tether Guest Installer.app/Contents/Resources/$guest_step"
 done
 test -f "$STAGING_DIRECTORY/guest-disk/Tether Guest Installer.app/Contents/Resources/guest_setup.py"
+test -x "$STAGING_DIRECTORY/guest-disk/Tether Guest Installer.app/Contents/Resources/Tether Guest Clipboard Helper"
+test -x "$STAGING_DIRECTORY/guest-disk/Tether Guest Installer.app/Contents/Resources/install-clipboard-helper.sh"
+test -f "$STAGING_DIRECTORY/guest-disk/Tether Guest Installer.app/Contents/Resources/app.tether.guest-clipboard.plist"
 for guest_asset in terminal.html xterm.js xterm.css LICENSE; do
     test -f "$STAGING_DIRECTORY/guest-disk/Tether Guest Installer.app/Contents/Resources/$guest_asset"
 done
@@ -75,8 +78,11 @@ or a new VM that appears in UTM. The four checks are:
 3. Check/install/configure Tailscale inside the VM.
 4. Check/install/configure Hermes inside the VM, then verify it.
 
-The included Tether Guest Setup.iso carries only a small guest helper, without
-enabling host folder or clipboard sharing. Tether-created built-in and UTM VMs
+The included Tether Guest Setup.iso carries a small guest helper without
+enabling host folder sharing. Built-in Apple VMs can optionally enable explicit,
+text-only clipboard transfer from the guest installer. Each transfer requires
+a button click in Tether Host; clipboard contents are never synced continuously.
+Tether-created built-in and UTM VMs
 include a read-only copy. In the guest, open Tether Guest Installer.app and
 follow its six checks. Updating this installer does not reinstall the VM.
 For a pre-existing UTM VM, attach the included ISO manually once.

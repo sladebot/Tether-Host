@@ -54,7 +54,9 @@ public enum GuestSetupDiskExporter {
                                "03 Install Hermes.command", "04 Configure Hermes.command",
                                "05 Enable Computer Use.command", "06 Verify Connection.command",
                                "app.tether.keep-awake.plist", "guest_setup.py", "components.json",
-                               "terminal.html", "xterm.js", "xterm.css", "LICENSE"]
+                               "terminal.html", "xterm.js", "xterm.css", "LICENSE",
+                               "Tether Guest Clipboard Helper", "install-clipboard-helper.sh",
+                               "app.tether.guest-clipboard.plist"]
             guard manager.isExecutableFile(atPath: executable.path),
                   helperFiles.allSatisfy({ manager.fileExists(atPath: resources.appendingPathComponent($0).path) }) else {
                 throw GuestSetupDiskError.missingGuestHelper

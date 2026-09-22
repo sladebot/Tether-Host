@@ -1,5 +1,6 @@
 import AppKit
 import CryptoKit
+import Darwin
 import Foundation
 import SwiftUI
 import Virtualization
@@ -34,6 +35,28 @@ enum NativeVMError: LocalizedError {
         case .cannotRemoveRunningVM: "Shut down the built-in VM before deleting its files."
         case .cannotRemoveDuringInstall: "Wait for VM installation or setup to finish before deleting a VM."
         case .cannotRemoveWithOtherHostCopy: "Quit the other Tether Host copy before deleting this VM."
+        }
+    }
+}
+
+enum GuestClipboardError: LocalizedError {
+    case vmNotRunning
+    case serviceUnavailable
+    case textTooLarge
+    case invalidResponse
+    case timedOut
+    case disconnected
+    case guestRejected(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .vmNotRunning: "Start the built-in VM before transferring clipboard text."
+        case .serviceUnavailable: "Open Tether Guest Installer in the VM and click Text clipboard (built-in)."
+        case .textTooLarge: "Clipboard text must be 64 KB or smaller."
+        case .invalidResponse: "The VM sent an invalid clipboard response. Reopen Tether Guest Installer and enable the built-in VM text clipboard again."
+        case .timedOut: "Clipboard transfer timed out. Check that the VM and Tether Guest Installer are responsive."
+        case .disconnected: "The clipboard connection to the VM closed unexpectedly."
+        case .guestRejected(let message): "The VM could not transfer clipboard text: \(message)"
         }
     }
 }
@@ -532,6 +555,37 @@ final class NativeVMManager: ObservableObject {
         }
     }
 
+    /// Text moves only after an explicit host UI action. The guest installer listens on this
+    /// private VM socket; the host clipboard is never watched or sent in the background.
+    func readGuestClipboardText() async throws -> String {
+        try await transferGuestClipboard(opcode: 1, text: nil)
+    }
+
+    func writeGuestClipboardText(_ text: String) async throws {
+        _ = try await transferGuestClipboard(opcode: 2, text: text)
+    }
+
+    private func transferGuestClipboard(opcode: UInt8, text: String?) async throws -> String {
+        guard isRunning, let virtualMachine,
+              let socket = virtualMachine.socketDevices.first as? VZVirtioSocketDevice else {
+            throw GuestClipboardError.vmNotRunning
+        }
+        let payload = text.map { Data($0.utf8) } ?? Data()
+        guard payload.count <= GuestClipboardTransport.maximumTextBytes else {
+            throw GuestClipboardError.textTooLarge
+        }
+        let connection: VZVirtioSocketConnection
+        do {
+            connection = try await socket.connect(toPort: GuestClipboardTransport.port)
+        } catch {
+            throw GuestClipboardError.serviceUnavailable
+        }
+        let retainedConnection = GuestClipboardConnection(connection)
+        return try await Task.detached(priority: .userInitiated) {
+            try GuestClipboardTransport.exchange(connection: retainedConnection.value, opcode: opcode, payload: payload)
+        }.value
+    }
+
     func forcePowerOff() async {
         guard isRunning, !isBusy, let virtualMachine else { return }
         isBusy = true
@@ -574,6 +628,7 @@ final class NativeVMManager: ObservableObject {
         configuration.cpuCount = min(max(cpuCount, VZVirtualMachineConfiguration.minimumAllowedCPUCount), VZVirtualMachineConfiguration.maximumAllowedCPUCount)
         configuration.memorySize = min(max(memorySize, VZVirtualMachineConfiguration.minimumAllowedMemorySize), VZVirtualMachineConfiguration.maximumAllowedMemorySize)
         configuration.entropyDevices = [VZVirtioEntropyDeviceConfiguration()]
+        configuration.socketDevices = [VZVirtioSocketDeviceConfiguration()]
         configuration.keyboards = [VZMacKeyboardConfiguration()]
         configuration.pointingDevices = [VZMacTrackpadConfiguration()]
         let graphics = VZMacGraphicsDeviceConfiguration()
@@ -622,6 +677,96 @@ final class NativeVMManager: ObservableObject {
     private func markBundleUsed(_ id: VirtualMachineID) {
         let bundle = rootURL.appendingPathComponent(id.description, isDirectory: true)
         try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: bundle.path)
+    }
+}
+
+/// Keeps the Virtualization-owned descriptor alive while a single background transfer runs.
+private final class GuestClipboardConnection: @unchecked Sendable {
+    let value: VZVirtioSocketConnection
+    init(_ value: VZVirtioSocketConnection) { self.value = value }
+}
+
+/// One request per connection: opcode + big-endian length + UTF-8 request,
+/// then status + big-endian length + UTF-8 response. Shared with the guest installer.
+private enum GuestClipboardTransport {
+    static let port: UInt32 = 45251
+    static let maximumTextBytes = 65_536
+    private static let deadlineSeconds: TimeInterval = 10
+
+    static func exchange(connection: VZVirtioSocketConnection, opcode: UInt8, payload: Data) throws -> String {
+        let descriptor = connection.fileDescriptor
+        guard descriptor >= 0 else { throw GuestClipboardError.disconnected }
+        let flags = fcntl(descriptor, F_GETFL)
+        guard flags >= 0, fcntl(descriptor, F_SETFL, flags | O_NONBLOCK) >= 0 else {
+            throw GuestClipboardError.disconnected
+        }
+        var noSignal: Int32 = 1
+        guard setsockopt(descriptor, SOL_SOCKET, SO_NOSIGPIPE, &noSignal,
+                         socklen_t(MemoryLayout<Int32>.size)) == 0 else {
+            throw GuestClipboardError.disconnected
+        }
+        let deadline = Date().addingTimeInterval(deadlineSeconds)
+        var frame = Data([opcode])
+        var length = UInt32(payload.count).bigEndian
+        withUnsafeBytes(of: &length) { frame.append(contentsOf: $0) }
+        frame.append(payload)
+        try writeAll(frame, to: descriptor, deadline: deadline)
+
+        let header = try readExactly(5, from: descriptor, deadline: deadline)
+        let status = header[0]
+        let count = header.dropFirst().reduce(UInt32.zero) { ($0 << 8) | UInt32($1) }
+        guard count <= maximumTextBytes else { throw GuestClipboardError.invalidResponse }
+        let response = try readExactly(Int(count), from: descriptor, deadline: deadline)
+        guard let text = String(data: response, encoding: .utf8) else {
+            throw GuestClipboardError.invalidResponse
+        }
+        guard status == 0 else {
+            throw GuestClipboardError.guestRejected(text.isEmpty ? "Request failed." : text)
+        }
+        if opcode == 2 && !text.isEmpty { throw GuestClipboardError.invalidResponse }
+        return text
+    }
+
+    private static func writeAll(_ data: Data, to fd: Int32, deadline: Date) throws {
+        try data.withUnsafeBytes { rawBuffer in
+            guard let base = rawBuffer.baseAddress else { return }
+            var offset = 0
+            while offset < rawBuffer.count {
+                try wait(for: Int16(POLLOUT), on: fd, deadline: deadline)
+                let written = Darwin.write(fd, base.advanced(by: offset), rawBuffer.count - offset)
+                if written > 0 { offset += written }
+                else if written == 0 { throw GuestClipboardError.disconnected }
+                else if errno != EINTR && errno != EAGAIN { throw GuestClipboardError.disconnected }
+            }
+        }
+    }
+
+    private static func readExactly(_ count: Int, from fd: Int32, deadline: Date) throws -> Data {
+        var result = Data()
+        while result.count < count {
+            try wait(for: Int16(POLLIN), on: fd, deadline: deadline)
+            var buffer = [UInt8](repeating: 0, count: min(4096, count - result.count))
+            let received = buffer.withUnsafeMutableBytes { Darwin.read(fd, $0.baseAddress, $0.count) }
+            if received > 0 { result.append(contentsOf: buffer.prefix(received)) }
+            else if received == 0 { throw GuestClipboardError.disconnected }
+            else if errno != EINTR && errno != EAGAIN { throw GuestClipboardError.disconnected }
+        }
+        return result
+    }
+
+    private static func wait(for events: Int16, on fd: Int32, deadline: Date) throws {
+        while true {
+            let remaining = Int32(max(0, min(Int(Int32.max), Int(deadline.timeIntervalSinceNow * 1000))))
+            guard remaining > 0 else { throw GuestClipboardError.timedOut }
+            var descriptor = pollfd(fd: fd, events: events, revents: 0)
+            let result = Darwin.poll(&descriptor, 1, remaining)
+            if result > 0 {
+                if descriptor.revents & events != 0 { return }
+                throw GuestClipboardError.disconnected
+            }
+            if result == 0 { throw GuestClipboardError.timedOut }
+            if errno != EINTR { throw GuestClipboardError.disconnected }
+        }
     }
 }
 

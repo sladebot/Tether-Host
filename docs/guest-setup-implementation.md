@@ -6,13 +6,13 @@ Tether Host runs on the physical Mac. Its read-only guest setup ISO contains a
 small compiled `Tether Guest Installer.app`; the full Tether Host app does not
 need to be installed inside the VM. The user opens the VM display and launches
 the installer from the mounted disk. The app checks `VirtualMac`, then runs its
-bundled setup program in Terminal for interactive login and permission prompts.
+bundled setup program in an embedded console for interactive login and permission prompts.
 
 The physical-host flow checks that an exact designated VM exists and runs. The
 helper checks Internet access, Tailscale, and Hermes from inside the guest.
 Host-installed software never satisfies those guest checks.
 
-The guest command opens in Terminal so model login, package installation,
+The guest console shows model login, package installation,
 Tailscale extension/login, and privacy approvals are user-visible. Before any
 installation it checks HTTPS to the Tailscale package server from the VM;
 built-in VMs route this traffic through Apple's host NAT attachment.
@@ -25,6 +25,9 @@ overwrite them, and supports rerunning its own setup.
 
 The installer checks Tailscale first, installs it when missing, and guides the
 guest user through VPN/system-extension approval and tailnet login when needed.
+It also polls Tailscale inside the VM and marks an existing connected session
+complete without requiring a local setup receipt. Final verification rechecks
+the live session before creating a connection receipt.
 It then checks a fixed Hermes install-script SHA-256 and installs the pinned
 Hermes revision only when Hermes is absent. A working existing guest installation
 is preserved and configured. It configures API_SERVER_HOST to
@@ -53,6 +56,12 @@ URL clears the token and invalidates verification. Restoration from Keychain doe
 not restore a past verification success. Copying URL/token into an existing
 Tether iOS connection screen is the requested handoff; no new iOS receiver is needed.
 
+For built-in Apple VMs, the guest installer can optionally install a user
+LaunchAgent for text-only clipboard transfers. Tether Host's Clipboard menu
+offers explicit Send to VM and Get from VM actions, each capped at 64 KiB.
+There is no continuous clipboard sync or host folder mount. The VM socket and
+guest helper still need a live guest test before this feature is considered verified.
+
 ## Manual user boundaries and remaining work
 
 - Finish macOS account setup in the VM display. Tether Host attaches the guest
@@ -74,7 +83,7 @@ Tether iOS connection screen is the requested handoff; no new iOS receiver is ne
 
 - 51 Swift core tests, including guest-root-only dependency scanning, transfer-disk
   export, and network verification rejection cases.
-- 13 guest Python tests covering idempotent config/token, private writes, Serve
+- 16 guest Python tests covering idempotent config/token, private writes, Serve
   conflicts, tailnet identity, required API capabilities, and readiness auditing.
 - 7 isolation Python tests.
 - Shell syntax check and fail-closed refusal when VM identity cannot be established.

@@ -114,10 +114,12 @@ final class TetherGuestInstaller: NSObject, NSApplicationDelegate, NSWindowDeleg
     private var guidanceLabel: NSTextField!
     private var statusLabel: NSTextField!
     private var actionButton: NSButton!
+    private var clipboardButton: NSButton!
     private var terminal: WKWebView!
     private var terminalReady = false
     private var pendingOutput = Data()
     private var setupProcess: Process?
+    private var clipboardInstallProcess: Process?
     private var terminalFD: Int32 = -1
     private var readSource: DispatchSourceRead?
     private var selected: SetupStep = .internet
@@ -163,6 +165,11 @@ final class TetherGuestInstaller: NSObject, NSApplicationDelegate, NSWindowDeleg
 
         addLabel("Set up Tether in this VM", to: content, frame: NSRect(x: 28, y: 627, width: 830, height: 33),
                  font: .boldSystemFont(ofSize: 24))
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
+        let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"
+        addLabel("Version \(version) (\(build))", to: content,
+                 frame: NSRect(x: 686, y: 636, width: 180, height: 18),
+                 font: .systemFont(ofSize: 11), color: .secondaryLabelColor)
         addLabel("Keep your existing macOS account and installed apps. Complete these six checks in order.",
                  to: content, frame: NSRect(x: 29, y: 599, width: 830, height: 22),
                  font: .systemFont(ofSize: 13), color: .secondaryLabelColor)
@@ -193,6 +200,12 @@ final class TetherGuestInstaller: NSObject, NSApplicationDelegate, NSWindowDeleg
         actionButton.keyEquivalent = "\r"
         actionButton.frame = NSRect(x: 274, y: 429, width: 210, height: 32)
         content.addSubview(actionButton)
+        clipboardButton = NSButton(title: "Text clipboard (built-in)", target: self,
+                                   action: #selector(enableClipboardTransfer))
+        clipboardButton.bezelStyle = .rounded
+        clipboardButton.frame = NSRect(x: 496, y: 429, width: 190, height: 32)
+        clipboardButton.toolTip = "Enable explicit text transfers for Tether's built-in Apple VM. UTM manages its own clipboard settings."
+        content.addSubview(clipboardButton)
         addLabel("SETUP CONSOLE", to: content, frame: NSRect(x: 274, y: 343, width: 580, height: 22),
                  font: .systemFont(ofSize: 11, weight: .semibold), color: .secondaryLabelColor)
         let terminalConfiguration = WKWebViewConfiguration()
@@ -339,6 +352,44 @@ final class TetherGuestInstaller: NSObject, NSApplicationDelegate, NSWindowDeleg
         statusLabel.stringValue = "This step is running in the setup console below."
     }
 
+    @objc private func enableClipboardTransfer() {
+        guard isVirtualMac, !isRunning, clipboardInstallProcess == nil else { return }
+        guard let script = Bundle.main.resourceURL?.appendingPathComponent("install-clipboard-helper.sh"),
+              FileManager.default.isExecutableFile(atPath: script.path) else {
+            showError("The clipboard helper is missing. Open the latest guest setup disk and try again.")
+            return
+        }
+        clipboardButton.isEnabled = false
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/bash")
+        process.arguments = [script.path]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        process.terminationHandler = { [weak self] finished in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.clipboardInstallProcess = nil
+                self.refresh()
+                let alert = NSAlert()
+                alert.messageText = finished.terminationStatus == 0
+                    ? "Text clipboard helper installed"
+                    : "Could not enable text clipboard"
+                alert.informativeText = finished.terminationStatus == 0
+                    ? "Use Tether Host's Send to VM and Get from VM buttons to transfer text. Transfers happen only when you click a button."
+                    : "Leave this VM running and try again. The helper is available on the latest Tether Guest Setup disk."
+                alert.alertStyle = finished.terminationStatus == 0 ? .informational : .warning
+                alert.runModal()
+            }
+        }
+        clipboardInstallProcess = process
+        do { try process.run() }
+        catch {
+            clipboardInstallProcess = nil
+            clipboardButton.isEnabled = true
+            showError("Could not start clipboard setup: \(error.localizedDescription)")
+        }
+    }
+
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         guard message.name == "pty", terminalFD >= 0, setupProcess?.isRunning == true,
               let value = message.body as? String else { return }
@@ -386,6 +437,7 @@ final class TetherGuestInstaller: NSObject, NSApplicationDelegate, NSWindowDeleg
         guidanceLabel.stringValue = selected.guidance
         actionButton.title = isComplete(selected) ? "Run this check again" : selected.action
         actionButton.isEnabled = isVirtualMac && !running && readSource == nil && terminalFD < 0 && isUnlocked(selected)
+        clipboardButton.isEnabled = isVirtualMac && !running && clipboardInstallProcess == nil
 
         if !isVirtualMac {
             statusLabel.stringValue = "Open this installer inside the macOS VM. It cannot change the physical Mac."
