@@ -8,6 +8,8 @@ struct HostWorkspaceView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var showToken = false
     @State private var showsCreateVM = false
+    @State private var isVMFullScreen = false
+    @State private var fullScreenWindow: NSWindow?
 
     var body: some View {
         HStack(spacing: 0) {
@@ -16,9 +18,19 @@ struct HostWorkspaceView: View {
                 Divider()
                 sectionContent
             }
-            .frame(width: 510)
+            .frame(width: isVMFullScreen ? 0 : 510)
+            .clipped()
+            .allowsHitTesting(!isVMFullScreen)
+            .accessibilityHidden(isVMFullScreen)
             Divider()
-            VMMonitorView(manager: manager)
+                .frame(width: isVMFullScreen ? 0 : 1)
+                .opacity(isVMFullScreen ? 0 : 1)
+            VMMonitorView(manager: manager, isFullScreen: isVMFullScreen) {
+                guard let window = NSApp.keyWindow else { return }
+                fullScreenWindow = window
+                isVMFullScreen = !window.styleMask.contains(.fullScreen)
+                window.toggleFullScreen(nil)
+            }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(minWidth: 1040, minHeight: 700)
@@ -46,6 +58,12 @@ struct HostWorkspaceView: View {
         }
         .onChange(of: model.workspaceSection) { _, section in
             if section != .hermes { showToken = false }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didExitFullScreenNotification)) { notification in
+            if let window = notification.object as? NSWindow, window === fullScreenWindow {
+                isVMFullScreen = false
+                fullScreenWindow = nil
+            }
         }
         .sheet(isPresented: $showsCreateVM) {
             createVMSheet
@@ -537,6 +555,8 @@ struct HostWorkspaceView: View {
 private struct VMMonitorView: View {
     @EnvironmentObject private var model: AppViewModel
     @ObservedObject var manager: NativeVMManager
+    let isFullScreen: Bool
+    let toggleFullScreen: () -> Void
     @State private var showingForcePowerOff = false
 
     private var isOn: Bool {
@@ -560,6 +580,16 @@ private struct VMMonitorView: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
+                if model.providerSetup.provider == .builtIn, manager.isRunning {
+                    Button {
+                        toggleFullScreen()
+                    } label: {
+                        Label(isFullScreen ? "Exit Full Screen" : "Full Screen",
+                              systemImage: isFullScreen ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
+                    }
+                    .buttonStyle(.borderless)
+                    .help(isFullScreen ? "Return to the setup workspace" : "Show the VM across the entire screen")
+                }
                 Label(isOn ? "On" : "Off", systemImage: "power")
                     .font(.callout.weight(.semibold))
                     .foregroundStyle(isOn ? .green : .secondary)
@@ -593,7 +623,8 @@ private struct VMMonitorView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            VStack(alignment: .leading, spacing: 10) {
+            if !isFullScreen {
+                VStack(alignment: .leading, spacing: 10) {
                 if model.providerSetup.provider == .builtIn {
                     Text(manager.status).font(.callout).foregroundStyle(.secondary)
                         .lineLimit(3).textSelection(.enabled)
@@ -645,8 +676,9 @@ private struct VMMonitorView: View {
                     Label("Keeping this Mac awake while the VM runs", systemImage: "moon.zzz.slash")
                         .font(.caption).foregroundStyle(.secondary)
                 }
+                }
+                .padding(16)
             }
-            .padding(16)
         }
         .background(Color(nsColor: .windowBackgroundColor))
         .confirmationDialog("Power off this VM immediately?", isPresented: $showingForcePowerOff) {

@@ -167,11 +167,18 @@ fi
 
 if [ "$ACTION" = computer-use ]; then
 stage '5 of 6 — Installing Hermes computer use inside this VM'
+printf 'macOS needs two separate CuaDriver permissions: Accessibility and Screen & System Audio Recording. This guide will open each setting in turn.\n'
 "$HERMES_BIN" computer-use install
 stage '5 of 6 — Checking guest Accessibility and Screen Recording permissions'
 while ! "$HERMES_BIN" computer-use doctor; do
-    open 'x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility'
-    wait_for_user 'Inside this VM, grant Accessibility and Screen Recording to the identity named by the doctor report. Restart that app if macOS asks. Permissions will be checked again.'
+    stage '5 of 6 — Allow CuaDriver in guest Accessibility'
+    open 'x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility' || open -a 'System Settings'
+    wait_for_user 'In this VM, open Privacy & Security > Accessibility and enable CuaDriver. If it is absent, use + to add /Applications/CuaDriver.app. Return here after granting access.'
+    if "$HERMES_BIN" computer-use doctor; then break; fi
+    stage '5 of 6 — Allow CuaDriver in guest Screen Recording'
+    open 'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture' || open -a 'System Settings'
+    wait_for_user 'In this VM, open Privacy & Security > Screen & System Audio Recording and enable CuaDriver. If it is absent, use + to add /Applications/CuaDriver.app. Restart the driver if macOS asks, then return here.'
+    stage '5 of 6 — Rechecking both guest permissions'
 done
 complete computer-use 'Hermes computer use and permissions'
 exit 0

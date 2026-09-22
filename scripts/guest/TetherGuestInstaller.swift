@@ -44,7 +44,7 @@ private enum SetupStep: Int, CaseIterable {
         case .hermesConfigure:
             "Hermes may open a browser for model sign-in. Complete that sign-in inside this VM."
         case .computerUse:
-            "The guide opens this VM’s System Settings when needed. Grant Accessibility and Screen Recording to the app named by the doctor check, then return here."
+            "Two guest permissions are needed: Accessibility, then Screen & System Audio Recording. Enable CuaDriver in both; use + to add /Applications/CuaDriver.app if missing."
         case .verify:
             "A successful check creates a private connection file in this VM. Keep its token private when adding your phone."
         }
