@@ -247,9 +247,15 @@ struct HostWorkspaceView: View {
                     .fixedSize(horizontal: false, vertical: true)
                 HStack {
                     if model.providerSetup.provider == .builtIn {
-                        Button("Start VM") { Task { await manager.startOrShow(vm.id) } }
-                            .buttonStyle(.borderedProminent)
-                            .disabled(manager.isRunning || manager.isBusy || manager.hasOtherHostCopy)
+                        if manager.isRunning && manager.runningVMID == vm.id {
+                            Button("Shut Down VM") { manager.requestShutdown() }
+                                .buttonStyle(.borderedProminent)
+                                .disabled(manager.isBusy || manager.shutdownRequested)
+                        } else {
+                            Button("Start VM") { Task { await manager.startOrShow(vm.id) } }
+                                .buttonStyle(.borderedProminent)
+                                .disabled(manager.isRunning || manager.isBusy || manager.hasOtherHostCopy)
+                        }
                     }
                     if model.vmBundleURL(for: vm) != nil {
                         Button("Show in Finder") { model.revealVMInFinder(vm) }
@@ -429,7 +435,7 @@ struct HostWorkspaceView: View {
     private var tailscaleSection: some View {
         VStack(alignment: .leading, spacing: 16) {
             sectionHeader("Tailscale inside the VM", detail: "The physical Mac’s Tailscale installation does not count.")
-            Text("Once the macOS desktop is ready, open the Tether Guest Setup disk inside the VM and launch Tether Guest Installer.app. It checks Internet, keeps the VM awake, installs Tailscale if needed, and guides VPN sign-in.")
+            Text("Once the macOS desktop is ready, open Tether Guest Installer.app from the setup disk in the VM. Its five-step guide checks Internet, reuses or installs Tailscale, installs Hermes, then verifies the connection.")
                 .foregroundStyle(.secondary)
             if model.providerSetup.provider == .builtIn {
                 Label("Tether Guest Setup disk is attached when the VM boots.", systemImage: "opticaldisc")
@@ -458,7 +464,7 @@ struct HostWorkspaceView: View {
                 Button("I completed Tailscale sign-in in this VM") { model.confirmTailscaleSetup() }
                     .buttonStyle(.borderedProminent)
                     .disabled(!model.setupDependencies.vmReady)
-                Text("This records your confirmation to unlock Hermes guidance. The in-VM installer still checks the actual Tailscale state before it configures Hermes.")
+                Text("Hermes can be installed and configured independently. Confirm Tailscale here before verifying the final private connection.")
                     .font(.callout).foregroundStyle(.secondary)
             }
         }
@@ -466,8 +472,8 @@ struct HostWorkspaceView: View {
 
     private var hermesSection: some View {
         VStack(alignment: .leading, spacing: 16) {
-            sectionHeader("Hermes inside the VM", detail: "The guest installer checks and configures Hermes after Tailscale.")
-            Text("Continue in the same guest setup Terminal window. The helper checks for an existing Hermes installation, configures private API access and computer use, then verifies a model response. Tether Host is not installed in the VM.")
+            sectionHeader("Hermes inside the VM", detail: "Install and configure Hermes once the VM has Internet.")
+            Text("In the VM, open Tether Guest Installer.app and choose Install Hermes, then Set up Hermes. The guide keeps existing data, prompts for model sign-in and permissions, and verifies a model response. Tether Host itself is not installed in the VM.")
                 .foregroundStyle(.secondary)
             Text("When the guest prints its connection details, enter them below or import its private connection.json file. Verification happens from this Mac before the iPhone step unlocks.")
                 .foregroundStyle(.secondary)
@@ -494,7 +500,7 @@ struct HostWorkspaceView: View {
             }
             .buttonStyle(.borderedProminent)
             .disabled(model.isVerifyingConnection || model.connectionURL.isEmpty || model.connectionToken.isEmpty
-                || !model.setupDependencies.isUnlocked(.hermes))
+                || !model.setupDependencies.tailscaleReady)
             Text(model.connectionMessage).font(.callout).fixedSize(horizontal: false, vertical: true)
             if model.setupDependencies.hermesReady {
                 Label("Backend verified for the selected VM.", systemImage: "checkmark.circle.fill")
@@ -599,7 +605,8 @@ private struct VMMonitorView: View {
                         .buttonStyle(.borderedProminent)
                         .disabled(manager.isRunning || manager.isBusy || manager.hasOtherHostCopy
                             || model.designatedVM == nil)
-                        Button("Shut Down") { manager.requestShutdown() }
+                        Button("Shut Down VM") { manager.requestShutdown() }
+                            .buttonStyle(.bordered)
                             .disabled(!manager.isRunning || manager.isBusy)
                         if manager.shutdownRequested && manager.isRunning {
                             Button("Force Power Off", role: .destructive) {
@@ -678,7 +685,7 @@ private extension HostSetupDependency {
         switch self {
         case .vm: ""
         case .tailscale: "Select and boot a VM, then confirm its macOS desktop."
-        case .hermes: "Finish VM setup and confirm Tailscale sign-in in that VM."
+        case .hermes: "Select and boot a VM, then confirm its macOS desktop."
         case .phone: "Verify the Hermes connection before connecting your iPhone."
         }
     }

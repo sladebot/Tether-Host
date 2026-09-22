@@ -41,10 +41,10 @@ and check/configure Hermes inside the guest. The physical Mac is used only for
 the provider and VM-state checks. Guest dependency detection never uses host
 Hermes, Tailscale, or developer tools.
 
-The app creates a read-only `Tether Guest Setup.iso` containing only a small
+The app creates a read-only `Tether Guest Setup.iso` containing a small
 guest helper, without shared host folders or clipboard. Inside the macOS guest,
-double-click **Tether Guest Installer.app** on that disk and click Start setup; no second Tether Host
-installation is needed. The helper first checks real guest HTTPS access through
+double-click **Tether Guest Installer.app** on that disk and follow its five-step
+guide; no second Tether Host installation is needed. The helper first checks real guest HTTPS access through
 the host's NAT, then checks Tailscale, verifies its publisher signature, and
 guides sign-in when needed.
 It then installs the pinned Hermes runtime when absent or configures a working
@@ -52,7 +52,7 @@ existing guest installation, enables loopback bearer authentication, prompts for
 model login and guest permissions, starts the gateway, configures private HTTPS,
 and verifies a real model response. It refuses to run on the physical host.
 
-The helper displays the verified URL/token in its guest Terminal for entry in
+The helper displays the verified URL/token in its embedded setup console for entry in
 Tether iOS. The host connection screen also offers **Import Guest Connection…** for a private, user-owned
 `connection.json`, accepts an existing endpoint manually, checks TLS and
 API authentication/capabilities, stores the credential in Keychain, and provides
@@ -60,7 +60,9 @@ masked reveal/copy controls for use in Tether iOS. The phone still needs Tailsca
 and its own Test Connection check. A host-side check does not certify phone reachability.
 
 For the built-in VM, Tether Host creates a read-only guest setup disk and
-refreshes and attaches it at every boot. New UTM VMs created by Tether Host
+refreshes and attaches it at every boot. Updating Tether Host refreshes the
+guest installer on the VM's next boot without reinstalling macOS or removing
+its installed apps. New UTM VMs created by Tether Host
 include that disk automatically; an existing UTM VM needs it attached once.
 UTM's public command-line interface does not create a macOS VM
 from an IPSW, so Tether Host installs macOS before creating the UTM package.
@@ -84,12 +86,13 @@ See `docs/mac-studio-install-test.md` for the installed-app test results.
 
 On the host, setup uses a two-column workspace. The selected dependency and
 its controls stay on the left; the built-in VM display, power state, and
-controls stay on the right as you move between steps. The order is VM desktop,
-Tailscale sign-in, Hermes verification, then iPhone connection. Later steps
-stay locked until the preceding state is ready. Tailscale sign-in and first
+controls stay on the right as you move between steps. Tailscale and Hermes
+setup both become available after the VM desktop is ready; the iPhone step
+waits for the verified private connection. Tailscale sign-in and first
 desktop readiness are explicitly confirmed by the user because the host does
-not inspect the guest before its helper is installed. The guest helper still
-checks Tailscale inside the VM before configuring Hermes. For UTM VMs,
+not inspect the guest before its helper is installed. Inside the guest, Hermes
+installation and configuration only require Internet; Tailscale is required
+when verifying the final private connection. For UTM VMs,
 Tether shows its power state, but UTM owns its live display window.
 The built-in VM has a graceful Shut Down control and, if the guest does not
 respond, a separately confirmed Force Power Off control that warns about

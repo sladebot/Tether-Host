@@ -32,7 +32,7 @@ public struct HostSetupDependencies: Equatable, Sendable {
         switch dependency {
         case .vm: true
         case .tailscale: vmReady
-        case .hermes: tailscaleReady
+        case .hermes: vmReady
         case .phone: hermesReady
         }
     }

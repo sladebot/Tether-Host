@@ -50,7 +50,11 @@ public enum GuestSetupDiskExporter {
             let executable = installer.appendingPathComponent("Contents/MacOS/Tether Guest Installer")
             let resources = installer.appendingPathComponent("Contents/Resources", isDirectory: true)
             let helperFiles = ["Set up Tether Guest.command", "Keep Tether VM Awake.command",
-                               "app.tether.keep-awake.plist", "guest_setup.py", "components.json"]
+                               "01 Check Internet.command", "02 Set up Tailscale.command",
+                               "03 Install Hermes.command", "04 Configure Hermes.command",
+                               "05 Verify Connection.command",
+                               "app.tether.keep-awake.plist", "guest_setup.py", "components.json",
+                               "terminal.html", "xterm.js", "xterm.css", "LICENSE"]
             guard manager.isExecutableFile(atPath: executable.path),
                   helperFiles.allSatisfy({ manager.fileExists(atPath: resources.appendingPathComponent($0).path) }) else {
                 throw GuestSetupDiskError.missingGuestHelper
@@ -73,8 +77,9 @@ public enum GuestSetupDiskExporter {
 
             1. Finish macOS account setup and reach the desktop.
             2. Double-click Tether Guest Installer.app on this disk.
-            3. Click Start setup and follow the prompts in Terminal.
-            4. Approve Tailscale, Hermes, model login, and guest permissions.
+            3. Follow the five steps shown in the guest installer.
+            4. Complete sign-in and permission prompts in the VM when asked.
+               Existing Tailscale and Hermes installations are reused.
 
             Install Tether Host for Mac only on the physical Mac. This disk
             carries a small guest helper, not a second copy of the host app.

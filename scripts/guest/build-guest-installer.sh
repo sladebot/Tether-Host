@@ -16,9 +16,19 @@ xcrun swiftc -O -parse-as-library -target arm64-apple-macosx14.0 \
     -sdk "$SDK_PATH" -module-cache-path "$MODULE_CACHE" \
     "$SCRIPT_DIRECTORY/TetherGuestInstaller.swift" -o "$APP_EXECUTABLE"
 for filename in 'Set up Tether Guest.command' 'Keep Tether VM Awake.command' \
+    '01 Check Internet.command' '02 Set up Tailscale.command' \
+    '03 Install Hermes.command' '04 Configure Hermes.command' \
+    '05 Verify Connection.command' \
     'app.tether.keep-awake.plist' 'guest_setup.py' 'components.json'; do
     cp "$REPO_DIRECTORY/TetherHost/Resources/GuestSetup/$filename" "$APP_RESOURCES/$filename"
 done
+for filename in terminal.html; do
+    cp "$SCRIPT_DIRECTORY/$filename" "$APP_RESOURCES/$filename"
+done
+for filename in xterm.js xterm.css LICENSE; do
+    cp "$SCRIPT_DIRECTORY/vendor/xterm/$filename" "$APP_RESOURCES/$filename"
+done
+chmod 755 "$APP_RESOURCES"/*.command
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

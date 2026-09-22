@@ -20,7 +20,7 @@ final class TetherHostCoreTests: XCTestCase {
             vmSelected: true, vmRunning: true, desktopConfirmed: true,
             tailscaleConfirmed: false, backendVerified: false
         )
-        XCTAssertEqual(HostSetupDependency.allCases.filter(desktopReady.isUnlocked), [.vm, .tailscale])
+        XCTAssertEqual(HostSetupDependency.allCases.filter(desktopReady.isUnlocked), [.vm, .tailscale, .hermes])
 
         let tailnetReady = HostSetupDependencies(
             vmSelected: true, vmRunning: true, desktopConfirmed: true,

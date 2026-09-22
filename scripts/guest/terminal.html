@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="xterm.css">
+  <style>
+    html, body { margin: 0; width: 100%; height: 100%; background: #15191f; }
+    #terminal { box-sizing: border-box; width: 100%; height: 100%; padding: 12px; }
+  </style>
+</head>
+<body>
+  <div id="terminal"></div>
+  <script src="xterm.js"></script>
+  <script>
+    const term = new Terminal({
+      cols: 78, rows: 14, cursorBlink: true, convertEol: true,
+      fontFamily: 'SFMono-Regular, Menlo, monospace', fontSize: 12,
+      theme: { background: '#15191f', foreground: '#e3e7ed', cursor: '#65a8ff' }
+    });
+    term.open(document.getElementById('terminal'));
+    term.write('Select a setup step above to begin.\r\nInteractive prompts will appear here.');
+    term.onData(data => window.webkit.messageHandlers.pty.postMessage(data));
+    window.tetherTerminal = {
+      clear: () => { term.reset(); term.focus(); },
+      focus: () => term.focus(),
+      writeBase64: value => {
+        const decoded = atob(value);
+        const bytes = new Uint8Array(decoded.length);
+        for (let i = 0; i < decoded.length; i++) bytes[i] = decoded.charCodeAt(i);
+        term.write(bytes);
+      }
+    };
+  </script>
+</body>
+</html>

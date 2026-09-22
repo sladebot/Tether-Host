@@ -339,7 +339,11 @@ final class HostCoreTests: XCTestCase {
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
         for filename in [
             "Set up Tether Guest.command", "Keep Tether VM Awake.command",
-            "app.tether.keep-awake.plist", "guest_setup.py", "components.json"
+            "01 Check Internet.command", "02 Set up Tailscale.command",
+            "03 Install Hermes.command", "04 Configure Hermes.command",
+            "05 Verify Connection.command",
+            "app.tether.keep-awake.plist", "guest_setup.py", "components.json",
+            "terminal.html", "xterm.js", "xterm.css", "LICENSE"
         ] {
             try Data("guest-helper".utf8).write(to: resources.appendingPathComponent(filename))
         }

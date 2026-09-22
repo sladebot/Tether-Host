@@ -570,8 +570,8 @@ final class AppViewModel: ObservableObject {
 
     func verifyConnection() async {
         guard !isVerifyingConnection else { return }
-        if !isInsideGuest && !setupDependencies.isUnlocked(.hermes) {
-            connectionMessage = "Finish the VM and Tailscale steps before verifying Hermes."
+        if !isInsideGuest && !setupDependencies.tailscaleReady {
+            connectionMessage = "Finish VM setup and Tailscale sign-in before verifying the private connection."
             return
         }
         isVerifyingConnection = true
