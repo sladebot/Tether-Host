@@ -98,7 +98,11 @@ if [ ! -x "$TAILSCALE_BIN" ]; then
 fi
 SIGNATURE_INFO="$(/usr/bin/codesign -dv --verbose=4 /Applications/Tailscale.app 2>&1)" || fail 'Could not read the Tailscale app signature.'
 printf '%s\n' "$SIGNATURE_INFO" | /usr/bin/grep -qx 'TeamIdentifier=W5364U7YZB' || fail 'The Tailscale app signer is not recognized.'
-printf '%s\n' "$SIGNATURE_INFO" | /usr/bin/grep -qx 'Identifier=io.tailscale.ipn.macos' || fail 'The Tailscale app identity is not recognized.'
+TAILSCALE_BUNDLE_ID="$(printf '%s\n' "$SIGNATURE_INFO" | /usr/bin/sed -n 's/^Identifier=//p')"
+case "$TAILSCALE_BUNDLE_ID" in
+    io.tailscale.ipn.macos|io.tailscale.ipn.macosys) ;;
+    *) fail 'The Tailscale app identity is not recognized.' ;;
+esac
 /usr/bin/codesign --verify --strict /Applications/Tailscale.app || fail 'Tailscale signature verification failed.'
 
 stage '2 of 6 — Connecting Tailscale inside this VM'
