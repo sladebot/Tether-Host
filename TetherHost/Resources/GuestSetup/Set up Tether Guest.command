@@ -100,7 +100,7 @@ SIGNATURE_INFO="$(/usr/bin/codesign -dv --verbose=4 /Applications/Tailscale.app 
 printf '%s\n' "$SIGNATURE_INFO" | /usr/bin/grep -qx 'TeamIdentifier=W5364U7YZB' || fail 'The Tailscale app signer is not recognized.'
 TAILSCALE_BUNDLE_ID="$(printf '%s\n' "$SIGNATURE_INFO" | /usr/bin/sed -n 's/^Identifier=//p')"
 case "$TAILSCALE_BUNDLE_ID" in
-    io.tailscale.ipn.macos|io.tailscale.ipn.macosys) ;;
+    io.tailscale.ipn.macos|io.tailscale.ipn.macsys) ;;
     *) fail 'The Tailscale app identity is not recognized.' ;;
 esac
 /usr/bin/codesign --verify --strict /Applications/Tailscale.app || fail 'Tailscale signature verification failed.'
