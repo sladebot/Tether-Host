@@ -17,9 +17,12 @@ final class UTMApplePackageWriterTests: XCTestCase {
         try Data([5, 6, 7, 8]).write(to: native.appendingPathComponent("machine.bin"))
         try Data([9, 10]).write(to: native.appendingPathComponent("auxiliary.img"))
         try Data([11, 12, 13]).write(to: native.appendingPathComponent("disk.img"))
+        let guestISO = root.appendingPathComponent("Tether Guest Setup.iso")
+        try Data([14, 15, 16]).write(to: guestISO)
 
         let package = try UTMApplePackageWriter.createPackage(
-            nativeBundle: native, in: root.appendingPathComponent("UTM Virtual Machines")
+            nativeBundle: native, guestSetupISO: guestISO,
+            in: root.appendingPathComponent("UTM Virtual Machines")
         )
         let data = try Data(contentsOf: package.appendingPathComponent("config.plist"))
         let config = try XCTUnwrap(PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any])
@@ -31,6 +34,15 @@ final class UTMApplePackageWriterTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: clonedDisk), Data([11, 12, 13]))
         try Data([42]).write(to: clonedDisk)
         XCTAssertEqual(try Data(contentsOf: native.appendingPathComponent("disk.img")), Data([11, 12, 13]))
-        XCTAssertThrowsError(try UTMApplePackageWriter.createPackage(nativeBundle: native, in: root.appendingPathComponent("UTM Virtual Machines")))
+        let guestDrive = try XCTUnwrap((config["Drive"] as? [[String: Any]])?.last)
+        XCTAssertEqual(guestDrive["ImageName"] as? String, "Tether Guest Setup.iso")
+        XCTAssertEqual(guestDrive["ReadOnly"] as? Bool, true)
+        XCTAssertEqual(try Data(contentsOf: package.appendingPathComponent("Data/Tether Guest Setup.iso")), Data([14, 15, 16]))
+        try Data([17]).write(to: guestISO)
+        XCTAssertEqual(try Data(contentsOf: package.appendingPathComponent("Data/Tether Guest Setup.iso")), Data([14, 15, 16]))
+        XCTAssertThrowsError(try UTMApplePackageWriter.createPackage(
+            nativeBundle: native, guestSetupISO: guestISO,
+            in: root.appendingPathComponent("UTM Virtual Machines")
+        ))
     }
 }

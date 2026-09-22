@@ -5,12 +5,14 @@ public enum UTMApplePackageError: LocalizedError {
     case invalidNativeVM
     case packageAlreadyExists
     case cloneUnavailable
+    case missingGuestSetupDisk
 
     public var errorDescription: String? {
         switch self {
         case .invalidNativeVM: "The installed Apple VM is incomplete; its UTM package was not created."
         case .packageAlreadyExists: "A UTM package with this exact VM identity already exists."
         case .cloneUnavailable: "The VM disk could not be cloned on this volume. The original Apple VM is safe."
+        case .missingGuestSetupDisk: "The Tether guest setup disk is missing; the UTM package was not created."
         }
     }
 }
@@ -19,7 +21,7 @@ public enum UTMApplePackageError: LocalizedError {
 /// package. APFS cloning keeps the original intact until UTM confirms it has
 /// registered the package; the two writable disks are never used concurrently.
 public enum UTMApplePackageWriter {
-    public static func createPackage(nativeBundle: URL, in root: URL) throws -> URL {
+    public static func createPackage(nativeBundle: URL, guestSetupISO: URL, in root: URL) throws -> URL {
         let manifestURL = nativeBundle.appendingPathComponent(NativeVirtualMachineStore.manifestFilename)
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
@@ -39,6 +41,12 @@ public enum UTMApplePackageWriter {
                 throw UTMApplePackageError.invalidNativeVM
             }
         }
+        let guestDiskValues = try? guestSetupISO.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+        guard guestSetupISO.isFileURL, guestSetupISO.pathExtension.lowercased() == "iso",
+              guestDiskValues?.isRegularFile == true,
+              guestDiskValues?.isSymbolicLink != true else {
+            throw UTMApplePackageError.missingGuestSetupDisk
+        }
 
         let fm = FileManager.default
         try fm.createDirectory(at: root, withIntermediateDirectories: true)
@@ -54,6 +62,9 @@ public enum UTMApplePackageWriter {
                       to: dataDirectory.appendingPathComponent("\(driveID).img"))
             try clone(nativeBundle.appendingPathComponent("auxiliary.img"),
                       to: dataDirectory.appendingPathComponent("AuxiliaryStorage"))
+            let guestDiskName = "Tether Guest Setup.iso"
+            try fm.copyItem(at: guestSetupISO, to: dataDirectory.appendingPathComponent(guestDiskName))
+            let guestDriveID = UUID().uuidString
             let config: [String: Any] = [
                 "Backend": "Apple",
                 "ConfigurationVersion": 4,
@@ -70,8 +81,12 @@ public enum UTMApplePackageWriter {
                                    "Keyboard": "Mac", "Pointer": "Trackpad"],
                 "Display": [["DynamicResolution": true, "HeightPixels": 1000,
                              "PixelsPerInch": 144, "WidthPixels": 1600]],
-                "Drive": [["Identifier": driveID, "ImageName": "\(driveID).img",
-                           "Nvme": false, "ReadOnly": false]],
+                "Drive": [
+                    ["Identifier": driveID, "ImageName": "\(driveID).img",
+                     "Nvme": false, "ReadOnly": false],
+                    ["Identifier": guestDriveID, "ImageName": guestDiskName,
+                     "Nvme": false, "ReadOnly": true]
+                ],
                 "Network": [["MacAddress": randomMACAddress(), "Mode": "Shared"]],
                 "Serial": []
             ]

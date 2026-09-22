@@ -394,29 +394,34 @@ private struct GuestConnectionSetupView: View {
                         .disabled(model.isRefreshing)
                 }
                 Divider()
-                Text("Once the VM is running, create a read-only ISO containing the small Tether guest helper. Attach it as a removable drive; host folders and shared clipboard can stay disabled.")
+                Text(model.selectedUTMVMHasGuestSetupDisk
+                     ? "The read-only Tether guest installer is included with this VM. Open it inside the VM after reaching the macOS desktop."
+                     : "For an existing UTM VM, create a read-only ISO containing the Tether guest helper and attach it as a removable drive. Host folders and shared clipboard can stay disabled.")
                     .foregroundStyle(.secondary)
-                HStack {
-                    Button(model.isExportingGuestSetupDisk ? "Creating…" : "Create Guest Setup Disk…") {
-                        model.exportGuestSetupDisk()
+                if !model.selectedUTMVMHasGuestSetupDisk {
+                    HStack {
+                        Button(model.isExportingGuestSetupDisk ? "Creating…" : "Create Guest Setup Disk…") {
+                            model.exportGuestSetupDisk()
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(model.isExportingGuestSetupDisk || !model.designatedVMIsRunning)
+                        if model.isExportingGuestSetupDisk { ProgressView().controlSize(.small) }
+                        if model.guestSetupDiskURL != nil {
+                            Button("Show in Finder") { model.revealGuestSetupDisk() }
+                        }
                     }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(model.isExportingGuestSetupDisk || !model.designatedVMIsRunning)
-                    if model.isExportingGuestSetupDisk { ProgressView().controlSize(.small) }
-                    if model.guestSetupDiskURL != nil {
-                        Button("Show in Finder") { model.revealGuestSetupDisk() }
-                    }
+                    Text(model.guestSetupDiskStatus)
+                        .font(.callout)
+                        .textSelection(.enabled)
                 }
-                Text(model.guestSetupDiskStatus)
-                    .font(.callout)
-                    .textSelection(.enabled)
             }
 
             SetupPhaseBox(number: 3, title: "Check and configure Tailscale inside the VM", symbol: "network") {
                 VStack(alignment: .leading, spacing: 7) {
-                    Text("1. In UTM, attach **Tether Guest Setup.iso** to the running VM as a removable drive.")
-                    Text("2. After the macOS desktop appears, double-click **Keep Tether VM Awake.command** on the disk. This keeps the guest awake and prevents its automatic screen saver.")
-                    Text("3. Double-click **Set up Tether Guest.command**. It checks guest Internet, then Tailscale and Hermes. Do not install a second copy of Tether Host.")
+                    if !model.selectedUTMVMHasGuestSetupDisk {
+                        Text("1. In UTM, attach **Tether Guest Setup.iso** to the running VM as a removable drive.")
+                    }
+                    Text("After the macOS desktop appears, open the guest setup disk and double-click **Set up Tether Guest.command**. It keeps the VM awake, checks guest Internet, then installs or configures Tailscale and Hermes. Do not install a second copy of Tether Host.")
                 }
                 .foregroundStyle(.secondary)
             }

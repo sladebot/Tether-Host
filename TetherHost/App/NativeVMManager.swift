@@ -442,8 +442,15 @@ final class NativeVMManager: ObservableObject {
             }
             package = candidate
         } else {
-            status = "Preparing a UTM package without changing the Apple VM…"
-            package = try UTMApplePackageWriter.createPackage(nativeBundle: nativeBundle, in: packageRoot)
+            status = "Preparing the guest installer for the UTM VM…"
+            let guestISO = FileManager.default.temporaryDirectory
+                .appendingPathComponent("tether-guest-\(UUID().uuidString).iso")
+            defer { try? FileManager.default.removeItem(at: guestISO) }
+            try await GuestSetupDiskExporter.export(appURL: Bundle.main.bundleURL, to: guestISO)
+            status = "Preparing a UTM package with the guest installer ready…"
+            package = try UTMApplePackageWriter.createPackage(
+                nativeBundle: nativeBundle, guestSetupISO: guestISO, in: packageRoot
+            )
         }
         status = "Registering the VM with UTM…"
         try await registerWithUTM(package, id: id)

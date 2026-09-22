@@ -424,12 +424,15 @@ struct HostWorkspaceView: View {
     private var tailscaleSection: some View {
         VStack(alignment: .leading, spacing: 16) {
             sectionHeader("Tailscale inside the VM", detail: "The physical Mac’s Tailscale installation does not count.")
-            Text("Once the macOS desktop is ready, run Keep Tether VM Awake.command from the guest setup disk. Then run Set up Tether Guest.command inside the VM to check Internet, install Tailscale if needed, and complete VPN sign-in.")
+            Text("Once the macOS desktop is ready, open the Tether Guest Setup disk inside the VM and double-click Set up Tether Guest.command. It checks Internet, keeps the VM awake, installs Tailscale if needed, and guides VPN sign-in.")
                 .foregroundStyle(.secondary)
             if model.providerSetup.provider == .builtIn {
                 Label("Tether Guest Setup disk is attached when the VM boots.", systemImage: "opticaldisc")
+            } else if model.selectedUTMVMHasGuestSetupDisk {
+                Label("The read-only guest installer is included with this UTM VM. Open it in the VM’s Finder after logging in.",
+                      systemImage: "opticaldisc")
             } else {
-                Text("Create the guest setup disk here, then attach it to the UTM VM as a removable drive.")
+                Text("This existing UTM VM needs the guest setup disk attached once. Create it here, then attach it in UTM as a removable drive.")
                     .foregroundStyle(.secondary)
                 Button(model.isExportingGuestSetupDisk ? "Creating disk…" : "Create Guest Setup Disk…") {
                     model.exportGuestSetupDisk()

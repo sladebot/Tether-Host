@@ -430,19 +430,17 @@ final class AppViewModel: ObservableObject {
 
     func exportGuestSetupDisk() {
         guard !isExportingGuestSetupDisk else { return }
-        let panel = NSSavePanel()
-        panel.title = "Create Guest Setup Disk"
-        panel.message = "Save this read-only disk, then attach it to the VM in UTM."
-        panel.nameFieldStringValue = "Tether Guest Setup.iso"
-        panel.allowedContentTypes = [.init(filenameExtension: "iso")!]
-        guard panel.runModal() == .OK, let destination = panel.url else { return }
-
+        let destination = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Tether Host for Mac/Tether Guest Setup.iso")
         isExportingGuestSetupDisk = true
         guestSetupDiskStatus = "Creating a read-only setup disk…"
         let appURL = Bundle.main.bundleURL
         Task {
             defer { isExportingGuestSetupDisk = false }
             do {
+                try FileManager.default.createDirectory(
+                    at: destination.deletingLastPathComponent(), withIntermediateDirectories: true
+                )
                 try await GuestSetupDiskExporter.export(appURL: appURL, to: destination)
                 guestSetupDiskURL = destination
                 guestSetupDiskStatus = "Guest setup disk is ready. Attach it to your VM in UTM."
@@ -458,6 +456,15 @@ final class AppViewModel: ObservableObject {
     func revealGuestSetupDisk() {
         guard let guestSetupDiskURL else { return }
         NSWorkspace.shared.activateFileViewerSelecting([guestSetupDiskURL])
+    }
+
+    var selectedUTMVMHasGuestSetupDisk: Bool {
+        guard providerSetup.provider == .utm,
+              let vm = designatedVM,
+              let bundle = vmBundleURL(for: vm) else { return false }
+        return FileManager.default.fileExists(
+            atPath: bundle.appendingPathComponent("Data/Tether Guest Setup.iso").path
+        )
     }
 
     private func restoreConnectionToken() async {

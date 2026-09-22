@@ -68,9 +68,9 @@ and opens that VM in Tether Host instead. The four checks are:
 4. Check/install/configure Hermes inside the VM, then verify it.
 
 The included Tether Guest Setup.iso carries only a small guest helper, without
-enabling host folder or clipboard sharing. Built-in VM attaches a generated
-copy automatically. In the guest, double-click Set up Tether Guest.command.
-UTM backup users attach the ISO manually.
+enabling host folder or clipboard sharing. Tether-created built-in and UTM VMs
+include a read-only copy. In the guest, double-click Set up Tether Guest.command.
+For a pre-existing UTM VM, attach the included ISO manually once.
 
 Dependency detection for Tailscale and Hermes runs inside the VM. Software on
 the physical Mac never satisfies those checks. The installer guides Tailscale
