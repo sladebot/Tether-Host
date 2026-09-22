@@ -185,15 +185,17 @@ final class AppViewModel: ObservableObject {
         utmDesktopReadyVMID = preferences.string(forKey: "setup.utmDesktopReadyVMID").flatMap(VirtualMachineID.init)
         tailscaleConfirmedVMID = preferences.string(forKey: "setup.tailscaleConfirmedVMID").flatMap(VirtualMachineID.init)
         let savedProvider = preferences.string(forKey: "setup.vmProvider").flatMap(VMProvider.init(rawValue:))
-        // Older releases defaulted to Apple Virtualization. Migrate that implicit
-        // choice once, then preserve the user's subsequent provider selection.
-        let hasUTMDefault = preferences.bool(forKey: "setup.utmDefaultApplied")
-        let initialProvider: VMProvider = hasUTMDefault ? (savedProvider ?? .utm) : .utm
-        if !hasUTMDefault {
-            preferences.set(VMProvider.utm.rawValue, forKey: "setup.vmProvider")
-            preferences.set(true, forKey: "setup.utmDefaultApplied")
-            preferences.removeObject(forKey: "setup.vmID")
-            selectedVMID = nil
+        // Migrate the former UTM default once, then preserve future choices.
+        // Keep a selected built-in VM when upgrading from a preview.
+        let hasBuiltInDefault = preferences.bool(forKey: "setup.builtInDefaultApplied")
+        let initialProvider: VMProvider = hasBuiltInDefault ? (savedProvider ?? .builtIn) : .builtIn
+        if !hasBuiltInDefault {
+            preferences.set(VMProvider.builtIn.rawValue, forKey: "setup.vmProvider")
+            preferences.set(true, forKey: "setup.builtInDefaultApplied")
+            if savedProvider != .builtIn {
+                preferences.removeObject(forKey: "setup.vmID")
+                selectedVMID = nil
+            }
         }
         providerSetup = VMProviderSetup(provider: initialProvider)
         selection = .setup

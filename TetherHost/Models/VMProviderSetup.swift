@@ -20,7 +20,7 @@ public struct VMProviderSetup: Equatable, Sendable {
     public private(set) var availability: VMProviderAvailability = .unchecked
     public private(set) var hasContinued = false
 
-    public init(provider: VMProvider = .utm) { self.provider = provider }
+    public init(provider: VMProvider = .builtIn) { self.provider = provider }
 
     public mutating func select(_ provider: VMProvider) {
         self.provider = provider

@@ -1,7 +1,7 @@
 # Tether Host for Mac
 
 Tether Host for Mac is the macOS companion for the Tether iOS app. Its first-launch
-Setup Assistant defaults to UTM and also offers Apple Virtualization. Both paths
+Setup Assistant defaults to built-in Apple Virtualization and also offers UTM. Both paths
 accept a compatible macOS IPSW and install a fresh VM in Tether Host. For UTM,
 the app creates a UTM Apple-backend package, registers it in UTM, and removes
 the original installer bundle only after UTM reports the exact VM UUID. The
