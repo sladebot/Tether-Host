@@ -133,6 +133,14 @@ final class TetherGuestInstaller: NSObject, NSApplicationDelegate, NSWindowDeleg
     private var tailnetLastProbe = Date.distantPast
     private var userSelectedStep = false
 
+    static func tailscaleCLIEnvironment(
+        basedOn environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> [String: String] {
+        var environment = environment
+        environment["TAILSCALE_BE_CLI"] = "1"
+        return environment
+    }
+
     static func main() {
         let app = NSApplication.shared
         let delegate = TetherGuestInstaller()
@@ -537,6 +545,7 @@ final class TetherGuestInstaller: NSObject, NSApplicationDelegate, NSWindowDeleg
             let process = Process()
             process.executableURL = URL(fileURLWithPath: executable)
             process.arguments = ["status", "--json"]
+            process.environment = Self.tailscaleCLIEnvironment()
             let output = Pipe()
             process.standardOutput = output
             process.standardError = FileHandle.nullDevice

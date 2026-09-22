@@ -137,6 +137,7 @@ private func liveTailnetEndpoint() -> String? {
     let process = Process()
     process.executableURL = URL(fileURLWithPath: executable)
     process.arguments = ["status", "--json"]
+    process.environment = tailscaleCLIEnvironment()
     process.standardOutput = file
     process.standardError = FileHandle.nullDevice
     let finished = DispatchSemaphore(value: 0)
@@ -154,6 +155,14 @@ private func liveTailnetEndpoint() -> String? {
           let data = try? Data(contentsOf: output),
           let status = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
     return endpointFromTailnetStatus(status)
+}
+
+private func tailscaleCLIEnvironment(
+    basedOn environment: [String: String] = ProcessInfo.processInfo.environment
+) -> [String: String] {
+    var environment = environment
+    environment["TAILSCALE_BE_CLI"] = "1"
+    return environment
 }
 
 private func endpointFromTailnetStatus(_ status: [String: Any]) -> String? {
@@ -267,6 +276,7 @@ private func serve() throws {
 private struct TetherGuestClipboardHelper {
     static func main() {
         if CommandLine.arguments.dropFirst().contains("--self-test") {
+            precondition(tailscaleCLIEnvironment(basedOn: [:])["TAILSCALE_BE_CLI"] == "1")
             precondition(ClipboardWire.length(from: [ClipboardWire.set, 0, 1, 0, 0]) == 65_536)
             precondition(ClipboardWire.length(from: [ClipboardWire.set, 0, 1, 0, 1]) == nil)
             precondition(ClipboardWire.response(status: 0, text: "héllo") == [0, 0, 0, 0, 6] + Array("héllo".utf8))

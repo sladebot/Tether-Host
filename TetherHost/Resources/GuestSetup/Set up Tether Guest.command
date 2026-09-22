@@ -39,6 +39,9 @@ check_tailnet() {
     TAILNET_NAME="$(/usr/bin/plutil -extract Self.DNSName raw -o - "$TETHER_GUEST_STATE/tailscale-status.json" 2>/dev/null || true)"
     [[ "$TAILNET_NAME" =~ ^[a-z0-9-]+(\.[a-z0-9-]+)+\.ts\.net\.$ ]]
 }
+tailscale_cli() {
+    /usr/bin/env TAILSCALE_BE_CLI=1 "$TAILSCALE_BIN" "$@"
+}
 complete() {
     printf '%s\n' "Completed: $2" > "$TETHER_GUEST_STATE/status.txt"
     /usr/bin/touch "$TETHER_GUEST_STATE/$1.ready"
@@ -106,11 +109,11 @@ esac
 /usr/bin/codesign --verify --strict /Applications/Tailscale.app || fail 'Tailscale signature verification failed.'
 
 stage '2 of 6 — Connecting Tailscale inside this VM'
-if ! "$TAILSCALE_BIN" status --json > "$TETHER_GUEST_STATE/tailscale-status.json" 2>/dev/null || \
+if ! tailscale_cli status --json > "$TETHER_GUEST_STATE/tailscale-status.json" 2>/dev/null || \
    [ "$(/usr/bin/plutil -extract BackendState raw -o - "$TETHER_GUEST_STATE/tailscale-status.json" 2>/dev/null || true)" != 'Running' ]; then
     open /Applications/Tailscale.app
     wait_for_user 'Approve Tailscale’s VPN/system extension and sign in to the same tailnet you will use on your iPhone.'
-    "$TAILSCALE_BIN" status --json > "$TETHER_GUEST_STATE/tailscale-status.json"
+    tailscale_cli status --json > "$TETHER_GUEST_STATE/tailscale-status.json"
 fi
 check_tailnet || fail 'Finish Tailscale sign-in in this VM, then re-run this step.'
 complete tailscale 'Tailscale'
@@ -192,17 +195,17 @@ fi
 "$HERMES_BIN" computer-use doctor || fail 'Hermes computer use is not ready in this VM. Re-run its step and complete the guest permissions.'
 TAILSCALE_BIN='/Applications/Tailscale.app/Contents/MacOS/Tailscale'
 [ -x "$TAILSCALE_BIN" ] || fail 'Tailscale is missing from this VM. Re-run its step.'
-"$TAILSCALE_BIN" status --json > "$TETHER_GUEST_STATE/tailscale-status.json" || fail 'Reconnect Tailscale inside this VM.'
+tailscale_cli status --json > "$TETHER_GUEST_STATE/tailscale-status.json" || fail 'Reconnect Tailscale inside this VM.'
 check_tailnet || fail 'Reconnect Tailscale inside this VM.'
 # A live connected tailnet is authoritative even when Tailscale was configured
 # before this installer created its local setup receipts.
 /usr/bin/touch "$TETHER_GUEST_STATE/tailscale.ready"
 
 stage '6 of 6 — Verifying private HTTPS, computer use, and model access'
-"$TAILSCALE_BIN" serve status --json > "$TETHER_GUEST_STATE/serve-before.json"
+tailscale_cli serve status --json > "$TETHER_GUEST_STATE/serve-before.json"
 "$PYTHON_BIN" "$SCRIPT_DIRECTORY/guest_setup.py" check-serve-before
-"$TAILSCALE_BIN" serve --bg --https=443 http://127.0.0.1:8642
-"$TAILSCALE_BIN" serve status --json > "$TETHER_GUEST_STATE/serve-after.json"
+tailscale_cli serve --bg --https=443 http://127.0.0.1:8642
+tailscale_cli serve status --json > "$TETHER_GUEST_STATE/serve-after.json"
 "$PYTHON_BIN" "$SCRIPT_DIRECTORY/guest_setup.py" verify
 "$PYTHON_BIN" "$SCRIPT_DIRECTORY/guest_setup.py" show-connection
 printf 'Keep Tailscale connected on your phone and this guest.\n'
