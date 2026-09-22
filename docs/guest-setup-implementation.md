@@ -3,10 +3,10 @@
 ## Implemented
 
 Tether Host runs on the physical Mac. Its read-only guest setup ISO contains a
-small command and supporting files; the full Tether Host app does not need to
-be installed inside the VM. The user opens the VM display in Tether Host and
-double-clicks `Set up Tether Guest.command` on the mounted disk. The command
-checks `VirtualMac` before making guest changes.
+small compiled `Tether Guest Installer.app`; the full Tether Host app does not
+need to be installed inside the VM. The user opens the VM display and launches
+the installer from the mounted disk. The app checks `VirtualMac`, then runs its
+bundled setup program in Terminal for interactive login and permission prompts.
 
 The physical-host flow checks that an exact designated VM exists and runs. The
 helper checks Internet access, Tailscale, and Hermes from inside the guest.
@@ -16,6 +16,9 @@ The guest command opens in Terminal so model login, package installation,
 Tailscale extension/login, and privacy approvals are user-visible. Before any
 installation it checks HTTPS to the Tailscale package server from the VM;
 built-in VMs route this traffic through Apple's host NAT attachment.
+If the VM has an IP address but the host NAT DNS forwarder fails, it tests
+Cloudflare DNS and offers to set `1.1.1.1` for the guest network service. It
+does not change DNS without an explicit choice in the guest.
 The script repeats the VM/non-root checks independently of the UI and locks out
 concurrent attempts. It preserves unmanaged Hermes installations by refusing to
 overwrite them, and supports rerunning its own setup.
@@ -52,9 +55,9 @@ Tether iOS connection screen is the requested handoff; no new iOS receiver is ne
 
 ## Manual user boundaries and remaining work
 
-- Finish macOS account setup in the built-in VM's embedded display. Tether Host
-  creates and boots that VM and refreshes/attaches the guest ISO. UTM remains a
-  manual backup and needs manual VM creation and ISO attachment.
+- Finish macOS account setup in the VM display. Tether Host attaches the guest
+  ISO automatically for built-in and newly created UTM VMs. Existing UTM VMs
+  need the ISO attached once.
 - Complete model login, Tailscale sign-in/system-extension consent, and guest
   Accessibility/Screen Recording approvals. OS approvals cannot be silently granted.
 - Install/connect Tailscale on the iPhone, enter URL/token as a Hermes API Server
@@ -69,7 +72,7 @@ Tether iOS connection screen is the requested handoff; no new iOS receiver is ne
 
 ## Validation
 
-- 45 Swift core tests, including guest-root-only dependency scanning, transfer-disk
+- 51 Swift core tests, including guest-root-only dependency scanning, transfer-disk
   export, and network verification rejection cases.
 - 13 guest Python tests covering idempotent config/token, private writes, Serve
   conflicts, tailnet identity, required API capabilities, and readiness auditing.
@@ -81,7 +84,8 @@ Tether iOS connection screen is the requested handoff; no new iOS receiver is ne
 
 ## Files and artifact
 
-- `TetherHost/Resources/GuestSetup/Set up Tether Guest.command`
+- `scripts/guest/TetherGuestInstaller.swift`
+- `TetherHost/Resources/GuestSetup/Set up Tether Guest.command` (inside the app bundle)
 - `TetherHost/Resources/GuestSetup/guest_setup.py`
 - `TetherHost/Resources/GuestSetup/components.json`
 - `TetherHost/Services/ConnectionVerifier.swift`

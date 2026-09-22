@@ -330,11 +330,18 @@ final class HostCoreTests: XCTestCase {
         try FileManager.default.createDirectory(at: app, withIntermediateDirectories: true)
         let helper = app.appendingPathComponent("Contents/Resources/GuestSetup", isDirectory: true)
         try FileManager.default.createDirectory(at: helper, withIntermediateDirectories: true)
+        let installer = helper.appendingPathComponent("Tether Guest Installer.app", isDirectory: true)
+        let executable = installer.appendingPathComponent("Contents/MacOS/Tether Guest Installer")
+        let resources = installer.appendingPathComponent("Contents/Resources", isDirectory: true)
+        try FileManager.default.createDirectory(at: executable.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: resources, withIntermediateDirectories: true)
+        try Data("guest-binary".utf8).write(to: executable)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
         for filename in [
             "Set up Tether Guest.command", "Keep Tether VM Awake.command",
             "app.tether.keep-awake.plist", "guest_setup.py", "components.json"
         ] {
-            try Data("guest-helper".utf8).write(to: helper.appendingPathComponent(filename))
+            try Data("guest-helper".utf8).write(to: resources.appendingPathComponent(filename))
         }
         let image = root.appendingPathComponent("Tether Guest Setup.iso")
 
@@ -358,9 +365,12 @@ final class HostCoreTests: XCTestCase {
             detach.standardOutput = FileHandle.nullDevice
             if (try? detach.run()) != nil { detach.waitUntilExit() }
         }
-        XCTAssertTrue(FileManager.default.fileExists(atPath: mount.appendingPathComponent("guest_setup.py").path))
-        XCTAssertTrue(FileManager.default.isExecutableFile(atPath: mount.appendingPathComponent("Set up Tether Guest.command").path))
-        XCTAssertTrue(FileManager.default.fileExists(atPath: mount.appendingPathComponent("Keep Tether VM Awake.command").path))
+        let mountedInstaller = mount.appendingPathComponent("Tether Guest Installer.app")
+        XCTAssertTrue(FileManager.default.isExecutableFile(atPath:
+            mountedInstaller.appendingPathComponent("Contents/MacOS/Tether Guest Installer").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath:
+            mountedInstaller.appendingPathComponent("Contents/Resources/guest_setup.py").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: mount.appendingPathComponent("Set up Tether Guest.command").path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: mount.appendingPathComponent("Tether Host for Mac.app").path))
     }
 

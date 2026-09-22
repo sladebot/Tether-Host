@@ -211,7 +211,7 @@ private struct NativeVMSetupView: View {
                     Label("Finish step 2 before installing guest components.", systemImage: "hourglass")
                         .foregroundStyle(.orange)
                 }
-                Text("The guest setup disk is attached automatically when the VM starts. In the VM, open the disk and double-click Set up Tether Guest.command. The helper checks real HTTPS access from the VM, then configures Tailscale and Hermes. Tether Host stays installed only on this Mac.")
+                Text("The guest setup disk is attached automatically when the VM starts. In the VM, open the disk and launch Tether Guest Installer.app. It checks real HTTPS access from the VM, then configures Tailscale and Hermes. Tether Host stays installed only on this Mac.")
                     .foregroundStyle(.secondary)
                 if let vm = model.designatedVM, manager.isDesktopReady(for: vm.id) {
                     Button("Show VM to open the guest setup disk") {
@@ -421,7 +421,7 @@ private struct GuestConnectionSetupView: View {
                     if !model.selectedUTMVMHasGuestSetupDisk {
                         Text("1. In UTM, attach **Tether Guest Setup.iso** to the running VM as a removable drive.")
                     }
-                    Text("After the macOS desktop appears, open the guest setup disk and double-click **Set up Tether Guest.command**. It keeps the VM awake, checks guest Internet, then installs or configures Tailscale and Hermes. Do not install a second copy of Tether Host.")
+                    Text("After the macOS desktop appears, open the guest setup disk and launch **Tether Guest Installer.app**. Click Start setup and follow its prompts. It keeps the VM awake, checks guest Internet, then installs or configures Tailscale and Hermes. Do not install a second copy of Tether Host.")
                 }
                 .foregroundStyle(.secondary)
             }

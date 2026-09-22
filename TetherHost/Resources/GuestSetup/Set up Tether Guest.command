@@ -34,9 +34,32 @@ stage 'Keeping this macOS VM awake during setup'
 /bin/bash "$SCRIPT_DIRECTORY/Keep Tether VM Awake.command"
 
 stage 'Step 3 of 4 — Checking Internet from inside this VM'
-if ! /usr/bin/curl --proto '=https' --tlsv1.2 -sSI --connect-timeout 10 --max-time 20 \
-    https://pkgs.tailscale.com/stable/ > /dev/null; then
-    fail 'This VM cannot reach the Tailscale package server over HTTPS. Check that the physical Mac is online and the VM Ethernet interface has an address, then rerun guest setup.'
+check_guest_https() {
+    /usr/bin/curl --proto '=https' --tlsv1.2 -sSI --connect-timeout 10 --max-time 20 \
+        https://pkgs.tailscale.com/stable/ > /dev/null 2>&1
+}
+if ! check_guest_https; then
+    GUEST_INTERFACE="$(/sbin/route -n get default 2>/dev/null | /usr/bin/awk '$1 == "interface:" { print $2; exit }')"
+    GUEST_IP="$(/usr/sbin/ipconfig getifaddr "$GUEST_INTERFACE" 2>/dev/null || true)"
+    if [ -n "$GUEST_IP" ] && /usr/bin/nslookup pkgs.tailscale.com 1.1.1.1 > /dev/null 2>&1; then
+        printf '\nThe VM has an IP address (%s), but its assigned DNS server is not resolving names.\n' "$GUEST_IP"
+        printf 'Cloudflare DNS (1.1.1.1) works from inside this VM.\n'
+        printf 'Switch this VM to 1.1.1.1? DNS queries will be sent to Cloudflare. [y/N] '
+        read -r USE_CLOUDFLARE_DNS
+        if [ "$USE_CLOUDFLARE_DNS" = y ] || [ "$USE_CLOUDFLARE_DNS" = Y ]; then
+            NETWORK_SERVICE="$(/usr/sbin/networksetup -listnetworkserviceorder | /usr/bin/awk -v device="$GUEST_INTERFACE" '
+                /^\([0-9]+\) / { service = $0; sub(/^\([0-9]+\) /, "", service) }
+                index($0, "Device: " device ")") { print service; exit }
+            ')"
+            [ -n "$NETWORK_SERVICE" ] || fail 'Could not identify the VM Ethernet service. Set its DNS server to 1.1.1.1 in System Settings > Network, then retry.'
+            /usr/bin/sudo /usr/sbin/networksetup -setdnsservers "$NETWORK_SERVICE" 1.1.1.1
+            for attempt in 1 2 3; do
+                if check_guest_https; then break; fi
+                /bin/sleep 2
+            done
+        fi
+    fi
+    check_guest_https || fail 'The VM still cannot reach the Tailscale package server. In this VM, check System Settings > Network > Ethernet > DNS, then rerun setup.'
 fi
 printf 'Guest HTTPS access is working.\n'
 

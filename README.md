@@ -43,7 +43,7 @@ Hermes, Tailscale, or developer tools.
 
 The app creates a read-only `Tether Guest Setup.iso` containing only a small
 guest helper, without shared host folders or clipboard. Inside the macOS guest,
-double-click **Set up Tether Guest.command** on that disk; no second Tether Host
+double-click **Tether Guest Installer.app** on that disk and click Start setup; no second Tether Host
 installation is needed. The helper first checks real guest HTTPS access through
 the host's NAT, then checks Tailscale, verifies its publisher signature, and
 guides sign-in when needed.
@@ -60,9 +60,9 @@ masked reveal/copy controls for use in Tether iOS. The phone still needs Tailsca
 and its own Test Connection check. A host-side check does not certify phone reachability.
 
 For the built-in VM, Tether Host creates a read-only guest setup disk and
-refreshes and attaches it at every boot. For UTM, Tether Host now creates the
-VM package and registers it, while the guest setup ISO still needs attachment
-inside UTM. UTM's public command-line interface does not create a macOS VM
+refreshes and attaches it at every boot. New UTM VMs created by Tether Host
+include that disk automatically; an existing UTM VM needs it attached once.
+UTM's public command-line interface does not create a macOS VM
 from an IPSW, so Tether Host installs macOS before creating the UTM package.
 The development DMG is
 not a notarized production installer, and the new guest installation flow has not

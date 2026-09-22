@@ -46,17 +46,16 @@ public enum GuestSetupDiskExporter {
             defer { try? manager.removeItem(at: staging) }
             try manager.createDirectory(at: staging, withIntermediateDirectories: false)
             let guestResources = appURL.appendingPathComponent("Contents/Resources/GuestSetup", isDirectory: true)
-            let helperFiles = [
-                "Set up Tether Guest.command", "Keep Tether VM Awake.command",
-                "app.tether.keep-awake.plist", "guest_setup.py", "components.json"
-            ]
-            guard helperFiles.allSatisfy({ manager.fileExists(atPath: guestResources.appendingPathComponent($0).path) }) else {
+            let installer = guestResources.appendingPathComponent("Tether Guest Installer.app", isDirectory: true)
+            let executable = installer.appendingPathComponent("Contents/MacOS/Tether Guest Installer")
+            let resources = installer.appendingPathComponent("Contents/Resources", isDirectory: true)
+            let helperFiles = ["Set up Tether Guest.command", "Keep Tether VM Awake.command",
+                               "app.tether.keep-awake.plist", "guest_setup.py", "components.json"]
+            guard manager.isExecutableFile(atPath: executable.path),
+                  helperFiles.allSatisfy({ manager.fileExists(atPath: resources.appendingPathComponent($0).path) }) else {
                 throw GuestSetupDiskError.missingGuestHelper
             }
-            for filename in helperFiles {
-                try manager.copyItem(at: guestResources.appendingPathComponent(filename),
-                                     to: staging.appendingPathComponent(filename))
-            }
+            try manager.copyItem(at: installer, to: staging.appendingPathComponent(installer.lastPathComponent))
             // Keep the guest helper independent of the host app and free of
             // transfer-only metadata on the mounted image.
             let xattr = Process()
@@ -73,9 +72,9 @@ public enum GuestSetupDiskExporter {
             Tether Guest Setup
 
             1. Finish macOS account setup and reach the desktop.
-            2. Double-click Keep Tether VM Awake.command to prevent idle sleep and lock.
-            3. Double-click Set up Tether Guest.command. It also enables keep-awake.
-            4. Configure Tailscale, Hermes, model login, and guest permissions.
+            2. Double-click Tether Guest Installer.app on this disk.
+            3. Click Start setup and follow the prompts in Terminal.
+            4. Approve Tailscale, Hermes, model login, and guest permissions.
 
             Install Tether Host for Mac only on the physical Mac. This disk
             carries a small guest helper, not a second copy of the host app.

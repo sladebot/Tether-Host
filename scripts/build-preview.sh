@@ -7,7 +7,7 @@ TETHER_PREVIEW_BUILD_DIR="${TETHER_PREVIEW_BUILD_DIR:-$REPO_DIRECTORY/build/Prev
 mkdir -p "$REPO_DIRECTORY/build"
 STAGING_DIRECTORY="$(mktemp -d "${TMPDIR:-/tmp}/tether-preview.XXXXXX")"
 trap 'rm -rf "$STAGING_DIRECTORY"' EXIT
-xcodebuild -project "$REPO_DIRECTORY/TetherHost.xcodeproj" -scheme 'Tether Host for Mac' \
+xcodebuild -quiet -project "$REPO_DIRECTORY/TetherHost.xcodeproj" -scheme 'Tether Host for Mac' \
     -configuration Debug -derivedDataPath "$TETHER_PREVIEW_BUILD_DIR" \
     CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= build
 APP_PATH="$TETHER_PREVIEW_BUILD_DIR/Build/Products/Debug/Tether Host for Mac.app"
@@ -28,20 +28,21 @@ ditto "$APP_PATH" "$STAGING_DIRECTORY/content/Tether Host for Mac.app"
 touch -m "$STAGING_DIRECTORY/content/Tether Host for Mac.app"
 codesign --verify --deep --strict "$STAGING_DIRECTORY/content/Tether Host for Mac.app"
 mkdir "$STAGING_DIRECTORY/guest-disk"
-ditto --norsrc --noextattr --noqtn --noacl "$APP_PATH/Contents/Resources/GuestSetup" "$STAGING_DIRECTORY/guest-disk"
+ditto --norsrc --noextattr --noqtn --noacl \
+    "$APP_PATH/Contents/Resources/GuestSetup/Tether Guest Installer.app" \
+    "$STAGING_DIRECTORY/guest-disk/Tether Guest Installer.app"
 xattr -cr "$STAGING_DIRECTORY/guest-disk"
-test -x "$STAGING_DIRECTORY/guest-disk/Set up Tether Guest.command"
-test -x "$STAGING_DIRECTORY/guest-disk/Keep Tether VM Awake.command"
-test -f "$STAGING_DIRECTORY/guest-disk/app.tether.keep-awake.plist"
-test -f "$STAGING_DIRECTORY/guest-disk/guest_setup.py"
-test -f "$STAGING_DIRECTORY/guest-disk/components.json"
+codesign --verify --strict "$STAGING_DIRECTORY/guest-disk/Tether Guest Installer.app"
+test -x "$STAGING_DIRECTORY/guest-disk/Tether Guest Installer.app/Contents/Resources/Set up Tether Guest.command"
+test -x "$STAGING_DIRECTORY/guest-disk/Tether Guest Installer.app/Contents/Resources/Keep Tether VM Awake.command"
+test -f "$STAGING_DIRECTORY/guest-disk/Tether Guest Installer.app/Contents/Resources/guest_setup.py"
 printf 'Tether Guest Setup — version %s (%s)\nRun only inside the VM.\n\n' \
     "$APP_VERSION" "$APP_BUILD" > "$STAGING_DIRECTORY/guest-disk/Read Me.txt"
 cat >> "$STAGING_DIRECTORY/guest-disk/Read Me.txt" <<'GUEST_NOTE'
 
-After reaching the macOS desktop, double-click Keep Tether VM Awake.command.
-Then double-click Set up Tether Guest.command from this disk inside the VM. Do not
-install a second copy of Tether Host. The helper checks guest Internet and Tailscale
+After reaching the macOS desktop, double-click Tether Guest Installer.app on
+this disk and click Start setup. Follow the prompts in Terminal. Do not install
+a second copy of Tether Host. The installer checks guest Internet and Tailscale
 inside this VM first and installs or configures it as needed. It then checks
 Hermes inside this VM, installing it when absent or configuring a working
 existing installation for API access, model login, computer use, and final
@@ -69,7 +70,7 @@ and opens that VM in Tether Host instead. The four checks are:
 
 The included Tether Guest Setup.iso carries only a small guest helper, without
 enabling host folder or clipboard sharing. Tether-created built-in and UTM VMs
-include a read-only copy. In the guest, double-click Set up Tether Guest.command.
+include a read-only copy. In the guest, open Tether Guest Installer.app.
 For a pre-existing UTM VM, attach the included ISO manually once.
 
 Dependency detection for Tailscale and Hermes runs inside the VM. Software on

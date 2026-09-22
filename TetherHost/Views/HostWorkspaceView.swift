@@ -241,11 +241,16 @@ struct HostWorkspaceView: View {
                           ? "Finish macOS setup in the display, then confirm the desktop."
                           : model.providerSetup.provider == .utm
                             ? "Open UTM to start this VM."
-                            : "Start this VM to continue.",
+                            : "Click Start VM to continue.",
                       systemImage: model.setupDependencies.vmReady ? "checkmark.circle.fill" : "hourglass")
                     .foregroundStyle(model.setupDependencies.vmReady ? .green : .orange)
                     .fixedSize(horizontal: false, vertical: true)
                 HStack {
+                    if model.providerSetup.provider == .builtIn {
+                        Button("Start VM") { Task { await manager.startOrShow(vm.id) } }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(manager.isRunning || manager.isBusy || manager.hasOtherHostCopy)
+                    }
                     if model.vmBundleURL(for: vm) != nil {
                         Button("Show in Finder") { model.revealVMInFinder(vm) }
                     }
@@ -424,7 +429,7 @@ struct HostWorkspaceView: View {
     private var tailscaleSection: some View {
         VStack(alignment: .leading, spacing: 16) {
             sectionHeader("Tailscale inside the VM", detail: "The physical Mac’s Tailscale installation does not count.")
-            Text("Once the macOS desktop is ready, open the Tether Guest Setup disk inside the VM and double-click Set up Tether Guest.command. It checks Internet, keeps the VM awake, installs Tailscale if needed, and guides VPN sign-in.")
+            Text("Once the macOS desktop is ready, open the Tether Guest Setup disk inside the VM and launch Tether Guest Installer.app. It checks Internet, keeps the VM awake, installs Tailscale if needed, and guides VPN sign-in.")
                 .foregroundStyle(.secondary)
             if model.providerSetup.provider == .builtIn {
                 Label("Tether Guest Setup disk is attached when the VM boots.", systemImage: "opticaldisc")
