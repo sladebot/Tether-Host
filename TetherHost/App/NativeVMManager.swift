@@ -38,10 +38,64 @@ enum NativeVMError: LocalizedError {
     }
 }
 
+private final class RestoreImageDownload: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
+    private let stagedURL: URL
+    private let startedAt = Date()
+    private let onProgress: @Sendable (Int64, Int64, TimeInterval) -> Void
+    private var session: URLSession?
+    private var continuation: CheckedContinuation<(URL, URLResponse), Error>?
+    private var result: Result<URL, Error>?
+
+    init(stagedURL: URL, onProgress: @escaping @Sendable (Int64, Int64, TimeInterval) -> Void) {
+        self.stagedURL = stagedURL
+        self.onProgress = onProgress
+    }
+
+    func run(from url: URL) async throws -> (URL, URLResponse) {
+        try await withCheckedThrowingContinuation { continuation in
+            self.continuation = continuation
+            let queue = OperationQueue()
+            queue.maxConcurrentOperationCount = 1
+            let session = URLSession(configuration: .default, delegate: self, delegateQueue: queue)
+            self.session = session
+            session.downloadTask(with: url).resume()
+        }
+    }
+
+    func urlSession(
+        _ session: URLSession, downloadTask: URLSessionDownloadTask,
+        didWriteData bytesWritten: Int64, totalBytesWritten: Int64,
+        totalBytesExpectedToWrite: Int64
+    ) {
+        onProgress(totalBytesWritten, totalBytesExpectedToWrite,
+                   Date().timeIntervalSince(startedAt))
+    }
+
+    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
+                    didFinishDownloadingTo location: URL) {
+        result = Result { try FileManager.default.moveItem(at: location, to: stagedURL); return stagedURL }
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask,
+                    didCompleteWithError error: Error?) {
+        defer { session.finishTasksAndInvalidate(); self.session = nil }
+        guard let continuation else { return }
+        self.continuation = nil
+        if let error {
+            continuation.resume(throwing: error)
+        } else if let result, let response = task.response {
+            continuation.resume(with: result.map { ($0, response) })
+        } else {
+            continuation.resume(throwing: URLError(.cannotCreateFile))
+        }
+    }
+}
+
 @MainActor
 final class NativeVMManager: ObservableObject {
     private static let macOS262URL = URL(string: "https://updates.cdn-apple.com/2025FallFCS/fullrestores/093-37399/E144C918-CF99-4BBC-B1D0-3E739B9A3F2D/UniversalMac_26.2_25C56_Restore.ipsw")!
     private static let macOS262SHA256 = "bc7c67b2a2cc4ac8c9da0c2b149b9f31e153cd542ce387e6fb8620e41b5278ef"
+    private static let selectedImageKey = "restoreImage.lastSelectedPath"
 
     static var canDownloadHostImage: Bool {
         let version = ProcessInfo.processInfo.operatingSystemVersion
@@ -53,6 +107,7 @@ final class NativeVMManager: ObservableObject {
     @Published private(set) var status = "No VM installation has started."
     @Published private(set) var isBusy = false
     @Published private(set) var installationProgress: Double?
+    @Published private(set) var downloadProgress: DownloadProgressEstimate?
     @Published private(set) var isRunning = false
     @Published private(set) var shutdownRequested = false
     @Published private(set) var virtualMachine: VZVirtualMachine?
@@ -60,6 +115,7 @@ final class NativeVMManager: ObservableObject {
     @Published var showsDisplay = false
 
     private var restoreImage: VZMacOSRestoreImage?
+    private var activeDownloadID: UUID?
     private var runningID: VirtualMachineID?
     var runningVMID: VirtualMachineID? { isRunning ? runningID : nil }
     private let rootURL: URL
@@ -72,11 +128,50 @@ final class NativeVMManager: ObservableObject {
         rootURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Tether Host for Mac/Virtual Machines", isDirectory: true)
         vmDelegate.owner = self
+        if let savedPath = preferences.string(forKey: Self.selectedImageKey) {
+            let savedURL = URL(fileURLWithPath: savedPath)
+            if FileManager.default.fileExists(atPath: savedPath) {
+                imageDescription = "Checking previously selected image: \(savedURL.lastPathComponent)…"
+                Task { await inspect(savedURL) }
+            } else {
+                preferences.removeObject(forKey: Self.selectedImageKey)
+            }
+        }
+    }
+
+    var cachedHostImageURL: URL {
+        rootURL.deletingLastPathComponent()
+            .appendingPathComponent("Restore Images/UniversalMac_26.2_25C56_Restore.ipsw")
     }
 
     var hasCachedHostImage: Bool {
-        FileManager.default.fileExists(atPath: rootURL.deletingLastPathComponent()
-            .appendingPathComponent("Restore Images/UniversalMac_26.2_25C56_Restore.ipsw").path)
+        FileManager.default.fileExists(atPath: cachedHostImageURL.path)
+    }
+
+    func revealCachedHostImageInFinder() {
+        guard hasCachedHostImage else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([cachedHostImageURL])
+    }
+
+    func revealSelectedImageInFinder() {
+        guard let imageURL else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([imageURL])
+    }
+
+    func useCachedHostImage() async {
+        guard !isBusy, hasCachedHostImage else { return }
+        isBusy = true
+        status = "Verifying the saved macOS image…"
+        do {
+            guard try await Self.sha256(of: cachedHostImageURL) == Self.macOS262SHA256 else {
+                throw NativeVMError.unsupportedImage
+            }
+            isBusy = false
+            await inspect(cachedHostImageURL)
+        } catch {
+            isBusy = false
+            status = "Saved image could not be verified. Choose Download again to replace it. \(error.localizedDescription)"
+        }
     }
 
     func isDesktopReady(for id: VirtualMachineID) -> Bool {
@@ -125,6 +220,7 @@ final class NativeVMManager: ObservableObject {
             }
             restoreImage = image
             imageURL = url
+            preferences.set(url.path, forKey: Self.selectedImageKey)
             let version = image.operatingSystemVersion
             imageDescription = "macOS \(version.majorVersion).\(version.minorVersion) (\(image.buildVersion)) — compatible with this Mac"
             status = "Ready to create a new, separate Tether Host VM."
@@ -133,36 +229,56 @@ final class NativeVMManager: ObservableObject {
             imageURL = nil
             imageDescription = "No compatible macOS IPSW selected."
             status = error.localizedDescription
+            if preferences.string(forKey: Self.selectedImageKey) == url.path {
+                preferences.removeObject(forKey: Self.selectedImageKey)
+            }
         }
     }
 
     func downloadHostImage() async {
         guard Self.canDownloadHostImage, !isBusy else { return }
         isBusy = true
+        downloadProgress = nil
+        defer {
+            activeDownloadID = nil
+            downloadProgress = nil
+        }
         status = "Downloading macOS 26.2 from Apple's servers (about 18 GB)…"
-        let destination = rootURL.deletingLastPathComponent()
-            .appendingPathComponent("Restore Images/UniversalMac_26.2_25C56_Restore.ipsw")
+        let destination = cachedHostImageURL
         do {
             try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
             let available = try destination.deletingLastPathComponent()
                 .resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
                 .volumeAvailableCapacityForImportantUsage ?? 0
-            guard available >= 65 * 1_073_741_824 || FileManager.default.fileExists(atPath: destination.path) else {
+            guard available >= 65 * 1_073_741_824 else {
                 throw NativeVMError.insufficientDownloadSpace
             }
-            if FileManager.default.fileExists(atPath: destination.path) {
-                let digest = try await Self.sha256(of: destination)
-                if digest != Self.macOS262SHA256 { try FileManager.default.removeItem(at: destination) }
-            }
-            if !FileManager.default.fileExists(atPath: destination.path) {
-                let (temporary, response) = try await URLSession.shared.download(from: Self.macOS262URL)
-                guard (response as? HTTPURLResponse)?.statusCode == 200,
-                      response.url?.host == "updates.cdn-apple.com" else {
-                    throw URLError(.badServerResponse)
+            let staged = destination.deletingLastPathComponent()
+                .appendingPathComponent(".download-\(UUID().uuidString).ipsw")
+            defer { try? FileManager.default.removeItem(at: staged) }
+            let downloadID = UUID()
+            activeDownloadID = downloadID
+            let downloader = RestoreImageDownload(stagedURL: staged) { [weak self] received, total, elapsed in
+                Task { @MainActor [weak self] in
+                    guard self?.activeDownloadID == downloadID else { return }
+                    self?.downloadProgress = DownloadProgressEstimate(
+                        receivedBytes: received, expectedBytes: total, elapsedSeconds: elapsed
+                    )
                 }
-                status = "Verifying the downloaded IPSW…"
-                let digest = try await Self.sha256(of: temporary)
-                guard digest == Self.macOS262SHA256 else { throw NativeVMError.unsupportedImage }
+            }
+            let (temporary, response) = try await downloader.run(from: Self.macOS262URL)
+            activeDownloadID = nil
+            guard (response as? HTTPURLResponse)?.statusCode == 200,
+                  response.url?.host == "updates.cdn-apple.com" else {
+                throw URLError(.badServerResponse)
+            }
+            downloadProgress = nil
+            status = "Verifying the downloaded IPSW…"
+            let digest = try await Self.sha256(of: temporary)
+            guard digest == Self.macOS262SHA256 else { throw NativeVMError.unsupportedImage }
+            if FileManager.default.fileExists(atPath: destination.path) {
+                _ = try FileManager.default.replaceItemAt(destination, withItemAt: temporary)
+            } else {
                 try FileManager.default.moveItem(at: temporary, to: destination)
             }
             isBusy = false

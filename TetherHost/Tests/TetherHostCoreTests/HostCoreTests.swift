@@ -6,6 +6,29 @@ import XCTest
 final class HostCoreTests: XCTestCase {
     private let vmID = VirtualMachineID(rawValue: UUID(uuidString: "738EECC5-6357-43D9-BE03-298E0B3DE206")!)
 
+    func testDownloadProgressEstimatesKnownAndUnknownImageSizes() {
+        let known = DownloadProgressEstimate(
+            receivedBytes: 5_000_000, expectedBytes: 20_000_000, elapsedSeconds: 10
+        )
+        XCTAssertEqual(known.fraction, 0.25)
+        XCTAssertEqual(known.bytesPerSecond, 500_000)
+        XCTAssertEqual(known.secondsRemaining, 30)
+
+        let unknown = DownloadProgressEstimate(
+            receivedBytes: 5_000_000, expectedBytes: -1, elapsedSeconds: 10
+        )
+        XCTAssertNil(unknown.fraction)
+        XCTAssertNil(unknown.secondsRemaining)
+        XCTAssertEqual(unknown.bytesPerSecond, 500_000)
+
+        let early = DownloadProgressEstimate(
+            receivedBytes: 0, expectedBytes: 20_000_000, elapsedSeconds: 0
+        )
+        XCTAssertEqual(early.fraction, 0)
+        XCTAssertNil(early.bytesPerSecond)
+        XCTAssertNil(early.secondsRemaining)
+    }
+
     func testUTMListParsesExactIDsAndDuplicateNames() throws {
         let input = """
         UUID                                 Status   Name

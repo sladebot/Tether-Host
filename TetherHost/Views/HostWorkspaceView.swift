@@ -316,7 +316,25 @@ struct HostWorkspaceView: View {
 
             if manager.isBusy {
                 VStack(alignment: .leading, spacing: 16) {
-                    if let progress = manager.installationProgress {
+                    if let download = manager.downloadProgress {
+                        if let fraction = download.fraction {
+                            ProgressView(value: fraction)
+                            Text("\(Int(fraction * 100))% · \(transferSize(download.receivedBytes)) of \(transferSize(download.totalBytes ?? 0))")
+                                .font(.callout.monospacedDigit())
+                        } else {
+                            ProgressView()
+                            Text("\(transferSize(download.receivedBytes)) downloaded")
+                                .font(.callout.monospacedDigit())
+                        }
+                        if let speed = download.bytesPerSecond {
+                            Text("\(transferSize(Int64(speed)))/s")
+                                .font(.callout).foregroundStyle(.secondary)
+                        }
+                        if let remaining = download.secondsRemaining {
+                            Text("About \(remainingTime(remaining)) remaining")
+                                .font(.callout).foregroundStyle(.secondary)
+                        }
+                    } else if let progress = manager.installationProgress {
                         ProgressView(value: progress)
                     } else {
                         ProgressView().controlSize(.large)
@@ -331,19 +349,29 @@ struct HostWorkspaceView: View {
             } else {
                 VStack(alignment: .leading, spacing: 12) {
                     Text("macOS installation image").font(.headline)
-                    Text("A new VM needs an Apple IPSW. Reuse a compatible download or get one below.")
+                    Text("A new VM needs an Apple IPSW. Choose one you have or download it from Apple.")
                         .font(.callout).foregroundStyle(.secondary)
-                    HStack {
-                        Button("Choose IPSW…") { manager.chooseIPSW() }
-                        if NativeVMManager.canDownloadHostImage {
-                            Button(manager.hasCachedHostImage
-                                   ? "Use downloaded macOS 26.2"
-                                   : "Download macOS 26.2") {
-                                Task { await manager.downloadHostImage() }
+                    Button("Choose IPSW…") { manager.chooseIPSW() }
+                    if manager.hasCachedHostImage {
+                        Label("A macOS 26.2 image already exists on this Mac. Reuse it for another VM?",
+                              systemImage: "checkmark.circle.fill")
+                            .font(.callout).foregroundStyle(.green)
+                        HStack {
+                            Button("Reuse image") { Task { await manager.useCachedHostImage() } }
+                                .buttonStyle(.borderedProminent)
+                            Button("Show in Finder") { manager.revealCachedHostImageInFinder() }
+                            if NativeVMManager.canDownloadHostImage {
+                                Button("Download again") { Task { await manager.downloadHostImage() } }
                             }
                         }
+                    } else if NativeVMManager.canDownloadHostImage {
+                        Button("Download macOS 26.2") { Task { await manager.downloadHostImage() } }
                     }
                     Text(manager.imageDescription).font(.callout).foregroundStyle(.secondary)
+                    if manager.imageURL != nil {
+                        Button("Show selected image in Finder") { manager.revealSelectedImageInFinder() }
+                            .font(.caption)
+                    }
                     Link("Find a macOS IPSW", destination: UTMInstallation.macOSImageURL)
                         .font(.caption)
                     if manager.status != "No VM installation has started." {
@@ -378,6 +406,19 @@ struct HostWorkspaceView: View {
         .padding(24)
         .frame(width: 520)
         .frame(minHeight: 340)
+    }
+
+    private func transferSize(_ bytes: Int64) -> String {
+        ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+    }
+
+    private func remainingTime(_ seconds: TimeInterval) -> String {
+        let total = max(0, Int(seconds.rounded(.up)))
+        let hours = total / 3600
+        let minutes = (total % 3600) / 60
+        if hours > 0 { return "\(hours) hr \(minutes) min" }
+        if minutes > 0 { return "\(minutes) min" }
+        return "\(total) sec"
     }
 
     private var tailscaleSection: some View {

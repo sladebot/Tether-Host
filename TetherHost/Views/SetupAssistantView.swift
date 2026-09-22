@@ -130,11 +130,24 @@ private struct NativeVMSetupView: View {
                         .font(.callout)
                         .textSelection(.enabled)
                 }
-                if NativeVMManager.canDownloadHostImage {
-                    Button(manager.hasCachedHostImage ? "Use Downloaded macOS 26.2 IPSW" : "Download macOS 26.2 IPSW from Apple (18 GB)") {
-                        Task { await manager.downloadHostImage() }
+                if manager.hasCachedHostImage {
+                    Text("A macOS 26.2 image already exists on this Mac. Reuse it for another VM?")
+                        .font(.callout)
+                    HStack {
+                        Button("Reuse image") { Task { await manager.useCachedHostImage() } }
+                        Button("Show in Finder") { manager.revealCachedHostImageInFinder() }
+                        if NativeVMManager.canDownloadHostImage {
+                            Button("Download again") { Task { await manager.downloadHostImage() } }
+                        }
                     }
                     .disabled(manager.isBusy)
+                } else if NativeVMManager.canDownloadHostImage {
+                    Button("Download macOS 26.2 IPSW from Apple (18 GB)") {
+                        Task { await manager.downloadHostImage() }
+                    }.disabled(manager.isBusy)
+                }
+                if manager.imageURL != nil {
+                    Button("Show selected image in Finder") { manager.revealSelectedImageInFinder() }
                 }
                 Button(manager.isBusy ? "Installing…" : "Create New VM from Selected IPSW") {
                     Task {
