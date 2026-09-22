@@ -208,6 +208,13 @@ final class NativeVMManager: ObservableObject {
         status = "macOS desktop confirmed by you. Continue with the guest setup disk in the VM."
     }
 
+    func confirmDesktopReadyFromGuestSetup() {
+        guard isRunning, let runningID else { return }
+        desktopReadyVMID = runningID
+        preferences.set(runningID.description, forKey: "setup.nativeDesktopReadyVMID")
+        status = "The verified guest installer is running in the macOS desktop session."
+    }
+
     func clearDesktopReady(for id: VirtualMachineID) {
         guard desktopReadyVMID == id else { return }
         desktopReadyVMID = nil
@@ -555,14 +562,20 @@ final class NativeVMManager: ObservableObject {
         }
     }
 
-    /// Text moves only after an explicit host UI action. The guest installer listens on this
-    /// private VM socket; the host clipboard is never watched or sent in the background.
+    /// Clipboard text moves only after an explicit host UI action. The guest
+    /// installer listens on this private VM socket; neither clipboard is polled.
     func readGuestClipboardText() async throws -> String {
         try await transferGuestClipboard(opcode: 1, text: nil)
     }
 
     func writeGuestClipboardText(_ text: String) async throws {
         _ = try await transferGuestClipboard(opcode: 2, text: text)
+    }
+
+    /// The guest releases its private connection receipt only after its own final
+    /// verification and a fresh Tailscale status check. This never uses NSPasteboard.
+    func readVerifiedGuestConnectionJSON() async throws -> String {
+        try await transferGuestClipboard(opcode: 3, text: nil)
     }
 
     private func transferGuestClipboard(opcode: UInt8, text: String?) async throws -> String {
@@ -688,6 +701,8 @@ private final class GuestClipboardConnection: @unchecked Sendable {
 
 /// One request per connection: opcode + big-endian length + UTF-8 request,
 /// then status + big-endian length + UTF-8 response. Shared with the guest installer.
+/// Opcodes 1/2 transfer explicit clipboard text; opcode 3 fetches the verified
+/// guest connection over the same private socket without touching either clipboard.
 private enum GuestClipboardTransport {
     static let port: UInt32 = 45251
     static let maximumTextBytes = 65_536

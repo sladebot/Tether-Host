@@ -80,8 +80,8 @@ or a new VM that appears in UTM. The four checks are:
 
 The included Tether Guest Setup.iso carries a small guest helper without
 enabling host folder sharing. Built-in Apple VMs can optionally enable explicit,
-text-only clipboard transfer from the guest installer. Each transfer requires
-a button click in Tether Host; clipboard contents are never synced continuously.
+text-only clipboard transfer from the guest installer. Each clipboard transfer
+requires a button click in Tether Host; clipboard contents are never synced continuously.
 Tether-created built-in and UTM VMs
 include a read-only copy. In the guest, open Tether Guest Installer.app and
 follow its six checks. Updating this installer does not reinstall the VM.
@@ -90,8 +90,10 @@ For a pre-existing UTM VM, attach the included ISO manually once.
 Dependency detection for Tailscale and Hermes runs inside the VM. Software on
 the physical Mac never satisfies those checks. The installer guides Tailscale
 sign-in, model login, guest permissions, service configuration, and verification.
-The helper verifies the URL/token in the VM. Enter those connection details in
-Tether iOS with the phone on the same tailnet.
+After guest Verify connection succeeds, a built-in VM sends its private URL and
+token directly to Tether Host. Tether Host fills them and tests Hermes from this
+Mac before enabling the iPhone step. UTM retains manual entry and file import.
+Enter those connection details in Tether iOS with the phone on the same tailnet.
 
 Existing Hermes installations are preserved: the guest installer refuses
 to overwrite unmanaged data. You can verify an existing connection manually.

@@ -37,14 +37,20 @@ struct HostWorkspaceView: View {
         .task {
             model.checkProviderInstallation()
             while !Task.isCancelled {
-                if scenePhase == .active { await model.refresh() }
+                if scenePhase == .active {
+                    await model.refresh()
+                    await model.refreshVerifiedGuestConnection()
+                }
                 try? await Task.sleep(for: .seconds(5))
             }
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
                 model.checkProviderInstallation()
-                Task { await model.refresh() }
+                Task {
+                    await model.refresh()
+                    await model.refreshVerifiedGuestConnection()
+                }
             }
         }
         .onChange(of: model.setupDependencies) { _, gates in
@@ -53,8 +59,9 @@ struct HostWorkspaceView: View {
                 model.workspaceSection = .vm
             }
         }
-        .onChange(of: manager.isRunning) { _, _ in
+        .onChange(of: manager.isRunning) { _, running in
             model.syncHostSleepAssertion()
+            if !running { model.invalidateLiveGuestReadiness() }
         }
         .onChange(of: model.workspaceSection) { _, section in
             if section != .hermes { showToken = false }
@@ -493,19 +500,31 @@ struct HostWorkspaceView: View {
             sectionHeader("Hermes inside the VM", detail: "Install and configure Hermes once the VM has Internet.")
             Text("In the VM, open Tether Guest Installer.app and choose Install Hermes, then Set up Hermes. The guide keeps existing data, prompts for model sign-in and permissions, and verifies a model response. Tether Host itself is not installed in the VM.")
                 .foregroundStyle(.secondary)
-            Text("When the guest prints its connection details, enter them below or import its private connection.json file. Verification happens from this Mac before the iPhone step unlocks.")
+            Text(model.providerSetup.provider == .builtIn
+                 ? "After the guest completes Verify connection, Tether Host fills these details and tests Hermes automatically. You can enter them manually if needed."
+                 : "When the guest prints its connection details, enter them below or import its private connection.json file. Verification happens from this Mac before the iPhone step unlocks.")
                 .foregroundStyle(.secondary)
+            if model.providerSetup.provider == .builtIn {
+                Button("Use detected guest connection") { model.useDetectedGuestConnection() }
+                    .disabled(!model.designatedVMIsRunning || model.isVerifyingConnection)
+            }
             Button("Import Guest Connection…") { model.importConnectionFile() }
                 .disabled(model.isVerifyingConnection)
-            TextField("Guest URL — https://your-vm.your-tailnet.ts.net", text: $model.connectionURL)
+            TextField("Guest URL — https://your-vm.your-tailnet.ts.net", text: Binding(
+                get: { model.connectionURL }, set: { model.setConnectionURLFromUser($0) }
+            ))
                 .textFieldStyle(.roundedBorder)
                 .disabled(model.isVerifyingConnection)
             HStack {
                 Group {
                     if showToken {
-                        TextField("API token", text: $model.connectionToken)
+                        TextField("API token", text: Binding(
+                            get: { model.connectionToken }, set: { model.setConnectionTokenFromUser($0) }
+                        ))
                     } else {
-                        SecureField("API token", text: $model.connectionToken)
+                        SecureField("API token", text: Binding(
+                            get: { model.connectionToken }, set: { model.setConnectionTokenFromUser($0) }
+                        ))
                     }
                 }
                 .textFieldStyle(.roundedBorder)

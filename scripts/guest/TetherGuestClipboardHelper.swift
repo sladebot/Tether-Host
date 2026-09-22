@@ -2,7 +2,8 @@ import AppKit
 import Darwin
 import Foundation
 
-// Host-initiated, text-only clipboard transfer. This service never polls either clipboard.
+// Host-initiated clipboard transfer and verified setup handoff. Only clipboard
+// opcodes touch NSPasteboard; this service never polls either clipboard.
 // Wire format: opcode/status (1 byte), UTF-8 payload size (4-byte big-endian), payload.
 private enum ClipboardWire {
     static let port: UInt32 = 45_251
@@ -10,6 +11,7 @@ private enum ClipboardWire {
     static let headerBytes = 5
     static let get: UInt8 = 1
     static let set: UInt8 = 2
+    static let getConnection: UInt8 = 3
     static let ok: UInt8 = 0
     static let invalidRequest: UInt8 = 1
     static let unavailable: UInt8 = 2
@@ -66,6 +68,103 @@ private func reply(_ descriptor: Int32, status: UInt8, text: String) {
     }
 }
 
+// The receipt is written only after the guest installer verifies the private
+// HTTPS route, Hermes API, model, and computer-use permissions. Never read a
+// token from the Hermes environment or an unverified setup attempt.
+private func verifiedConnection() -> String? {
+    let state = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent("Library/Application Support/Tether Host for Mac/Guest Setup", isDirectory: true)
+    let receipt = state.appendingPathComponent("connection.json")
+    let ready = state.appendingPathComponent("verified.ready")
+    let owner = geteuid()
+    for url in [state, receipt, ready] {
+        var metadata = stat()
+        guard lstat(url.path, &metadata) == 0, metadata.st_uid == owner,
+              metadata.st_mode & 0o077 == 0 else { return nil }
+        if url == state {
+            guard metadata.st_mode & S_IFMT == S_IFDIR else { return nil }
+        } else {
+            guard metadata.st_mode & S_IFMT == S_IFREG else { return nil }
+        }
+    }
+    guard let data = try? Data(contentsOf: receipt), data.count <= 4096,
+          let fields = connectionFields(data),
+          liveTailnetEndpoint() == fields.endpoint,
+          let payload = try? JSONSerialization.data(withJSONObject: ["endpoint": fields.endpoint, "token": fields.token], options: [.sortedKeys]),
+          let result = String(data: payload, encoding: .utf8) else { return nil }
+    return result
+}
+
+private func connectionFields(_ data: Data) -> (endpoint: String, token: String)? {
+    guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          object["guest_permissions_verified"] as? Bool == true,
+          object["model_verified"] as? Bool == true,
+          let endpoint = object["endpoint"] as? String,
+          let token = object["token"] as? String,
+          isPrivateEndpoint(endpoint), isValidToken(token) else { return nil }
+    return (endpoint, token)
+}
+
+private func isPrivateEndpoint(_ endpoint: String) -> Bool {
+    guard let url = URLComponents(string: endpoint), url.scheme == "https",
+          url.user == nil, url.password == nil, url.port == nil,
+          url.path.isEmpty, url.query == nil, url.fragment == nil,
+          let host = url.host, endpoint == "https://" + host,
+          host.hasSuffix(".ts.net") else { return false }
+    let labels = host.split(separator: ".", omittingEmptySubsequences: false)
+    guard labels.count >= 4, labels[labels.count - 2] == "ts", labels.last == "net" else { return false }
+    return labels.dropLast(2).allSatisfy { label in
+        !label.isEmpty && label.first != "-" && label.last != "-" &&
+        label.utf8.allSatisfy { byte in (97...122).contains(byte) || (48...57).contains(byte) || byte == 45 }
+    }
+}
+
+private func isValidToken(_ token: String) -> Bool {
+    (32...256).contains(token.utf8.count) && token.utf8.allSatisfy { byte in
+        (65...90).contains(byte) || (97...122).contains(byte) || (48...57).contains(byte) || byte == 45 || byte == 95
+    }
+}
+
+private func liveTailnetEndpoint() -> String? {
+    let executable = "/Applications/Tailscale.app/Contents/MacOS/Tailscale"
+    guard FileManager.default.isExecutableFile(atPath: executable) else { return nil }
+    let output = URL(fileURLWithPath: NSTemporaryDirectory())
+        .appendingPathComponent("tether-tailnet-\(UUID().uuidString)")
+    let descriptor = open(output.path, O_CREAT | O_EXCL | O_WRONLY, 0o600)
+    guard descriptor >= 0 else { return nil }
+    defer { unlink(output.path) }
+    let file = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: executable)
+    process.arguments = ["status", "--json"]
+    process.standardOutput = file
+    process.standardError = FileHandle.nullDevice
+    let finished = DispatchSemaphore(value: 0)
+    process.terminationHandler = { _ in finished.signal() }
+    do { try process.run() } catch { return nil }
+    if finished.wait(timeout: .now() + 5) == .timedOut {
+        process.terminate()
+        _ = finished.wait(timeout: .now() + 1)
+        return nil
+    }
+    guard process.terminationStatus == 0 else { return nil }
+    try? file.close()
+    guard let size = try? FileManager.default.attributesOfItem(atPath: output.path)[.size] as? NSNumber,
+          size.intValue <= 1_048_576,
+          let data = try? Data(contentsOf: output),
+          let status = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+    return endpointFromTailnetStatus(status)
+}
+
+private func endpointFromTailnetStatus(_ status: [String: Any]) -> String? {
+    guard status["BackendState"] as? String == "Running",
+          let peer = status["Self"] as? [String: Any],
+          let name = peer["DNSName"] as? String else { return nil }
+    let host = name.hasSuffix(".") ? String(name.dropLast()) : name
+    let endpoint = "https://" + host.lowercased()
+    return isPrivateEndpoint(endpoint) ? endpoint : nil
+}
+
 private func handle(_ descriptor: Int32) {
     guard let header = readExactly(descriptor, count: ClipboardWire.headerBytes),
           let payloadSize = ClipboardWire.length(from: header) else {
@@ -73,7 +172,7 @@ private func handle(_ descriptor: Int32) {
         return
     }
     let opcode = header[0]
-    guard opcode == ClipboardWire.get || opcode == ClipboardWire.set,
+    guard opcode == ClipboardWire.get || opcode == ClipboardWire.set || opcode == ClipboardWire.getConnection,
           opcode == ClipboardWire.set || payloadSize == 0 else {
         reply(descriptor, status: ClipboardWire.invalidRequest, text: "Unknown clipboard request.")
         return
@@ -83,7 +182,13 @@ private func handle(_ descriptor: Int32) {
         reply(descriptor, status: ClipboardWire.invalidRequest, text: "Clipboard text must be UTF-8.")
         return
     }
-    if opcode == ClipboardWire.get {
+    if opcode == ClipboardWire.getConnection {
+        guard let connection = verifiedConnection() else {
+            reply(descriptor, status: ClipboardWire.unavailable, text: "No verified private connection is available in this VM.")
+            return
+        }
+        reply(descriptor, status: ClipboardWire.ok, text: connection)
+    } else if opcode == ClipboardWire.get {
         guard let guestText = NSPasteboard.general.string(forType: .string) else {
             reply(descriptor, status: ClipboardWire.unavailable, text: "Guest clipboard has no text.")
             return
@@ -166,6 +271,18 @@ private struct TetherGuestClipboardHelper {
             precondition(ClipboardWire.length(from: [ClipboardWire.set, 0, 1, 0, 1]) == nil)
             precondition(ClipboardWire.response(status: 0, text: "héllo") == [0, 0, 0, 0, 6] + Array("héllo".utf8))
             precondition(ClipboardWire.response(status: 0, text: String(repeating: "a", count: 65_537)) == nil)
+            precondition(isPrivateEndpoint("https://guest.example.ts.net"))
+            precondition(!isPrivateEndpoint("http://guest.example.ts.net"))
+            precondition(!isPrivateEndpoint("https://guest.example.ts.net.evil.test"))
+            precondition(!isPrivateEndpoint("https://guest.example.ts.net/path"))
+            precondition(isValidToken(String(repeating: "a", count: 32)))
+            precondition(!isValidToken("short"))
+            precondition(!isValidToken(String(repeating: "a", count: 31) + "/"))
+            let valid = "{\"endpoint\":\"https://guest.example.ts.net\",\"token\":\"\(String(repeating: "a", count: 32))\",\"guest_permissions_verified\":true,\"model_verified\":true}"
+            precondition(connectionFields(Data(valid.utf8))?.endpoint == "https://guest.example.ts.net")
+            precondition(connectionFields(Data(valid.replacingOccurrences(of: "\"model_verified\":true", with: "\"model_verified\":false").utf8)) == nil)
+            precondition(endpointFromTailnetStatus(["BackendState": "Running", "Self": ["DNSName": "guest.example.ts.net."]]) == "https://guest.example.ts.net")
+            precondition(endpointFromTailnetStatus(["BackendState": "Stopped", "Self": ["DNSName": "guest.example.ts.net."]]) == nil)
             print("Clipboard framing tests passed.")
             return
         }

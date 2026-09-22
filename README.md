@@ -53,8 +53,11 @@ model login and guest permissions, starts the gateway, configures private HTTPS,
 and verifies a real model response. It refuses to run on the physical host.
 
 The helper displays the verified URL/token in its embedded setup console for entry in
-Tether iOS. The host connection screen also offers **Import Guest Connection…** for a private, user-owned
-`connection.json`, accepts an existing endpoint manually, checks TLS and
+Tether iOS. For a built-in VM, the completed guest verification also releases
+those details over a private VM socket. Tether Host fills the URL and masked token,
+confirms live guest Tailscale status, and verifies Hermes from the Mac before
+unblocking the phone step. The host connection screen retains **Import Guest Connection…**
+for a private, user-owned `connection.json`, accepts an existing endpoint manually, checks TLS and
 API authentication/capabilities, stores the credential in Keychain, and provides
 masked reveal/copy controls for use in Tether iOS. The phone still needs Tailscale
 and its own Test Connection check. A host-side check does not certify phone reachability.

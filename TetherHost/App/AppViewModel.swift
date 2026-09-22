@@ -169,6 +169,11 @@ final class AppViewModel: ObservableObject {
     let isInsideGuest = GuestSetupEnvironment.isVirtualMac
     private let connectionVault = KeychainSecretStore(service: "app.tether.host.connection")
     private var connectionID = VirtualMachineID(rawValue: UUID())
+    private var connectionInputRevision = 0
+    private var hasManualConnectionOverride = false
+    private var hasDetectedGuestConnection = false
+    private var isReadingVerifiedGuestConnection = false
+    private var lastAutomaticVerificationAt: Date?
 
     @Published private(set) var providerSetup: VMProviderSetup
     let nativeVM = NativeVMManager()
@@ -215,6 +220,7 @@ final class AppViewModel: ObservableObject {
     }
 
     func selectProvider(_ provider: VMProvider) {
+        clearConnectionForVMChange()
         providerSetup.select(provider)
         preferences.set(provider.rawValue, forKey: "setup.vmProvider")
         selectedVMID = nil
@@ -331,15 +337,101 @@ final class AppViewModel: ObservableObject {
 
     func selectVM(_ id: VirtualMachineID) {
         guard candidateVMs.contains(where: { $0.id == id }) else { return }
+        if selectedVMID != id { clearConnectionForVMChange() }
         selectedVMID = id
         preferences.set(id.description, forKey: "setup.vmID")
         syncHostSleepAssertion()
     }
 
     func clearVMSelection() {
+        clearConnectionForVMChange()
         selectedVMID = nil
         preferences.removeObject(forKey: "setup.vmID")
         syncHostSleepAssertion()
+    }
+
+    private func clearConnectionForVMChange() {
+        connectionInputRevision += 1
+        hasManualConnectionOverride = false
+        hasDetectedGuestConnection = false
+        lastAutomaticVerificationAt = nil
+        connectionVerifiedAt = nil
+        verifiedForVMID = nil
+        connectionURL = ""
+        connectionToken = ""
+    }
+
+    func setConnectionURLFromUser(_ value: String) {
+        connectionInputRevision += 1
+        hasManualConnectionOverride = true
+        connectionURL = value
+    }
+
+    func setConnectionTokenFromUser(_ value: String) {
+        connectionInputRevision += 1
+        hasManualConnectionOverride = true
+        connectionToken = value
+    }
+
+    func useDetectedGuestConnection() {
+        hasManualConnectionOverride = false
+        lastAutomaticVerificationAt = nil
+        Task { await refreshVerifiedGuestConnection() }
+    }
+
+    func refreshVerifiedGuestConnection() async {
+        guard providerSetup.provider == .builtIn,
+              let vmID = designatedVM?.id,
+              vmID == nativeVM.runningVMID,
+              !hasManualConnectionOverride,
+              !isReadingVerifiedGuestConnection,
+              !isVerifyingConnection else { return }
+        if let lastAutomaticVerificationAt,
+           Date().timeIntervalSince(lastAutomaticVerificationAt) < 30 { return }
+        let revision = connectionInputRevision
+        isReadingVerifiedGuestConnection = true
+        defer { isReadingVerifiedGuestConnection = false }
+        do {
+            let json = try await nativeVM.readVerifiedGuestConnectionJSON()
+            let receipt = try GuestConnectionReceipt(json: Data(json.utf8))
+            guard providerSetup.provider == .builtIn,
+                  designatedVM?.id == vmID,
+                  nativeVM.runningVMID == vmID,
+                  connectionInputRevision == revision,
+                  !hasManualConnectionOverride else { return }
+            nativeVM.confirmDesktopReadyFromGuestSetup()
+            confirmTailscaleSetup()
+            hasDetectedGuestConnection = true
+            if connectionVerifiedAt != nil,
+               verifiedForVMID == vmID,
+               connectionURL == receipt.endpoint,
+               connectionToken == receipt.token { return }
+            connectionID = vmID
+            connectionURL = receipt.endpoint
+            connectionToken = receipt.token
+            lastAutomaticVerificationAt = Date()
+            connectionMessage = "Guest details received. Verifying Hermes from this Mac…"
+            await verifyConnection()
+        } catch {
+            // The helper may be absent until guest setup completes. Keep manual
+            // entry usable and never surface raw socket data or credentials.
+            if hasDetectedGuestConnection,
+               designatedVM?.id == vmID,
+               nativeVM.runningVMID == vmID,
+               connectionInputRevision == revision {
+                invalidateLiveGuestReadiness()
+            }
+        }
+    }
+
+    func invalidateLiveGuestReadiness() {
+        guard providerSetup.provider == .builtIn else { return }
+        connectionVerifiedAt = nil
+        verifiedForVMID = nil
+        lastAutomaticVerificationAt = nil
+        hasDetectedGuestConnection = false
+        tailscaleConfirmedVMID = nil
+        preferences.removeObject(forKey: "setup.tailscaleConfirmedVMID")
     }
 
     func syncHostSleepAssertion() {
@@ -559,6 +651,8 @@ final class AppViewModel: ObservableObject {
                 throw ConnectionVerificationError.failed("Guest connection details must be a private file owned by this user.")
             }
             let details = try JSONDecoder().decode(GuestConnection.self, from: Data(contentsOf: file))
+            connectionInputRevision += 1
+            hasManualConnectionOverride = true
             connectionID = VirtualMachineID(rawValue: details.id)
             connectionURL = details.endpoint
             connectionToken = details.token
@@ -580,14 +674,17 @@ final class AppViewModel: ObservableObject {
         let endpoint = connectionURL
         let token = connectionToken
         let vmID = designatedVM?.id
+        let revision = connectionInputRevision
         defer { isVerifyingConnection = false }
         connectionMessage = "Checking HTTPS, API authentication, durable runs, and model discovery…"
         do {
             let result = try await ConnectionVerifier().verify(endpoint: endpoint, token: token)
-            guard endpoint == connectionURL, token == connectionToken,
+            guard revision == connectionInputRevision,
+                  endpoint == connectionURL, token == connectionToken,
                   isInsideGuest || (vmID == designatedVM?.id && setupDependencies.isUnlocked(.hermes)) else { return }
             try await connectionVault.store(SecretValue(data: Data(token.utf8)), for: .activeHermes(connectionID))
-            guard endpoint == connectionURL, token == connectionToken,
+            guard revision == connectionInputRevision,
+                  endpoint == connectionURL, token == connectionToken,
                   isInsideGuest || (vmID == designatedVM?.id && setupDependencies.isUnlocked(.hermes)) else { return }
             preferences.set(connectionID.description, forKey: "connection.id")
             preferences.set(result.endpoint.url.absoluteString, forKey: "connection.endpoint")

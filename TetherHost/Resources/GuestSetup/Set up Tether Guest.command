@@ -203,3 +203,6 @@ stage '6 of 6 — Verifying private HTTPS, computer use, and model access'
 "$PYTHON_BIN" "$SCRIPT_DIRECTORY/guest_setup.py" show-connection
 printf 'Keep Tailscale connected on your phone and this guest.\n'
 complete verified 'Tether guest connection'
+if ! /bin/bash "$SCRIPT_DIRECTORY/install-clipboard-helper.sh"; then
+    printf '\nAutomatic handoff to Tether Host is unavailable. The guest connection is verified; use its displayed URL and token in Tether Host, or retry this step to enable handoff.\n'
+fi

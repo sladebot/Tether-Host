@@ -31,4 +31,4 @@ DOMAIN="gui/$(/usr/bin/id -u)"
 /usr/bin/plutil -lint "$AGENT" >/dev/null
 /bin/launchctl bootstrap "$DOMAIN" "$AGENT"
 /bin/launchctl kickstart -k "$DOMAIN/$LABEL"
-echo "Text clipboard transfer is ready in this VM. Use Tether Host's copy buttons to transfer text explicitly."
+echo "Guest connection handoff is ready. Tether Host can read verified connection details while this VM is running. Clipboard text transfers only when you click a copy button."
