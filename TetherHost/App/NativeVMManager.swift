@@ -644,6 +644,7 @@ struct NativeVMDisplay: NSViewRepresentable {
         let view = VZVirtualMachineView()
         view.virtualMachine = virtualMachine
         view.capturesSystemKeys = true
+        view.automaticallyReconfiguresDisplay = true
         return view
     }
 

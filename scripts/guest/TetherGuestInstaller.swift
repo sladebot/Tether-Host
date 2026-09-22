@@ -99,10 +99,12 @@ private enum SetupStep: Int, CaseIterable {
 }
 
 @main
-final class TetherGuestInstaller: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavigationDelegate {
+final class TetherGuestInstaller: NSObject, NSApplicationDelegate, NSWindowDelegate, WKScriptMessageHandler, WKNavigationDelegate {
+    private static let guideSize = NSSize(width: 900, height: 690)
     private let state = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent("Library/Application Support/Tether Host for Mac/Guest Setup", isDirectory: true)
     private var window: NSWindow!
+    private var guideScrollView: NSScrollView!
     private var stepButtons: [NSButton] = []
     private var stepLabel: NSTextField!
     private var titleLabel: NSTextField!
@@ -130,15 +132,25 @@ final class TetherGuestInstaller: NSObject, NSApplicationDelegate, WKScriptMessa
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         selected = SetupStep.allCases.first(where: { !isComplete($0) }) ?? .verify
-        let frame = NSRect(x: 0, y: 0, width: 900, height: 690)
-        window = NSWindow(contentRect: frame, styleMask: [.titled, .closable, .miniaturizable],
+        let guideFrame = NSRect(origin: .zero, size: Self.guideSize)
+        window = NSWindow(contentRect: guideFrame, styleMask: [.titled, .closable, .miniaturizable, .resizable],
                           backing: .buffered, defer: false)
         window.title = "Tether Guest Installer"
-        window.minSize = frame.size
-        window.maxSize = frame.size
+        window.delegate = self
+        window.minSize = NSSize(width: 520, height: 360)
+        sizeWindowToFitScreen()
         window.center()
-        let content = NSView(frame: frame)
-        window.contentView = content
+        guideScrollView = NSScrollView(frame: NSRect(origin: .zero, size: window.contentLayoutRect.size))
+        guideScrollView.autoresizingMask = [.width, .height]
+        guideScrollView.hasVerticalScroller = true
+        guideScrollView.hasHorizontalScroller = true
+        guideScrollView.autohidesScrollers = true
+        guideScrollView.allowsMagnification = true
+        guideScrollView.minMagnification = 0.8
+        guideScrollView.maxMagnification = 1
+        let content = NSView(frame: guideFrame)
+        guideScrollView.documentView = content
+        window.contentView = guideScrollView
 
         addLabel("Set up Tether in this VM", to: content, frame: NSRect(x: 28, y: 627, width: 830, height: 33),
                  font: .boldSystemFont(ofSize: 24))
@@ -188,15 +200,54 @@ final class TetherGuestInstaller: NSObject, NSApplicationDelegate, WKScriptMessa
                                font: .systemFont(ofSize: 12), color: .secondaryLabelColor)
 
         refresh()
+        fitGuideToWindowWidth()
+        // AppKit's unflipped document views start at the bottom; show the title and first step first.
+        guideScrollView.contentView.scroll(to: NSPoint(x: 0, y: max(0, Self.guideSize.height - guideScrollView.documentVisibleRect.height)))
+        guideScrollView.reflectScrolledClipView(guideScrollView.contentView)
         refreshTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.refresh() }
+        NotificationCenter.default.addObserver(self, selector: #selector(screenConfigurationChanged),
+                                               name: NSApplication.didChangeScreenParametersNotification, object: nil)
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        NotificationCenter.default.removeObserver(self)
         refreshTimer?.invalidate()
         readSource?.cancel()
         if terminalFD >= 0 { Darwin.close(terminalFD) }
+    }
+
+    func windowDidResize(_ notification: Notification) {
+        fitGuideToWindowWidth()
+    }
+
+    @objc private func screenConfigurationChanged() {
+        sizeWindowToFitScreen()
+        fitGuideToWindowWidth()
+    }
+
+    private func sizeWindowToFitScreen() {
+        guard let screen = window.screen ?? NSScreen.main else { return }
+        let visible = screen.visibleFrame.insetBy(dx: 12, dy: 12)
+        window.minSize = NSSize(width: min(520, visible.width), height: min(360, visible.height))
+        let maximumContentSize = window.contentRect(forFrameRect: visible).size
+        let size = NSSize(width: min(Self.guideSize.width, maximumContentSize.width),
+                          height: min(Self.guideSize.height, maximumContentSize.height))
+        window.setContentSize(size)
+        var frame = window.frame
+        frame.origin.x = min(max(frame.minX, visible.minX), visible.maxX - frame.width)
+        frame.origin.y = min(max(frame.minY, visible.minY), visible.maxY - frame.height)
+        window.setFrameOrigin(frame.origin)
+    }
+
+    private func fitGuideToWindowWidth() {
+        guard guideScrollView != nil else { return }
+        let width = guideScrollView.contentSize.width
+        let magnification = min(1, max(guideScrollView.minMagnification, width / Self.guideSize.width))
+        if abs(guideScrollView.magnification - magnification) > 0.001 {
+            guideScrollView.magnification = magnification
+        }
     }
 
     @objc private func selectStep(_ sender: NSButton) {

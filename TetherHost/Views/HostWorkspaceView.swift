@@ -571,7 +571,7 @@ private struct VMMonitorView: View {
                 if model.providerSetup.provider == .builtIn,
                    manager.isRunning, let vm = manager.virtualMachine {
                     NativeVMDisplay(virtualMachine: vm)
-                        .aspectRatio(1.6, contentMode: .fit)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     VStack(spacing: 12) {
                         Image(systemName: model.providerSetup.provider == .utm
