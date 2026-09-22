@@ -37,7 +37,7 @@ private enum SetupStep: Int, CaseIterable {
         case .tailscale:
             "If macOS Installer or a sign-in page opens, complete it inside this VM. Return here and press Return in the console when asked."
         case .hermesInstall:
-            "The download and installation appear in the console below. Existing Hermes data is preserved."
+            "The console shows installation output. An optional Chromium download can be quiet for up to 10 minutes; existing Hermes data is preserved."
         case .hermesConfigure:
             "Hermes may open a browser for model sign-in and System Settings for permissions. Follow the prompts in this VM."
         case .verify:

@@ -130,6 +130,7 @@ if [ ! -x "$HERMES_BIN" ] || [ ! -x "$PYTHON_BIN" ]; then
     ACTUAL_DIGEST="$(shasum -a 256 "$TETHER_GUEST_STATE/hermes-install.sh" | awk '{print $1}')"
     [ "$ACTUAL_DIGEST" = "$INSTALLER_DIGEST" ] || fail 'The Hermes installer checksum did not match.'
     if [ ! -f "$TETHER_GUEST_STATE/hermes-installed" ]; then
+        printf 'Hermes may spend up to 10 minutes downloading its optional Chromium browser; the upstream installer is quiet during that step.\n'
         /bin/bash "$TETHER_GUEST_STATE/hermes-install.sh" --skip-setup --commit "$HERMES_REVISION"
         touch "$TETHER_GUEST_STATE/hermes-installed"
     fi
@@ -137,7 +138,9 @@ fi
 [ -x "$HERMES_BIN" ] && [ -x "$PYTHON_BIN" ] || fail 'Hermes is incomplete. Repair it inside this VM, then run setup again.'
 
 stage '3 of 5 — Installing Hermes API support'
-uv pip install --python "$PYTHON_BIN" -e "$HOME/.hermes/hermes-agent[messaging]"
+HERMES_UV="$HOME/.hermes/bin/uv"
+[ -x "$HERMES_UV" ] || fail 'Hermes managed uv is missing. Repair the Hermes installation in this VM, then retry.'
+"$HERMES_UV" pip install --python "$PYTHON_BIN" -e "$HOME/.hermes/hermes-agent[messaging]"
 complete hermes-installed 'Hermes installation'
 exit 0
 fi
