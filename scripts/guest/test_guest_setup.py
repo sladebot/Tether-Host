@@ -6,7 +6,7 @@ import sys
 import tempfile
 import unittest
 import urllib.error
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 sys.dont_write_bytecode = True
 
@@ -16,6 +16,39 @@ guest = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(guest)
 
 class GuestSetupTests(unittest.TestCase):
+    def test_computer_use_verification_requires_live_grant_permissions_and_health(self):
+        permissions = {'accessibility': True, 'screen_recording': True}
+        checks = {'checks': [{'name': name, 'status': 'pass'} for name in
+                             ('bundle_identity', 'tcc_accessibility', 'tcc_screen_recording', 'ax_capability')]}
+        grant = Mock(returncode=0)
+        with patch.object(guest.subprocess, 'run', side_effect=[grant, Mock(returncode=0, stdout=json.dumps(permissions)),
+                                                               Mock(returncode=1, stdout=json.dumps(checks))]) as run:
+            guest.verify_computer_use()
+        self.assertEqual(run.call_args_list[0].args[0][-3:], ['computer-use', 'permissions', 'grant'])
+
+    def test_computer_use_verification_rejects_unverified_capture_and_missing_grants(self):
+        with patch.object(guest.subprocess, 'run', return_value=Mock(returncode=1)):
+            with self.assertRaisesRegex(guest.SetupFailure, 'direct capture'):
+                guest.verify_computer_use()
+        with patch.object(guest.subprocess, 'run', side_effect=[Mock(returncode=0),
+                Mock(returncode=0, stdout=json.dumps({'accessibility': True, 'screen_recording': False}))]):
+            with self.assertRaisesRegex(guest.SetupFailure, 'Screen & System Audio Recording'):
+                guest.verify_computer_use()
+
+    def test_computer_use_verification_rejects_missing_required_health_check(self):
+        permissions = {'accessibility': True, 'screen_recording': True}
+        report = {'checks': [{'name': 'bundle_identity', 'status': 'pass'}]}
+        with patch.object(guest.subprocess, 'run', side_effect=[Mock(returncode=0),
+                Mock(returncode=0, stdout=json.dumps(permissions)), Mock(returncode=1, stdout=json.dumps(report))]):
+            with self.assertRaisesRegex(guest.SetupFailure, 'ax_capability'):
+                guest.verify_computer_use()
+
+    def test_guest_shell_installs_hermes_command_and_uses_prompting_permission_probe(self):
+        script = (module_path.parent / 'Set up Tether Guest.command').read_text()
+        self.assertIn('command_path="$command_directory/hermes"', script)
+        self.assertIn('guest_setup.py" verify-computer-use', script)
+        self.assertNotIn('"$HERMES_BIN" computer-use doctor', script)
+
     def test_private_write_atomic_permissions_and_symlink_refusal(self):
         with tempfile.TemporaryDirectory() as folder:
             target = Path(folder) / 'token.json'

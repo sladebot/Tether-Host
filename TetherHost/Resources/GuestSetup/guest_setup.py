@@ -18,6 +18,7 @@ class SetupFailure(Exception):
 
 STATE = Path.home() / 'Library/Application Support/Tether Host for Mac/Guest Setup'
 HERMES = Path.home() / '.hermes'
+HERMES_BIN = HERMES / 'hermes-agent/venv/bin/hermes'
 
 
 def private_write(path, text):
@@ -177,6 +178,51 @@ def verify_api(endpoint, token):
     validate_capabilities(data)
 
 
+def json_command(arguments, label, timeout=90):
+    try:
+        result = subprocess.run([str(HERMES_BIN), *arguments], text=True,
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                timeout=timeout, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        raise SetupFailure(label + ' could not be completed.')
+    try:
+        payload = json.loads(result.stdout)
+    except (TypeError, ValueError):
+        raise SetupFailure(label + ' returned an unreadable result.')
+    if not isinstance(payload, dict):
+        raise SetupFailure(label + ' returned an unreadable result.')
+    return result.returncode, payload
+
+
+def verify_computer_use():
+    try:
+        grant = subprocess.run([str(HERMES_BIN), 'computer-use', 'permissions', 'grant'],
+                               timeout=180, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        raise SetupFailure('CuaDriver permission and direct-capture verification could not run.')
+    if grant.returncode != 0:
+        raise SetupFailure('CuaDriver could not verify Accessibility, Screen Recording, and direct capture. Complete both guest permissions, then retry.')
+
+    _, permissions = json_command(
+        ['computer-use', 'permissions', 'status', '--json'],
+        'CuaDriver permission status')
+    if permissions.get('accessibility') is not True:
+        raise SetupFailure('Enable CuaDriver in guest Accessibility, then retry.')
+    if permissions.get('screen_recording') is not True:
+        raise SetupFailure('Enable CuaDriver in guest Screen & System Audio Recording, then retry.')
+
+    required = {'bundle_identity', 'tcc_accessibility', 'tcc_screen_recording', 'ax_capability'}
+    # The prompt-capable direct-capture probe above is authoritative. The
+    # read-only health report intentionally skips that probe, so inspect its
+    # individual identity/TCC/AX checks instead of its aggregate exit code.
+    _, report = json_command(['computer-use', 'doctor', '--json'], 'CuaDriver health check')
+    checks = {item.get('name'): item.get('status') for item in report.get('checks', [])
+              if isinstance(item, dict)}
+    failed = sorted(check for check in required if checks.get(check) != 'pass')
+    if failed:
+        raise SetupFailure('CuaDriver did not pass: ' + ', '.join(failed) + '.')
+
+
 def test_model(endpoint, token):
     # Persist admission identity BEFORE sending; retries cannot duplicate an ambiguous run.
     path = STATE / 'verification-run.json'
@@ -231,6 +277,9 @@ def main(action):
             raise SetupFailure('Hermes API key is missing. Re-run the Configure Hermes step.')
         verify_loopback(token)
         return
+    if action == 'verify-computer-use':
+        verify_computer_use()
+        return
     status = json.loads((STATE / 'tailscale-status.json').read_text())
     endpoint = tailnet_endpoint(status)
     if action == 'tailscale':
@@ -243,7 +292,7 @@ def main(action):
     token = environment_values((HERMES / '.env').read_text()).get('API_SERVER_KEY')
     if not token:
         raise SetupFailure('Hermes API key is missing. Re-run the Configure Hermes step.')
-    subprocess.run([str(HERMES / 'hermes-agent/venv/bin/hermes'), 'computer-use', 'doctor'], check=True, timeout=90)
+    verify_computer_use()
     validate_serve(json.loads((STATE / 'serve-after.json').read_text()), endpoint)
     verify_api(endpoint, token)
     status, tools = request(endpoint, '/v1/toolsets', token)

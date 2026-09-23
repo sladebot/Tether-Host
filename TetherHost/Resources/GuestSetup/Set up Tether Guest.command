@@ -42,6 +42,19 @@ check_tailnet() {
 tailscale_cli() {
     /usr/bin/env TAILSCALE_BE_CLI=1 "$TAILSCALE_BIN" "$@"
 }
+install_hermes_command() {
+    local command_directory="$HOME/.local/bin"
+    local command_path="$command_directory/hermes"
+    local shell_profile="$HOME/.zprofile"
+    /bin/mkdir -p "$command_directory"
+    if [ -e "$command_path" ] && [ ! -L "$command_path" ]; then
+        fail 'A different ~/.local/bin/hermes file already exists. Move it aside, then retry.'
+    fi
+    /bin/ln -sfn "$HERMES_BIN" "$command_path"
+    if ! /usr/bin/grep -Fq '# Tether Hermes command' "$shell_profile" 2>/dev/null; then
+        printf '\n# Tether Hermes command\nexport PATH="$HOME/.local/bin:$PATH"\n' >> "$shell_profile"
+    fi
+}
 complete() {
     printf '%s\n' "Completed: $2" > "$TETHER_GUEST_STATE/status.txt"
     /usr/bin/touch "$TETHER_GUEST_STATE/$1.ready"
@@ -143,6 +156,7 @@ if [ ! -x "$HERMES_BIN" ] || [ ! -x "$PYTHON_BIN" ]; then
     fi
 fi
 [ -x "$HERMES_BIN" ] && [ -x "$PYTHON_BIN" ] || fail 'Hermes is incomplete. Repair it inside this VM, then run setup again.'
+install_hermes_command
 
 stage '3 of 6 — Installing Hermes API support'
 HERMES_UV="$HOME/.hermes/bin/uv"
@@ -156,6 +170,7 @@ fi
 HERMES_BIN="$HOME/.hermes/hermes-agent/venv/bin/hermes"
 PYTHON_BIN="$HOME/.hermes/hermes-agent/venv/bin/python"
 [ -x "$HERMES_BIN" ] && [ -x "$PYTHON_BIN" ] || fail 'Hermes is missing or incomplete. Re-run its installation step.'
+install_hermes_command
 
 if [ "$ACTION" = hermes-configure ]; then
 stage '4 of 6 — Signing in to Hermes'
@@ -176,23 +191,22 @@ if [ "$ACTION" = computer-use ]; then
 stage '5 of 6 — Installing Hermes computer use inside this VM'
 printf 'macOS needs two separate CuaDriver permissions: Accessibility and Screen & System Audio Recording. This guide will open each setting in turn.\n'
 "$HERMES_BIN" computer-use install
-stage '5 of 6 — Checking guest Accessibility and Screen Recording permissions'
-while ! "$HERMES_BIN" computer-use doctor; do
+stage '5 of 6 — Requesting and testing guest computer-use permissions'
+if ! "$PYTHON_BIN" "$SCRIPT_DIRECTORY/guest_setup.py" verify-computer-use; then
     stage '5 of 6 — Allow CuaDriver in guest Accessibility'
     open 'x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility' || open -a 'System Settings'
     wait_for_user 'In this VM, open Privacy & Security > Accessibility and enable CuaDriver. If it is absent, use + to add /Applications/CuaDriver.app. Return here after granting access.'
-    if "$HERMES_BIN" computer-use doctor; then break; fi
     stage '5 of 6 — Allow CuaDriver in guest Screen Recording'
     open 'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture' || open -a 'System Settings'
     wait_for_user 'In this VM, open Privacy & Security > Screen & System Audio Recording and enable CuaDriver. If it is absent, use + to add /Applications/CuaDriver.app. Restart the driver if macOS asks, then return here.'
-    stage '5 of 6 — Rechecking both guest permissions'
-done
+    stage '5 of 6 — Rechecking Accessibility, Screen Recording, and direct capture'
+    "$PYTHON_BIN" "$SCRIPT_DIRECTORY/guest_setup.py" verify-computer-use || fail 'CuaDriver still cannot capture and control this VM. Recheck both guest permissions, then retry.'
+fi
 complete computer-use 'Hermes computer use and permissions'
 exit 0
 fi
 
 [ -f "$TETHER_GUEST_STATE/computer-use.ready" ] || fail 'Complete the Hermes computer-use step in this VM first.'
-"$HERMES_BIN" computer-use doctor || fail 'Hermes computer use is not ready in this VM. Re-run its step and complete the guest permissions.'
 TAILSCALE_BIN='/Applications/Tailscale.app/Contents/MacOS/Tailscale'
 [ -x "$TAILSCALE_BIN" ] || fail 'Tailscale is missing from this VM. Re-run its step.'
 tailscale_cli status --json > "$TETHER_GUEST_STATE/tailscale-status.json" || fail 'Reconnect Tailscale inside this VM.'
