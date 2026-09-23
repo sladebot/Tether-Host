@@ -7,8 +7,11 @@ verify the assistant, and connect an iPhone. Provider choices, existing VM
 management, and manual connection entry are available in contextual details.
 The running VM stays visible beside setup instructions. Health and diagnostics
 are secondary tools.
-After iPhone setup is confirmed, a running built-in VM uses the full workspace.
-The setup panel collapses automatically and can be reopened from the VM toolbar.
+After the VM desktop, private network, and assistant connection are currently
+verified and iPhone setup is confirmed, the built-in VM uses the full workspace.
+Starting the VM alone keeps setup visible. A saved phone confirmation does not
+replace those live checks. The panel can also be closed or reopened manually
+from the VM toolbar at any stage while the VM is running.
 Opening the VM from the completion screen also closes the setup panel; stopping
 the VM restores setup and recovery controls.
 
@@ -45,9 +48,18 @@ that window. **Desktop is ready — Continue** returns to the guide without
 stopping the VM, and **Show VM** reopens it for guest setup.
 The IPSW must not require a newer macOS host; the app rejects a macOS 27 IPSW
 on a macOS 26 host before creating a disk. Apple's installer also reported a
-required host software update for that combination in local testing. On a
-macOS 26.2 host, setup can download Apple's macOS 26.2 IPSW in-app and verify
-its pinned SHA-256 digest before installation.
+required host software update for that combination in local testing.
+**Download macOS** is available throughout built-in VM creation on supported Macs.
+The first setup step includes a macOS version picker. It defaults to the newest
+available image matching the host release and not exceeding its full version.
+Users can choose an older available release instead (macOS 14 or newer). Images
+newer than the host are excluded by Tether's conservative selection policy. Historical versions are discovered
+through ipsw.me metadata; image downloads and redirects are restricted to Apple HTTPS
+servers. Published SHA-256 digests are checked when available, and the downloaded
+image's compatibility, version, and build are verified before caching. Apple's current
+image discovery and the pinned 26.2 image provide fallback candidates. If discovery
+fails or no matching image exists, setup explains the issue and retains manual IPSW
+selection. Downloads need about 65 GB free for the image and a fresh VM.
 The UTM path requires a compatible installation in `/Applications/UTM.app`.
 
 ## Install the latest preview

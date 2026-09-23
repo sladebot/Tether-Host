@@ -122,8 +122,26 @@ private struct NativeVMSetupView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             SetupPhaseBox(number: 1, title: "Create a new macOS VM", symbol: "internaldrive") {
-                Text("Apple Virtualization needs a macOS restore image (IPSW) to install a new guest; this is not a UTM-specific file. Choose a compatible image you already have or download one from Apple. Tether Host then stores and opens the VM itself, without UTM.")
+                Text("Choose a macOS restore image on this Mac or download one from Apple. Allow about 65 GB of free space for the image and VM.")
                     .foregroundStyle(.secondary)
+                if !manager.downloadImageOptions.isEmpty {
+                    Picker("macOS version", selection: $manager.selectedDownloadVersion) {
+                        ForEach(manager.downloadImageOptions) { option in
+                            Text(option.title + (option.id == manager.recommendedDownloadVersion
+                                                 ? " — Recommended" : ""))
+                                .tag(option.id)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .frame(maxWidth: 310, alignment: .leading)
+                } else if manager.isLoadingDownloadImageOptions {
+                    ProgressView("Finding macOS versions…")
+                        .controlSize(.small)
+                } else {
+                    Button("Find macOS versions") {
+                        Task { await manager.loadDownloadImageOptions() }
+                    }
+                }
                 HStack {
                     Button("Choose macOS IPSW…") { manager.chooseIPSW() }
                     Text(manager.imageDescription)
@@ -131,20 +149,20 @@ private struct NativeVMSetupView: View {
                         .textSelection(.enabled)
                 }
                 if manager.hasCachedHostImage {
-                    Text("A macOS 26.2 image already exists on this Mac. Reuse it for another VM?")
+                    Text("A downloaded macOS image is available on this Mac.")
                         .font(.callout)
                     HStack {
                         Button("Reuse image") { Task { await manager.useCachedHostImage() } }
                         Button("Show in Finder") { manager.revealCachedHostImageInFinder() }
-                        if NativeVMManager.canDownloadHostImage {
-                            Button("Download again") { Task { await manager.downloadHostImage() } }
-                        }
                     }
                     .disabled(manager.isBusy)
-                } else if NativeVMManager.canDownloadHostImage {
-                    Button("Download macOS 26.2 IPSW from Apple (18 GB)") {
+                }
+                if NativeVMManager.canDownloadHostImage {
+                    Button("Download macOS") {
                         Task { await manager.downloadHostImage() }
-                    }.disabled(manager.isBusy)
+                    }
+                    .disabled(manager.isBusy || manager.downloadImageOptions.isEmpty
+                              || manager.isLoadingDownloadImageOptions)
                 }
                 if manager.imageURL != nil {
                     Button("Show selected image in Finder") { manager.revealSelectedImageInFinder() }
@@ -252,6 +270,7 @@ private struct NativeVMSetupView: View {
                 .interactiveDismissDisabled(manager.isBusy)
             }
         }
+        .task { await manager.loadDownloadImageOptions() }
     }
 }
 

@@ -11,6 +11,8 @@ enum NativeVMError: LocalizedError {
     case newerGuestRequiresHostUpdate(guest: Int, host: Int)
     case insufficientSpace
     case insufficientDownloadSpace
+    case noCompatibleDownload(host: String)
+    case imageCatalogUnavailable
     case missingVM
     case invalidVM
     case anotherVMRunning
@@ -24,9 +26,11 @@ enum NativeVMError: LocalizedError {
         switch self {
         case .unsupportedImage: "This macOS IPSW is not compatible with this Mac's virtualization hardware. Choose another IPSW."
         case .newerGuestRequiresHostUpdate(let guest, let host):
-            "This is a macOS \(guest) IPSW, but this Mac runs macOS \(host). Apple's installer requires a host software update. Choose a macOS \(host) IPSW or update this Mac first."
+            "This is a macOS \(guest) IPSW, but this Mac runs macOS \(host). Choose a macOS \(host) IPSW or update this Mac first."
         case .insufficientSpace: "At least 45 GB of free disk space is needed to install a fresh macOS VM."
         case .insufficientDownloadSpace: "At least 65 GB of free disk space is needed to download macOS and install a fresh VM."
+        case .noCompatibleDownload(let host): "No downloadable macOS IPSW was found for macOS \(host). Update this Mac or choose a compatible IPSW manually."
+        case .imageCatalogUnavailable: "Could not check available macOS images. Check your internet connection, try again, or choose a compatible IPSW manually."
         case .missingVM: "The selected Tether VM is missing. Refresh the VM list."
         case .invalidVM: "The Tether VM is incomplete or damaged. Create a new VM from an IPSW."
         case .anotherVMRunning: "Another Tether VM is already running. Shut it down before starting this one."
@@ -100,6 +104,13 @@ private final class RestoreImageDownload: NSObject, URLSessionDownloadDelegate, 
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask,
+                    willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest,
+                    completionHandler: @escaping (URLRequest?) -> Void) {
+        completionHandler(RestoreImagePolicy.isAppleImageURL(request.url) ? request : nil)
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask,
                     didCompleteWithError error: Error?) {
         defer { session.finishTasksAndInvalidate(); self.session = nil }
         guard let continuation else { return }
@@ -114,15 +125,52 @@ private final class RestoreImageDownload: NSObject, URLSessionDownloadDelegate, 
     }
 }
 
+private struct CachedRestoreImage: Codable {
+    let filename: String
+    let sha256: String
+    let majorVersion: Int
+    let minorVersion: Int
+    let buildVersion: String
+}
+
+private struct RemoteRestoreCandidate {
+    let url: URL
+    let version: OperatingSystemVersion
+    let build: String
+    let expectedSHA256: String?
+
+    var versionLabel: String {
+        version.patchVersion == 0 ? "\(version.majorVersion).\(version.minorVersion)" :
+            "\(version.majorVersion).\(version.minorVersion).\(version.patchVersion)"
+    }
+}
+
+struct RestoreImageDownloadOption: Identifiable, Hashable {
+    let id: String
+    let title: String
+    let versionLabel: String
+}
+
+private struct IPSWCatalog: Decodable {
+    struct Firmware: Decodable {
+        let identifier: String
+        let version: String
+        let buildid: String
+        let url: URL
+        let sha256sum: String?
+    }
+    let firmwares: [Firmware]
+}
+
 @MainActor
 final class NativeVMManager: ObservableObject {
     private static let macOS262URL = URL(string: "https://updates.cdn-apple.com/2025FallFCS/fullrestores/093-37399/E144C918-CF99-4BBC-B1D0-3E739B9A3F2D/UniversalMac_26.2_25C56_Restore.ipsw")!
     private static let macOS262SHA256 = "bc7c67b2a2cc4ac8c9da0c2b149b9f31e153cd542ce387e6fb8620e41b5278ef"
     private static let selectedImageKey = "restoreImage.lastSelectedPath"
+    private static let downloadedImageKey = "restoreImage.lastDownloadedFilename"
 
     static var canDownloadHostImage: Bool {
-        let version = ProcessInfo.processInfo.operatingSystemVersion
-        return version.majorVersion == 26 && version.minorVersion == 2
+        true // Keep the action visible so unsupported hosts receive an explanation.
     }
 
     @Published private(set) var imageURL: URL?
@@ -131,6 +179,10 @@ final class NativeVMManager: ObservableObject {
     @Published private(set) var isBusy = false
     @Published private(set) var installationProgress: Double?
     @Published private(set) var downloadProgress: DownloadProgressEstimate?
+    @Published private(set) var downloadImageOptions: [RestoreImageDownloadOption] = []
+    @Published var selectedDownloadVersion = ""
+    @Published private(set) var recommendedDownloadVersion = ""
+    @Published private(set) var isLoadingDownloadImageOptions = false
     @Published private(set) var isRunning = false
     @Published private(set) var shutdownRequested = false
     @Published private(set) var virtualMachine: VZVirtualMachine?
@@ -139,6 +191,7 @@ final class NativeVMManager: ObservableObject {
 
     private var restoreImage: VZMacOSRestoreImage?
     private var activeDownloadID: UUID?
+    private var downloadCandidates: [RemoteRestoreCandidate] = []
     private var runningID: VirtualMachineID?
     var runningVMID: VirtualMachineID? { isRunning ? runningID : nil }
     private let rootURL: URL
@@ -162,9 +215,24 @@ final class NativeVMManager: ObservableObject {
         }
     }
 
-    var cachedHostImageURL: URL {
+    private var restoreCacheDirectory: URL {
         rootURL.deletingLastPathComponent()
-            .appendingPathComponent("Restore Images/UniversalMac_26.2_25C56_Restore.ipsw")
+            .appendingPathComponent("Restore Images", isDirectory: true)
+    }
+
+    private var pinnedHostImageURL: URL {
+        restoreCacheDirectory.appendingPathComponent("UniversalMac_26.2_25C56_Restore.ipsw")
+    }
+
+    var cachedHostImageURL: URL {
+        if let filename = preferences.string(forKey: Self.downloadedImageKey),
+           filename == URL(fileURLWithPath: filename).lastPathComponent,
+           filename.hasSuffix(".ipsw") {
+            let url = restoreCacheDirectory.appendingPathComponent(filename)
+            if FileManager.default.fileExists(atPath: url.path),
+               FileManager.default.fileExists(atPath: cacheRecordURL(for: url).path) { return url }
+        }
+        return pinnedHostImageURL
     }
 
     var hasCachedHostImage: Bool {
@@ -186,15 +254,29 @@ final class NativeVMManager: ObservableObject {
         isBusy = true
         status = "Verifying the saved macOS image…"
         do {
-            guard try await Self.sha256(of: cachedHostImageURL) == Self.macOS262SHA256 else {
+            let cached = cachedHostImageURL
+            let expectedDigest: String
+            if cached == pinnedHostImageURL {
+                expectedDigest = Self.macOS262SHA256
+            } else {
+                let record = try JSONDecoder().decode(CachedRestoreImage.self,
+                    from: Data(contentsOf: cacheRecordURL(for: cached)))
+                guard record.filename == cached.lastPathComponent else { throw NativeVMError.unsupportedImage }
+                expectedDigest = record.sha256
+            }
+            guard try await Self.sha256(of: cached) == expectedDigest else {
                 throw NativeVMError.unsupportedImage
             }
             isBusy = false
-            await inspect(cachedHostImageURL)
+            await inspect(cached)
         } catch {
             isBusy = false
             status = "Saved image could not be verified. Choose Download again to replace it. \(error.localizedDescription)"
         }
+    }
+
+    private func cacheRecordURL(for image: URL) -> URL {
+        image.appendingPathExtension("json")
     }
 
     func isDesktopReady(for id: VirtualMachineID) -> Bool {
@@ -252,7 +334,10 @@ final class NativeVMManager: ObservableObject {
             imageURL = url
             preferences.set(url.path, forKey: Self.selectedImageKey)
             let version = image.operatingSystemVersion
-            imageDescription = "macOS \(version.majorVersion).\(version.minorVersion) (\(image.buildVersion)) — compatible with this Mac"
+            let versionLabel = version.patchVersion == 0 ?
+                "\(version.majorVersion).\(version.minorVersion)" :
+                "\(version.majorVersion).\(version.minorVersion).\(version.patchVersion)"
+            imageDescription = "macOS \(versionLabel) (\(image.buildVersion)) — compatible with this Mac"
             status = "Ready to create a new, separate Tether Host VM."
         } catch {
             restoreImage = nil
@@ -265,17 +350,118 @@ final class NativeVMManager: ObservableObject {
         }
     }
 
+    private static func discoverDownloadCandidates() async throws -> [RemoteRestoreCandidate] {
+        let host = ProcessInfo.processInfo.operatingSystemVersion
+        var candidates: [RemoteRestoreCandidate] = []
+        var catalogAvailable = false
+
+        if let latest = try? await VZMacOSRestoreImage.latestSupported,
+           latest.isSupported, latest.mostFeaturefulSupportedConfiguration != nil,
+           RestoreImagePolicy.isEligible(latest.operatingSystemVersion, for: host),
+           RestoreImagePolicy.isAppleImageURL(latest.url) {
+            candidates.append(RemoteRestoreCandidate(url: latest.url,
+                version: latest.operatingSystemVersion, build: latest.buildVersion, expectedSHA256: nil))
+        }
+
+        // Apple publishes only its current IPSW in the public feed. The VM firmware
+        // history is discovery metadata; image bytes must still come from Apple.
+        let catalogURL = URL(string: "https://api.ipsw.me/v4/device/VirtualMac2,1?type=ipsw")!
+        if let (data, response) = try? await URLSession.shared.data(from: catalogURL),
+           (response as? HTTPURLResponse)?.statusCode == 200, data.count <= 10_000_000,
+           let catalog = try? JSONDecoder().decode(IPSWCatalog.self, from: data) {
+            catalogAvailable = true
+            for firmware in catalog.firmwares {
+                guard firmware.identifier == "VirtualMac2,1",
+                      let version = RestoreImagePolicy.parseVersion(firmware.version),
+                      RestoreImagePolicy.isEligible(version, for: host),
+                      RestoreImagePolicy.isAppleImageURL(firmware.url), !firmware.buildid.isEmpty else { continue }
+                let digest = firmware.url == macOS262URL ? macOS262SHA256 : firmware.sha256sum
+                guard let digest, digest.count == 64,
+                      digest.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }) else { continue }
+                candidates.append(RemoteRestoreCandidate(url: firmware.url, version: version,
+                    build: firmware.buildid, expectedSHA256: digest))
+            }
+        }
+
+        if RestoreImagePolicy.isEligible(OperatingSystemVersion(majorVersion: 26, minorVersion: 2, patchVersion: 0), for: host) {
+            candidates.append(RemoteRestoreCandidate(url: macOS262URL,
+                version: OperatingSystemVersion(majorVersion: 26, minorVersion: 2, patchVersion: 0),
+                build: "25C56", expectedSHA256: macOS262SHA256))
+        }
+        candidates.sort { left, right in
+            let leftVersion = (left.version.majorVersion, left.version.minorVersion, left.version.patchVersion)
+            let rightVersion = (right.version.majorVersion, right.version.minorVersion, right.version.patchVersion)
+            return leftVersion == rightVersion ?
+                (left.expectedSHA256 != nil && right.expectedSHA256 == nil) :
+                (leftVersion > rightVersion)
+        }
+        var seenVersions = Set<String>()
+        let distinct = candidates.filter { seenVersions.insert($0.versionLabel).inserted }
+        guard !distinct.isEmpty else {
+            if !catalogAvailable { throw NativeVMError.imageCatalogUnavailable }
+            throw NativeVMError.noCompatibleDownload(host: "\(host.majorVersion).\(host.minorVersion)")
+        }
+        return distinct
+    }
+
+    func loadDownloadImageOptions() async {
+        guard !isBusy, !isLoadingDownloadImageOptions, downloadCandidates.isEmpty else { return }
+        isLoadingDownloadImageOptions = true
+        status = "Finding macOS images…"
+        defer { isLoadingDownloadImageOptions = false }
+        do {
+            let candidates = try await Self.discoverDownloadCandidates()
+            downloadCandidates = candidates
+            downloadImageOptions = candidates.map {
+                RestoreImageDownloadOption(id: $0.versionLabel,
+                    title: "macOS \($0.versionLabel)", versionLabel: $0.versionLabel)
+            }
+            let host = ProcessInfo.processInfo.operatingSystemVersion
+            let recommended = RestoreImagePolicy.preferredVersion(from: candidates.map(\.version), for: host)
+            recommendedDownloadVersion = candidates.first(where: { candidate in
+                guard let recommended else { return false }
+                return (candidate.version.majorVersion, candidate.version.minorVersion, candidate.version.patchVersion) ==
+                    (recommended.majorVersion, recommended.minorVersion, recommended.patchVersion)
+            })?.versionLabel ?? ""
+            let previous = RestoreImagePolicy.parseVersion(selectedDownloadVersion)
+            let selected = RestoreImagePolicy.preferredVersion(from: candidates.map(\.version),
+                for: host, retaining: previous)
+            selectedDownloadVersion = candidates.first(where: { candidate in
+                guard let selected else { return false }
+                return (candidate.version.majorVersion, candidate.version.minorVersion, candidate.version.patchVersion) ==
+                    (selected.majorVersion, selected.minorVersion, selected.patchVersion)
+            })?.versionLabel ?? ""
+            status = "Choose a macOS version, then download its IPSW from Apple."
+        } catch {
+            downloadCandidates = []
+            downloadImageOptions = []
+            recommendedDownloadVersion = ""
+            status = error.localizedDescription
+        }
+    }
+
     func downloadHostImage() async {
-        guard Self.canDownloadHostImage, !isBusy else { return }
+        guard !isBusy, !isLoadingDownloadImageOptions else { return }
+        if downloadCandidates.isEmpty { await loadDownloadImageOptions() }
+        guard !downloadCandidates.isEmpty else { return }
+        guard let candidate = downloadCandidates.first(where: { $0.versionLabel == selectedDownloadVersion }) else {
+            status = "Choose an available macOS version to download."
+            return
+        }
         isBusy = true
         downloadProgress = nil
         defer {
             activeDownloadID = nil
             downloadProgress = nil
         }
-        status = "Downloading macOS 26.2 from Apple's servers (about 18 GB)…"
-        let destination = cachedHostImageURL
         do {
+            guard RestoreImagePolicy.isAppleImageURL(candidate.url) else { throw NativeVMError.unsupportedImage }
+            let safeBuild = candidate.build.filter { $0.isASCII && ($0.isLetter || $0.isNumber) }
+            guard !safeBuild.isEmpty else { throw NativeVMError.unsupportedImage }
+            let destination = candidate.url == Self.macOS262URL ? pinnedHostImageURL :
+                restoreCacheDirectory.appendingPathComponent(
+                    "UniversalMac_\(candidate.versionLabel)_\(safeBuild)_Restore.ipsw")
+            status = "Downloading macOS \(candidate.versionLabel) from Apple's servers…"
             try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
             let available = try destination.deletingLastPathComponent()
                 .resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
@@ -296,26 +482,41 @@ final class NativeVMManager: ObservableObject {
                     )
                 }
             }
-            let (temporary, response) = try await downloader.run(from: Self.macOS262URL)
+            let (temporary, response) = try await downloader.run(from: candidate.url)
             activeDownloadID = nil
             guard (response as? HTTPURLResponse)?.statusCode == 200,
-                  response.url?.host == "updates.cdn-apple.com" else {
+                  RestoreImagePolicy.isAppleImageURL(response.url) else {
                 throw URLError(.badServerResponse)
             }
             downloadProgress = nil
             status = "Verifying the downloaded IPSW…"
             let digest = try await Self.sha256(of: temporary)
-            guard digest == Self.macOS262SHA256 else { throw NativeVMError.unsupportedImage }
+            if let expected = candidate.expectedSHA256 {
+                guard digest == expected else { throw NativeVMError.unsupportedImage }
+            }
+            let image = try await VZMacOSRestoreImage.image(from: temporary)
+            guard image.isSupported, image.mostFeaturefulSupportedConfiguration != nil,
+                  image.operatingSystemVersion.majorVersion == candidate.version.majorVersion,
+                  image.operatingSystemVersion.minorVersion == candidate.version.minorVersion,
+                  image.operatingSystemVersion.patchVersion == candidate.version.patchVersion,
+                  image.buildVersion == candidate.build else { throw NativeVMError.unsupportedImage }
             if FileManager.default.fileExists(atPath: destination.path) {
                 _ = try FileManager.default.replaceItemAt(destination, withItemAt: temporary)
             } else {
                 try FileManager.default.moveItem(at: temporary, to: destination)
             }
+            if destination != pinnedHostImageURL {
+                let record = CachedRestoreImage(filename: destination.lastPathComponent, sha256: digest,
+                    majorVersion: candidate.version.majorVersion,
+                    minorVersion: candidate.version.minorVersion, buildVersion: candidate.build)
+                try JSONEncoder().encode(record).write(to: cacheRecordURL(for: destination), options: .atomic)
+            }
+            preferences.set(destination.lastPathComponent, forKey: Self.downloadedImageKey)
             isBusy = false
             await inspect(destination)
         } catch {
             isBusy = false
-            status = "Could not download or verify macOS 26.2: \(error.localizedDescription)"
+            status = "Could not download or verify macOS: \(error.localizedDescription)"
         }
     }
 

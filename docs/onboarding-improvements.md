@@ -1,4 +1,32 @@
-# Focused onboarding — build 49
+# Focused onboarding
+
+## Build 51: complete setup gating and version-aware downloads
+
+Starting a VM alone no longer collapses setup. Automatic collapse requires the
+current VM desktop, private network, and assistant connection to be ready, plus
+confirmed phone setup. The sidebar toggle remains available, and a manual reopen
+survives subsequent verification updates. Native full screen remains explicit.
+
+The Mac design review tightened the VM toolbar and moved clipboard tools into its
+More menu. Narrow setup panes now show four readable steps in a two-column grid.
+Download macOS remains visible alongside manual IPSW selection and cached-image reuse.
+A simple macOS version picker appears in the first setup stage and creation dialog.
+It defaults to an available host-matching version and lets users choose older
+macOS releases (14 or newer), without offering an image newer than their host.
+The choice carries into the download; manual IPSW selection remains available.
+Apple-hosted binaries, published checksums when available, native compatibility, and
+exact image version/build are checked; cached images are verified before reuse.
+
+An isolated production-view fixture verified incomplete-live-checks visibility,
+auto-collapse after all checks complete, and manual reopen surviving verification
+changes. It did not start or stop a real VM. Version policy and URL-origin tests cover
+14/15/26/27; full guest installations on each host version remain untested.
+
+Validation: final native build, DMG integrity/signature checks, 60 core tests, and
+isolated app-model onboarding checks passed. A production-view fixture loaded the
+actual catalog, displayed macOS 26.2 as Recommended on this host, offered older
+14/15 releases, and retained a selected 15.6.1 when opening the creation dialog.
+No large restore image was downloaded or VM created during these checks.
 
 ## Build 50: VM workspace after setup
 

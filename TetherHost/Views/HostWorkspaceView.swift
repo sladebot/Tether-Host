@@ -72,6 +72,7 @@ struct HostWorkspaceView: View {
         }
         .onChange(of: model.setupDependencies) { _, _ in
             model.syncHostSleepAssertion()
+            collapseCompletedSetup()
         }
         .onChange(of: manager.isRunning) { _, running in
             model.syncHostSleepAssertion()
@@ -114,6 +115,7 @@ struct HostWorkspaceView: View {
 
     private func collapseCompletedSetup() {
         guard !autoCollapsedForCurrentRun, canShowVMMonitor,
+              model.setupDependencies.hermesReady,
               model.isPhoneSetupComplete else { return }
         showsSetupPanel = false
         autoCollapsedForCurrentRun = true
@@ -148,11 +150,24 @@ struct HostWorkspaceView: View {
                 Spacer()
             }
 
-            HStack(spacing: 3) {
-                dependencyButton(.vm, number: 1, title: "Prepare Mac")
-                dependencyButton(.tailscale, number: 2, title: "Set up VM")
-                dependencyButton(.hermes, number: 3, title: "Verify")
-                dependencyButton(.phone, number: 4, title: "iPhone")
+            if canShowVMMonitor {
+                VStack(spacing: 4) {
+                    HStack(spacing: 4) {
+                        dependencyButton(.vm, number: 1, title: "Prepare VM")
+                        dependencyButton(.tailscale, number: 2, title: "Guest setup")
+                    }
+                    HStack(spacing: 4) {
+                        dependencyButton(.hermes, number: 3, title: "Verify")
+                        dependencyButton(.phone, number: 4, title: "iPhone")
+                    }
+                }
+            } else {
+                HStack(spacing: 4) {
+                    dependencyButton(.vm, number: 1, title: "Prepare VM")
+                    dependencyButton(.tailscale, number: 2, title: "Guest setup")
+                    dependencyButton(.hermes, number: 3, title: "Verify")
+                    dependencyButton(.phone, number: 4, title: "iPhone")
+                }
             }
 
             HStack(spacing: 12) {
@@ -174,9 +189,6 @@ struct HostWorkspaceView: View {
     private func dependencyButton(
         _ dependency: HostSetupDependency, number: Int, title: String
     ) -> some View {
-        let visibleTitle = canShowVMMonitor
-            ? (dependency == .vm ? "Mac" : dependency == .tailscale ? "Guest" : title)
-            : title
         let completed = dependency == .phone
             ? model.isPhoneSetupComplete : model.setupDependencies.isCompleted(dependency)
         let section = HostWorkspaceSection(dependency)
@@ -186,10 +198,10 @@ struct HostWorkspaceView: View {
             HStack(spacing: 5) {
                 Image(systemName: completed ? "checkmark.circle.fill" : "\(number).circle")
                     .foregroundStyle(completed ? Color.accentColor : .secondary)
-                Text(visibleTitle).lineLimit(1)
+                Text(title).lineLimit(1)
             }
             .font(.caption.weight(model.workspaceSection == section ? .semibold : .regular))
-            .frame(maxWidth: .infinity)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 7)
             .padding(.vertical, 8)
             .background(model.workspaceSection == section ? Color.accentColor.opacity(0.12) : .clear,
@@ -292,13 +304,14 @@ struct HostWorkspaceView: View {
                         .disabled(manager.isRunning || manager.isBusy || manager.hasOtherHostCopy)
                 }
             } else {
-                Text("You'll need a compatible macOS installation image and enough free space for the VM. Setup can take a while; keep this Mac awake until it finishes.")
+                Text("Download a compatible macOS image or choose one already on this Mac. Allow about 65 GB of free space and keep Tether Host open during installation.")
                     .foregroundStyle(.secondary)
+                downloadVersionPicker
                 if manager.hasOtherHostCopy {
                     Text("Another copy of Tether Host is open. Quit that copy before creating a VM here.")
                         .font(.callout).foregroundStyle(.secondary)
                 }
-                Button("Get started") { model.showsCreateVM = true }
+                Button("Create a VM…") { model.showsCreateVM = true }
                     .buttonStyle(.borderedProminent)
                     .disabled(manager.isBusy || manager.isRunning || manager.hasOtherHostCopy)
             }
@@ -455,26 +468,42 @@ struct HostWorkspaceView: View {
             } else {
                 VStack(alignment: .leading, spacing: 12) {
                     Text("macOS installation image").font(.headline)
-                    Text("A new VM needs a compatible Apple macOS image and free space for macOS and apps. The available download is about 18 GB.")
+                    Text("Download a compatible macOS restore image or choose an IPSW on this Mac. Allow about 65 GB of free space for the image and VM.")
                         .font(.callout).foregroundStyle(.secondary)
+                    downloadVersionPicker
                     if manager.hasCachedHostImage {
-                        Label("A macOS 26.2 image already exists on this Mac. Reuse it for another VM?",
+                        Label("A downloaded macOS image is available on this Mac.",
                               systemImage: "checkmark.circle.fill")
-                            .font(.callout).foregroundStyle(.green)
+                            .font(.callout).foregroundStyle(.secondary)
                         HStack {
-                            Button("Reuse image") { Task { await manager.useCachedHostImage() } }
-                                .buttonStyle(.borderedProminent)
+                            if manager.imageURL == nil {
+                                Button("Reuse image") { Task { await manager.useCachedHostImage() } }
+                                    .buttonStyle(.borderedProminent)
+                            } else {
+                                Button("Reuse image") { Task { await manager.useCachedHostImage() } }
+                                    .buttonStyle(.bordered)
+                            }
                             Button("Show in Finder") { manager.revealCachedHostImageInFinder() }
-                            if NativeVMManager.canDownloadHostImage {
-                                Button("Download again") { Task { await manager.downloadHostImage() } }
+                        }
+                    }
+                    HStack(spacing: 12) {
+                        if NativeVMManager.canDownloadHostImage {
+                            if !manager.hasCachedHostImage && manager.imageURL == nil {
+                                Button("Download macOS") { Task { await manager.downloadHostImage() } }
+                                    .buttonStyle(.borderedProminent)
+                                    .disabled(manager.downloadImageOptions.isEmpty || manager.isLoadingDownloadImageOptions)
+                            } else {
+                                Button("Download macOS") { Task { await manager.downloadHostImage() } }
+                                    .buttonStyle(.bordered)
+                                    .disabled(manager.downloadImageOptions.isEmpty || manager.isLoadingDownloadImageOptions)
                             }
                         }
-                    } else if NativeVMManager.canDownloadHostImage && manager.imageURL == nil {
-                        Button("Download macOS 26.2") { Task { await manager.downloadHostImage() } }
-                            .buttonStyle(.borderedProminent)
+                        Button("Choose an IPSW…") { manager.chooseIPSW() }
                     }
-                    Button("Choose an existing IPSW…") { manager.chooseIPSW() }
-                    Text(manager.imageDescription).font(.callout).foregroundStyle(.secondary)
+                    Label(manager.imageDescription,
+                          systemImage: manager.imageURL == nil ? "doc" : "checkmark.circle.fill")
+                        .font(.callout).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                     if manager.imageURL != nil {
                         Button("Show selected image in Finder") { manager.revealSelectedImageInFinder() }
                             .font(.caption)
@@ -513,6 +542,31 @@ struct HostWorkspaceView: View {
         .padding(24)
         .frame(width: 520)
         .frame(minHeight: 340)
+    }
+
+    private var downloadVersionPicker: some View {
+        Group {
+            if !manager.downloadImageOptions.isEmpty {
+                Picker("macOS version", selection: $manager.selectedDownloadVersion) {
+                    ForEach(manager.downloadImageOptions) { option in
+                        Text(option.title + (option.id == manager.recommendedDownloadVersion
+                                             ? " — Recommended" : ""))
+                            .tag(option.id)
+                    }
+                }
+                .pickerStyle(.menu)
+                .frame(maxWidth: 310, alignment: .leading)
+            } else if manager.isLoadingDownloadImageOptions {
+                ProgressView("Finding macOS versions…")
+                    .controlSize(.small)
+            } else {
+                Button("Find macOS versions") {
+                    Task { await manager.loadDownloadImageOptions() }
+                }
+                .buttonStyle(.borderless)
+            }
+        }
+        .task { await manager.loadDownloadImageOptions() }
     }
 
     private func transferSize(_ bytes: Int64) -> String {
@@ -826,15 +880,15 @@ private struct VMMonitorView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(alignment: .center) {
+            HStack(alignment: .center, spacing: 8) {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("Virtual machine").font(.headline)
+                    Text("VM desktop").font(.headline)
                     Text(displayedVMName)
                         .font(.caption).foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
-                Spacer()
+                .frame(maxWidth: .infinity, alignment: .leading)
                 Button(action: toggleSetupPanel) {
                     Label(showsSetupPanel ? "Hide Setup" : "Show Setup", systemImage: "sidebar.left")
                 }
@@ -848,22 +902,20 @@ private struct VMMonitorView: View {
                     Divider()
                     Button("Health") { openSection(.overview) }
                     Button("Diagnostics") { openSection(.diagnostics) }
+                    if model.providerSetup.provider == .builtIn, manager.isRunning {
+                        Divider()
+                        Button("Send host text to VM") { sendHostClipboard() }
+                            .disabled(clipboardIsBusy)
+                        Button("Get VM text on host") { receiveGuestClipboard() }
+                            .disabled(clipboardIsBusy)
+                    }
                 } label: {
-                    Label("Details", systemImage: "ellipsis.circle")
+                    Label("More", systemImage: "ellipsis.circle")
                 }
                 .labelStyle(.iconOnly)
                 .menuStyle(.borderlessButton)
-                .help("Connection details, VMs, and diagnostics")
+                .help("Connection details and VM actions")
                 if model.providerSetup.provider == .builtIn, manager.isRunning {
-                    Menu {
-                        Button("Send host text to VM") { sendHostClipboard() }
-                        Button("Get VM text on host") { receiveGuestClipboard() }
-                    } label: {
-                        Label("Clipboard", systemImage: "doc.on.clipboard")
-                    }
-                    .labelStyle(.iconOnly)
-                    .disabled(clipboardIsBusy)
-                    .help("Transfer copied text only when you choose an action")
                     Button {
                         toggleFullScreen()
                     } label: {
@@ -875,10 +927,11 @@ private struct VMMonitorView: View {
                     .help(isFullScreen ? "Return to the setup workspace" : "Show the VM across the entire screen")
                 }
                 Label(isOn ? "On" : "Off", systemImage: "power")
-                    .font(.callout.weight(.semibold))
+                    .font(.caption.weight(.semibold))
                     .foregroundStyle(isOn ? .green : .secondary)
+                    .fixedSize()
             }
-            .padding(16)
+            .padding(12)
 
             ZStack {
                 Color.black
