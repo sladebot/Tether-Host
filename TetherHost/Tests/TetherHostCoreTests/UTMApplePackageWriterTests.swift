@@ -9,7 +9,10 @@ final class UTMApplePackageWriterTests: XCTestCase {
         let id = VirtualMachineID(rawValue: UUID())
         let native = root.appendingPathComponent(id.description)
         try FileManager.default.createDirectory(at: native, withIntermediateDirectories: true)
-        let manifest = NativeVirtualMachineManifest(id: id, name: "Tether Test", guestImageVersion: "26.2")
+        let manifest = NativeVirtualMachineManifest(
+            id: id, name: "Tether Test", guestImageVersion: "26.2",
+            resources: NativeVMResources(cpuCount: 6, memoryGiB: 12, diskGiB: 256)
+        )
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         try encoder.encode(manifest).write(to: native.appendingPathComponent("manifest.json"))
@@ -29,6 +32,8 @@ final class UTMApplePackageWriterTests: XCTestCase {
         XCTAssertEqual(config["Backend"] as? String, "Apple")
         XCTAssertEqual((config["Information"] as? [String: Any])?["UUID"] as? String, id.description)
         XCTAssertEqual(((config["System"] as? [String: Any])?["Boot"] as? [String: Any])?["OperatingSystem"] as? String, "macOS")
+        XCTAssertEqual((config["System"] as? [String: Any])?["CPUCount"] as? Int, 6)
+        XCTAssertEqual((config["System"] as? [String: Any])?["MemorySize"] as? Int, 12 * 1024)
         let drive = try XCTUnwrap((config["Drive"] as? [[String: Any]])?.first)
         let clonedDisk = package.appendingPathComponent("Data").appendingPathComponent(try XCTUnwrap(drive["ImageName"] as? String))
         XCTAssertEqual(try Data(contentsOf: clonedDisk), Data([11, 12, 13]))
@@ -44,5 +49,20 @@ final class UTMApplePackageWriterTests: XCTestCase {
             nativeBundle: native, guestSetupISO: guestISO,
             in: root.appendingPathComponent("UTM Virtual Machines")
         ))
+
+        let malformed = NativeVirtualMachineManifest(
+            id: id, guestImageVersion: "26.2",
+            resources: NativeVMResources(cpuCount: 6, memoryGiB: Int.max, diskGiB: 256)
+        )
+        try encoder.encode(malformed).write(to: native.appendingPathComponent("manifest.json"))
+        XCTAssertThrowsError(try UTMApplePackageWriter.createPackage(
+            nativeBundle: native, guestSetupISO: guestISO,
+            in: root.appendingPathComponent("Other UTM Virtual Machines")
+        )) { error in
+            guard let packageError = error as? UTMApplePackageError,
+                  case .invalidNativeVM = packageError else {
+                return XCTFail("Expected invalid native VM, got \(error)")
+            }
+        }
     }
 }

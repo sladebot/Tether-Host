@@ -11,6 +11,7 @@ enum NativeVMError: LocalizedError {
     case newerGuestRequiresHostUpdate(guest: Int, host: Int)
     case insufficientSpace
     case insufficientDownloadSpace
+    case invalidResources(String)
     case noCompatibleDownload(host: String)
     case imageCatalogUnavailable
     case missingVM
@@ -29,6 +30,7 @@ enum NativeVMError: LocalizedError {
             "This is a macOS \(guest) IPSW, but this Mac runs macOS \(host). Choose a macOS \(host) IPSW or update this Mac first."
         case .insufficientSpace: "At least 45 GB of free disk space is needed to install a fresh macOS VM."
         case .insufficientDownloadSpace: "At least 65 GB of free disk space is needed to download macOS and install a fresh VM."
+        case .invalidResources(let message): message
         case .noCompatibleDownload(let host): "No downloadable macOS IPSW was found for macOS \(host). Update this Mac or choose a compatible IPSW manually."
         case .imageCatalogUnavailable: "Could not check available macOS images. Check your internet connection, try again, or choose a compatible IPSW manually."
         case .missingVM: "The selected Tether VM is missing. Refresh the VM list."
@@ -188,6 +190,9 @@ final class NativeVMManager: ObservableObject {
     @Published private(set) var virtualMachine: VZVirtualMachine?
     @Published private(set) var desktopReadyVMID: VirtualMachineID?
     @Published var showsDisplay = false
+    @Published var creationCPUCount: Int
+    @Published var creationMemoryGiB: Int
+    @Published var creationDiskGiB: Int
 
     private var restoreImage: VZMacOSRestoreImage?
     private var activeDownloadID: UUID?
@@ -199,6 +204,10 @@ final class NativeVMManager: ObservableObject {
     private let preferences: UserDefaults
 
     init(preferences: UserDefaults = .standard) {
+        let defaults = Self.baseResourceLimits.defaults
+        creationCPUCount = defaults.cpuCount
+        creationMemoryGiB = defaults.memoryGiB
+        creationDiskGiB = defaults.diskGiB
         self.preferences = preferences
         desktopReadyVMID = preferences.string(forKey: "setup.nativeDesktopReadyVMID").flatMap(VirtualMachineID.init)
         rootURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -213,6 +222,42 @@ final class NativeVMManager: ObservableObject {
                 preferences.removeObject(forKey: Self.selectedImageKey)
             }
         }
+    }
+
+    private static var baseResourceLimits: NativeVMResourceLimits {
+        NativeVMResourceLimits(
+            hostCPUCount: ProcessInfo.processInfo.activeProcessorCount,
+            hostMemoryBytes: ProcessInfo.processInfo.physicalMemory,
+            maximumCPUCount: VZVirtualMachineConfiguration.maximumAllowedCPUCount,
+            maximumMemoryBytes: VZVirtualMachineConfiguration.maximumAllowedMemorySize
+        )
+    }
+
+    private var creationLimits: NativeVMResourceLimits {
+        NativeVMResourceLimits(
+            hostCPUCount: ProcessInfo.processInfo.activeProcessorCount,
+            hostMemoryBytes: ProcessInfo.processInfo.physicalMemory,
+            minimumCPUCount: restoreImage?.mostFeaturefulSupportedConfiguration?.minimumSupportedCPUCount ?? 2,
+            minimumMemoryBytes: restoreImage?.mostFeaturefulSupportedConfiguration?.minimumSupportedMemorySize ?? 4 * 1_073_741_824,
+            maximumCPUCount: VZVirtualMachineConfiguration.maximumAllowedCPUCount,
+            maximumMemoryBytes: VZVirtualMachineConfiguration.maximumAllowedMemorySize
+        )
+    }
+
+    var creationCPURange: ClosedRange<Int> { creationLimits.cpu }
+    var creationMemoryRange: ClosedRange<Int> { creationLimits.memoryGiB }
+    var creationDiskRange: ClosedRange<Int> { creationLimits.diskGiB }
+    var creationResourceError: String? {
+        creationLimits.validationMessage(for: NativeVMResources(
+            cpuCount: creationCPUCount, memoryGiB: creationMemoryGiB, diskGiB: creationDiskGiB
+        ))
+    }
+
+    func resetCreationResources() {
+        let defaults = creationLimits.defaults
+        creationCPUCount = defaults.cpuCount
+        creationMemoryGiB = defaults.memoryGiB
+        creationDiskGiB = defaults.diskGiB
     }
 
     private var restoreCacheDirectory: URL {
@@ -331,6 +376,15 @@ final class NativeVMManager: ObservableObject {
                 throw NativeVMError.newerGuestRequiresHostUpdate(guest: guestMajor, host: hostMajor)
             }
             restoreImage = image
+            // A different IPSW may raise the guest minimum. Keep user choices
+            // intact unless the new image makes them invalid.
+            let limits = creationLimits
+            let adjusted = !limits.cpu.contains(creationCPUCount) ||
+                !limits.memoryGiB.contains(creationMemoryGiB) ||
+                !limits.diskGiB.contains(creationDiskGiB)
+            creationCPUCount = min(max(creationCPUCount, limits.cpu.lowerBound), limits.cpu.upperBound)
+            creationMemoryGiB = min(max(creationMemoryGiB, limits.memoryGiB.lowerBound), limits.memoryGiB.upperBound)
+            creationDiskGiB = min(max(creationDiskGiB, limits.diskGiB.lowerBound), limits.diskGiB.upperBound)
             imageURL = url
             preferences.set(url.path, forKey: Self.selectedImageKey)
             let version = image.operatingSystemVersion
@@ -338,7 +392,9 @@ final class NativeVMManager: ObservableObject {
                 "\(version.majorVersion).\(version.minorVersion)" :
                 "\(version.majorVersion).\(version.minorVersion).\(version.patchVersion)"
             imageDescription = "macOS \(versionLabel) (\(image.buildVersion)) — compatible with this Mac"
-            status = "Ready to create a new, separate Tether Host VM."
+            status = adjusted
+                ? "VM resources were adjusted to meet this macOS image and Mac's limits. Review them before creating the VM."
+                : "Ready to create a new, separate Tether Host VM."
         } catch {
             restoreImage = nil
             imageURL = nil
@@ -535,6 +591,13 @@ final class NativeVMManager: ObservableObject {
     func install(for provider: VMProvider = .builtIn) async -> VirtualMachineID? {
         guard !isBusy, let imageURL, let restoreImage,
               let requirements = restoreImage.mostFeaturefulSupportedConfiguration else { return nil }
+        if let creationResourceError {
+            status = creationResourceError
+            return nil
+        }
+        let resources = NativeVMResources(
+            cpuCount: creationCPUCount, memoryGiB: creationMemoryGiB, diskGiB: creationDiskGiB
+        )
         if provider == .utm && UTMInstallation.detect() != .installed {
             status = "Install a compatible UTM in Applications before creating a UTM VM."
             return nil
@@ -567,13 +630,13 @@ final class NativeVMManager: ObservableObject {
             let diskURL = stage.appendingPathComponent("disk.img")
             FileManager.default.createFile(atPath: diskURL.path, contents: nil)
             let disk = try FileHandle(forWritingTo: diskURL)
-            try disk.truncate(atOffset: 64 * 1_073_741_824)
+            try disk.truncate(atOffset: UInt64(resources.diskGiB) * 1_073_741_824)
             try disk.close()
 
             let configuration = try makeConfiguration(
                 bundle: stage, hardware: hardware, machineID: machineID,
-                cpuCount: max(requirements.minimumSupportedCPUCount, min(4, ProcessInfo.processInfo.activeProcessorCount / 2)),
-                memorySize: max(requirements.minimumSupportedMemorySize, 8 * 1_073_741_824),
+                cpuCount: resources.cpuCount,
+                memorySize: UInt64(resources.memoryGiB) * 1_073_741_824,
                 includeGuestDisk: false
             )
             let vm = VZVirtualMachine(configuration: configuration)
@@ -599,7 +662,8 @@ final class NativeVMManager: ObservableObject {
             let version = restoreImage.operatingSystemVersion
             let manifest = NativeVirtualMachineManifest(
                 id: id, name: "Tether Host VM · \(id.description.prefix(8))",
-                guestImageVersion: "\(version.majorVersion).\(version.minorVersion) (\(restoreImage.buildVersion))"
+                guestImageVersion: "\(version.majorVersion).\(version.minorVersion) (\(restoreImage.buildVersion))",
+                resources: resources
             )
             let encoder = JSONEncoder()
             encoder.dateEncodingStrategy = .iso8601
@@ -721,10 +785,26 @@ final class NativeVMManager: ObservableObject {
         guard let hardware = VZMacHardwareModel(dataRepresentation: hardwareData),
               let machineID = VZMacMachineIdentifier(dataRepresentation: machineData),
               hardware.isSupported else { throw NativeVMError.invalidVM }
+        let manifestURL = bundle.appendingPathComponent(NativeVirtualMachineStore.manifestFilename)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        guard let manifest = try? decoder.decode(NativeVirtualMachineManifest.self, from: Data(contentsOf: manifestURL)),
+              manifest.id == id,
+              manifest.schemaVersion == NativeVirtualMachineManifest.currentSchemaVersion else {
+            throw NativeVMError.invalidVM
+        }
+        // Old manifests did not store resources; preserve their launch behavior.
+        let cpuCount = manifest.resources?.cpuCount ?? min(4, max(2, ProcessInfo.processInfo.activeProcessorCount / 2))
+        let memoryGiB = manifest.resources?.memoryGiB ?? 8
+        guard cpuCount > 0, memoryGiB > 0,
+              cpuCount <= VZVirtualMachineConfiguration.maximumAllowedCPUCount,
+              UInt64(memoryGiB) <= VZVirtualMachineConfiguration.maximumAllowedMemorySize / 1_073_741_824 else {
+            throw NativeVMError.invalidVM
+        }
         let configuration = try makeConfiguration(
             bundle: bundle, hardware: hardware, machineID: machineID,
-            cpuCount: min(4, max(2, ProcessInfo.processInfo.activeProcessorCount / 2)),
-            memorySize: 8 * 1_073_741_824, includeGuestDisk: true
+            cpuCount: cpuCount,
+            memorySize: UInt64(memoryGiB) * 1_073_741_824, includeGuestDisk: true
         )
         let vm = VZVirtualMachine(configuration: configuration)
         vm.delegate = vmDelegate

@@ -11,18 +11,90 @@ public struct NativeVirtualMachineManifest: Codable, Equatable, Sendable {
     public let name: String
     public let guestImageVersion: String
     public let createdAt: Date
+    /// Absent in VMs created before resource selection was added.
+    public let resources: NativeVMResources?
 
     public init(
         id: VirtualMachineID,
         name: String = "Tether Sandbox",
         guestImageVersion: String,
-        createdAt: Date = Date()
+        createdAt: Date = Date(),
+        resources: NativeVMResources? = nil
     ) {
         self.schemaVersion = Self.currentSchemaVersion
         self.id = id
         self.name = name
         self.guestImageVersion = guestImageVersion
         self.createdAt = createdAt
+        self.resources = resources
+    }
+}
+
+public struct NativeVMResources: Codable, Equatable, Sendable {
+    public let cpuCount: Int
+    public let memoryGiB: Int
+    public let diskGiB: Int
+
+    public init(cpuCount: Int, memoryGiB: Int, diskGiB: Int) {
+        self.cpuCount = cpuCount
+        self.memoryGiB = memoryGiB
+        self.diskGiB = diskGiB
+    }
+}
+
+/// UI bounds and final validation for new Apple silicon macOS VMs. Disk images
+/// are sparse, so the requested virtual capacity does not have to be free now.
+public struct NativeVMResourceLimits: Sendable {
+    public let cpu: ClosedRange<Int>
+    public let memoryGiB: ClosedRange<Int>
+    public let diskGiB: ClosedRange<Int>
+    public let hostCapabilityError: String?
+
+    public init(
+        hostCPUCount: Int, hostMemoryBytes: UInt64,
+        minimumCPUCount: Int = 2, minimumMemoryBytes: UInt64 = 4 * 1_073_741_824,
+        maximumCPUCount: Int = 64, maximumMemoryBytes: UInt64 = 512 * 1_073_741_824
+    ) {
+        let gib: UInt64 = 1_073_741_824
+        let cpuMinimum = max(2, minimumCPUCount)
+        let memoryMinimum = max(4, Int((minimumMemoryBytes + gib - 1) / gib))
+        // Keep at least 4 GiB for the host where possible. The remaining bound
+        // is advisory; VZ's own maximum is also applied by the caller.
+        let hostMemoryLimit = Int(hostMemoryBytes > 4 * gib ? (hostMemoryBytes - 4 * gib) / gib : 0)
+        let cpuMaximum = min(hostCPUCount, maximumCPUCount)
+        let memoryMaximum = min(hostMemoryLimit, Int(maximumMemoryBytes / gib))
+        cpu = cpuMinimum...max(cpuMinimum, cpuMaximum)
+        memoryGiB = memoryMinimum...max(memoryMinimum, memoryMaximum)
+        diskGiB = 64...1024
+        if cpuMaximum < cpuMinimum {
+            hostCapabilityError = "This macOS image needs at least \(cpuMinimum) CPU cores; this Mac can provide \(max(0, cpuMaximum))."
+        } else if memoryMaximum < memoryMinimum {
+            hostCapabilityError = "This macOS image needs at least \(memoryMinimum) GB of VM memory; this Mac has only \(max(0, memoryMaximum)) GB available after reserving memory for macOS."
+        } else {
+            hostCapabilityError = nil
+        }
+    }
+
+    public var defaults: NativeVMResources {
+        NativeVMResources(
+            cpuCount: min(cpu.upperBound, max(cpu.lowerBound, 4)),
+            memoryGiB: min(memoryGiB.upperBound, max(memoryGiB.lowerBound, 8)),
+            diskGiB: 128
+        )
+    }
+
+    public func validationMessage(for resources: NativeVMResources) -> String? {
+        if let hostCapabilityError { return hostCapabilityError }
+        if !cpu.contains(resources.cpuCount) {
+            return "CPU must be between \(cpu.lowerBound) and \(cpu.upperBound) cores."
+        }
+        if !memoryGiB.contains(resources.memoryGiB) {
+            return "Memory must be between \(memoryGiB.lowerBound) and \(memoryGiB.upperBound) GB."
+        }
+        if !diskGiB.contains(resources.diskGiB) {
+            return "Disk capacity must be between \(diskGiB.lowerBound) and \(diskGiB.upperBound) GB."
+        }
+        return nil
     }
 }
 

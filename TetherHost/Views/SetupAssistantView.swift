@@ -133,7 +133,7 @@ private struct NativeVMSetupView: View {
                         }
                     }
                     .pickerStyle(.menu)
-                    .frame(maxWidth: 310, alignment: .leading)
+                    .frame(maxWidth: 400, alignment: .leading)
                 } else if manager.isLoadingDownloadImageOptions {
                     ProgressView("Finding macOS versions…")
                         .controlSize(.small)
@@ -142,6 +142,7 @@ private struct NativeVMSetupView: View {
                         Task { await manager.loadDownloadImageOptions() }
                     }
                 }
+                VMCreationSettingsView(manager: manager)
                 HStack {
                     Button("Choose macOS IPSW…") { manager.chooseIPSW() }
                     Text(manager.imageDescription)
@@ -176,7 +177,7 @@ private struct NativeVMSetupView: View {
                     }
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(manager.imageURL == nil || manager.isBusy)
+                .disabled(manager.imageURL == nil || manager.isBusy || manager.creationResourceError != nil)
                 if manager.imageURL == nil {
                     Text("First choose an IPSW above or download the compatible image. Then Create New VM becomes available.")
                         .font(.callout)

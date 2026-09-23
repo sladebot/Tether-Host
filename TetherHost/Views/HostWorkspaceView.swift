@@ -307,6 +307,7 @@ struct HostWorkspaceView: View {
                 Text("Download a compatible macOS image or choose one already on this Mac. Allow about 65 GB of free space and keep Tether Host open during installation.")
                     .foregroundStyle(.secondary)
                 downloadVersionPicker
+                VMCreationSettingsView(manager: manager)
                 if manager.hasOtherHostCopy {
                     Text("Another copy of Tether Host is open. Quit that copy before creating a VM here.")
                         .font(.callout).foregroundStyle(.secondary)
@@ -466,61 +467,65 @@ struct HostWorkspaceView: View {
                 }
                 .frame(maxWidth: .infinity, minHeight: 160, alignment: .leading)
             } else {
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("macOS installation image").font(.headline)
-                    Text("Download a compatible macOS restore image or choose an IPSW on this Mac. Allow about 65 GB of free space for the image and VM.")
-                        .font(.callout).foregroundStyle(.secondary)
-                    downloadVersionPicker
-                    if manager.hasCachedHostImage {
-                        Label("A downloaded macOS image is available on this Mac.",
-                              systemImage: "checkmark.circle.fill")
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("macOS installation image").font(.headline)
+                        Text("Download a compatible macOS restore image or choose an IPSW on this Mac. Allow about 65 GB of free space for the image and VM.")
                             .font(.callout).foregroundStyle(.secondary)
-                        HStack {
-                            if manager.imageURL == nil {
-                                Button("Reuse image") { Task { await manager.useCachedHostImage() } }
-                                    .buttonStyle(.borderedProminent)
-                            } else {
-                                Button("Reuse image") { Task { await manager.useCachedHostImage() } }
-                                    .buttonStyle(.bordered)
-                            }
-                            Button("Show in Finder") { manager.revealCachedHostImageInFinder() }
-                        }
-                    }
-                    HStack(spacing: 12) {
-                        if NativeVMManager.canDownloadHostImage {
-                            if !manager.hasCachedHostImage && manager.imageURL == nil {
-                                Button("Download macOS") { Task { await manager.downloadHostImage() } }
-                                    .buttonStyle(.borderedProminent)
-                                    .disabled(manager.downloadImageOptions.isEmpty || manager.isLoadingDownloadImageOptions)
-                            } else {
-                                Button("Download macOS") { Task { await manager.downloadHostImage() } }
-                                    .buttonStyle(.bordered)
-                                    .disabled(manager.downloadImageOptions.isEmpty || manager.isLoadingDownloadImageOptions)
+                        downloadVersionPicker
+                        VMCreationSettingsView(manager: manager)
+                        if manager.hasCachedHostImage {
+                            Label("A downloaded macOS image is available on this Mac.",
+                                  systemImage: "checkmark.circle.fill")
+                                .font(.callout).foregroundStyle(.secondary)
+                            HStack {
+                                if manager.imageURL == nil {
+                                    Button("Reuse image") { Task { await manager.useCachedHostImage() } }
+                                        .buttonStyle(.borderedProminent)
+                                } else {
+                                    Button("Reuse image") { Task { await manager.useCachedHostImage() } }
+                                        .buttonStyle(.bordered)
+                                }
+                                Button("Show in Finder") { manager.revealCachedHostImageInFinder() }
                             }
                         }
-                        Button("Choose an IPSW…") { manager.chooseIPSW() }
-                    }
-                    Label(manager.imageDescription,
-                          systemImage: manager.imageURL == nil ? "doc" : "checkmark.circle.fill")
-                        .font(.callout).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    if manager.imageURL != nil {
-                        Button("Show selected image in Finder") { manager.revealSelectedImageInFinder() }
-                            .font(.caption)
-                    }
-                    Link("Find a macOS IPSW", destination: UTMInstallation.macOSImageURL)
-                        .font(.caption)
-                    if manager.status != "No VM installation has started." {
-                        Text(manager.status).font(.callout)
+                        HStack(spacing: 12) {
+                            if NativeVMManager.canDownloadHostImage {
+                                if !manager.hasCachedHostImage && manager.imageURL == nil {
+                                    Button("Download macOS") { Task { await manager.downloadHostImage() } }
+                                        .buttonStyle(.borderedProminent)
+                                        .disabled(manager.downloadImageOptions.isEmpty || manager.isLoadingDownloadImageOptions)
+                                } else {
+                                    Button("Download macOS") { Task { await manager.downloadHostImage() } }
+                                        .buttonStyle(.bordered)
+                                        .disabled(manager.downloadImageOptions.isEmpty || manager.isLoadingDownloadImageOptions)
+                                }
+                            }
+                            Button("Choose an IPSW…") { manager.chooseIPSW() }
+                        }
+                        Label(manager.imageDescription,
+                              systemImage: manager.imageURL == nil ? "doc" : "checkmark.circle.fill")
+                            .font(.callout).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
+                        if manager.imageURL != nil {
+                            Button("Show selected image in Finder") { manager.revealSelectedImageInFinder() }
+                                .font(.caption)
+                        }
+                        Link("Find a macOS IPSW", destination: UTMInstallation.macOSImageURL)
+                            .font(.caption)
+                        if manager.status != "No VM installation has started." {
+                            Text(manager.status).font(.callout)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        if manager.hasOtherHostCopy {
+                            Label("Quit the other Tether Host copy before creating a VM.",
+                                  systemImage: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.orange)
+                        }
                     }
-                    if manager.hasOtherHostCopy {
-                        Label("Quit the other Tether Host copy before creating a VM.",
-                              systemImage: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.orange)
-                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                Spacer(minLength: 12)
+                .frame(minHeight: 280, maxHeight: 440)
                 HStack {
                     Button("Cancel") { model.showsCreateVM = false }
                     Spacer()
@@ -535,6 +540,7 @@ struct HostWorkspaceView: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .disabled(manager.imageURL == nil || manager.isRunning
+                        || manager.creationResourceError != nil
                         || !model.providerSetup.availability.canContinue || manager.hasOtherHostCopy)
                 }
             }
@@ -555,7 +561,7 @@ struct HostWorkspaceView: View {
                     }
                 }
                 .pickerStyle(.menu)
-                .frame(maxWidth: 310, alignment: .leading)
+                .frame(maxWidth: 400, alignment: .leading)
             } else if manager.isLoadingDownloadImageOptions {
                 ProgressView("Finding macOS versions…")
                     .controlSize(.small)
@@ -1056,5 +1062,55 @@ private extension HostSetupDependencies {
         case .hermes: hermesReady
         case .phone: false
         }
+    }
+}
+
+/// Shared by first-run setup and VM creation; edits apply only to the new VM.
+struct VMCreationSettingsView: View {
+    @ObservedObject var manager: NativeVMManager
+
+    var body: some View {
+        DisclosureGroup {
+            VStack(alignment: .leading, spacing: 12) {
+                Stepper(value: $manager.creationMemoryGiB, in: manager.creationMemoryRange) {
+                    settingLabel("Memory", value: "\(manager.creationMemoryGiB) GB")
+                }
+                Stepper(value: $manager.creationCPUCount, in: manager.creationCPURange) {
+                    settingLabel("CPU cores", value: "\(manager.creationCPUCount)")
+                }
+                Stepper(value: $manager.creationDiskGiB, in: manager.creationDiskRange, step: 32) {
+                    settingLabel("Disk space", value: "\(manager.creationDiskGiB) GB")
+                }
+                Text("Disk space grows as the VM uses it, up to this limit.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button("Use recommended settings") { manager.resetCreationResources() }
+                    .buttonStyle(.borderless).font(.callout)
+            }
+            .padding(.top, 8)
+            .frame(maxWidth: 340)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        } label: {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("VM settings").fontWeight(.medium)
+                Text("\(manager.creationMemoryGiB) GB memory, \(manager.creationCPUCount) CPU cores, \(manager.creationDiskGiB) GB disk")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .disabled(manager.isBusy)
+        if let error = manager.creationResourceError {
+            Text(error).font(.callout).foregroundStyle(.orange)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func settingLabel(_ title: String, value: String) -> some View {
+        HStack {
+            Text(title)
+            Spacer()
+            Text(value).monospacedDigit().foregroundStyle(.secondary)
+        }
+        .accessibilityElement(children: .combine)
     }
 }

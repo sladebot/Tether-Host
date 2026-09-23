@@ -32,6 +32,13 @@ public enum UTMApplePackageWriter {
               let hardware = try? Data(contentsOf: nativeBundle.appendingPathComponent("hardware.bin")),
               let machine = try? Data(contentsOf: nativeBundle.appendingPathComponent("machine.bin")),
               !hardware.isEmpty, !machine.isEmpty else { throw UTMApplePackageError.invalidNativeVM }
+        if let resources = manifest.resources {
+            guard (2...64).contains(resources.cpuCount),
+                  (4...512).contains(resources.memoryGiB),
+                  (64...1024).contains(resources.diskGiB) else {
+                throw UTMApplePackageError.invalidNativeVM
+            }
+        }
 
         let files = ["disk.img", "auxiliary.img"]
         for file in files {
@@ -72,7 +79,8 @@ public enum UTMApplePackageWriter {
                                 "Icon": "mac", "IconCustom": false],
                 "System": [
                     "Architecture": "aarch64", "Boot": ["OperatingSystem": "macOS", "UEFIBoot": false],
-                    "CPUCount": 4, "MemorySize": 8192,
+                    "CPUCount": manifest.resources?.cpuCount ?? 4,
+                    "MemorySize": (manifest.resources?.memoryGiB ?? 8) * 1024,
                     "MacPlatform": ["AuxiliaryStoragePath": "AuxiliaryStorage",
                                     "HardwareModel": hardware, "MachineIdentifier": machine]
                 ],

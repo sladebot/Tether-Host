@@ -1,5 +1,24 @@
 # Focused onboarding
 
+## Build 52: VM resource settings
+
+New users can expand VM settings in the first setup step to adjust memory,
+CPU cores, and disk capacity. A compact summary stays visible when collapsed,
+and Use recommended settings restores host-aware defaults. The same settings
+carry into the creation dialog, whose content scrolls to keep its action buttons
+visible on smaller windows. CPU and memory are bounded by host and image limits;
+disk capacity ranges from 64 to 1024 GB and grows as storage is used.
+
+New VM manifests store these choices, and later launches and UTM exports use them.
+Legacy manifests remain readable and retain their previous startup defaults.
+This controls new VMs only; it does not resize or modify existing VMs.
+
+Validation: native build, DMG integrity/signature checks, 63 core tests, and
+isolated onboarding state checks passed. The production-view fixture verified
+resource changes, transfer into the creation dialog, reset to recommended settings,
+and final alignment. No VM was installed or restarted during validation. Build 52
+was installed on disk while preserving the running VM process.
+
 ## Build 51: complete setup gating and version-aware downloads
 
 Starting a VM alone no longer collapses setup. Automatic collapse requires the

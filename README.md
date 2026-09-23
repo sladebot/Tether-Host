@@ -52,7 +52,12 @@ required host software update for that combination in local testing.
 **Download macOS** is available throughout built-in VM creation on supported Macs.
 The first setup step includes a macOS version picker. It defaults to the newest
 available image matching the host release and not exceeding its full version.
-Users can choose an older available release instead (macOS 14 or newer). Images
+Users can choose an older available release instead (macOS 14 or newer).
+**VM settings** in the same step lets users set memory, CPU cores, and disk capacity,
+with host-aware defaults and a reset button. The settings carry into the creation
+dialog and are saved per VM for later starts and UTM export. Existing VMs retain
+their previous defaults. Disk capacity is a growing sparse disk limit, not an
+immediate reservation of that much host space. Images
 newer than the host are excluded by Tether's conservative selection policy. Historical versions are discovered
 through ipsw.me metadata; image downloads and redirects are restricted to Apple HTTPS
 servers. Published SHA-256 digests are checked when available, and the downloaded
