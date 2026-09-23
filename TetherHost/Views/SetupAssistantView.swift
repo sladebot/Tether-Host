@@ -172,7 +172,11 @@ private struct NativeVMSetupView: View {
                     Task {
                         if let id = await manager.install() {
                             await model.refresh()
-                            model.selectVM(id)
+                            if !manager.isRunning || manager.runningVMID == id {
+                                model.selectVM(id)
+                            } else {
+                                model.workspaceSection = .library
+                            }
                         }
                     }
                 }

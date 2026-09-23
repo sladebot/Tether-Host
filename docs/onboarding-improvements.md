@@ -1,5 +1,23 @@
 # Focused onboarding
 
+## Build 53: visible VM settings and creation alongside a running VM
+
+Memory, CPU, and disk settings are always visible in setup and creation, with a
+clear Virtual machine settings heading. There is no disclosure control to expand.
+
+Create another VM is visible in Prepare VM and the VM toolbar menu, and remains
+available while a VM runs. Creation uses its own installer VM instead of replacing
+the active VM reference. If a VM is still running when installation finishes, the
+new VM is saved without booting and the inventory opens with the current VM selection
+preserved. Opening setup is separate from the existing cross-process ownership check.
+
+Validation: native build, DMG verification, and onboarding smoke checks passed.
+An isolated running-state fixture verified the enabled creation entry point, visible
+resource controls without expansion, successful memory adjustment, and enabled
+final creation with an image selected. The fixture did not create or run a VM; a full
+concurrent macOS installation remains untested. Installation of build 53 preserved
+the live process.
+
 ## Build 52: VM resource settings
 
 New users can expand VM settings in the first setup step to adjust memory,

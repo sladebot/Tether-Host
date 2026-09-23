@@ -314,7 +314,11 @@ struct HostWorkspaceView: View {
                 }
                 Button("Create a VM…") { model.showsCreateVM = true }
                     .buttonStyle(.borderedProminent)
-                    .disabled(manager.isBusy || manager.isRunning || manager.hasOtherHostCopy)
+                    .disabled(manager.isBusy)
+            }
+            if model.designatedVM != nil {
+                Button("Create another VM…", systemImage: "plus") { model.showsCreateVM = true }
+                    .disabled(manager.isBusy)
             }
 
             providerAvailability
@@ -364,8 +368,6 @@ struct HostWorkspaceView: View {
                             .accessibilityAddTraits(model.designatedVM?.id == candidate.id ? .isSelected : [])
                         }
                     }
-                    Button("Create another VM…") { model.showsCreateVM = true }
-                        .disabled(manager.isBusy || manager.isRunning || manager.hasOtherHostCopy)
                     HStack {
                         Button("Refresh VMs") { Task { await model.refresh() } }
                             .disabled(model.isRefreshing)
@@ -430,8 +432,14 @@ struct HostWorkspaceView: View {
                 Text("Create a macOS VM").font(.title2.bold())
                 Text(model.providerSetup.provider == .utm
                      ? "Tether Host installs macOS, then adds the new VM to UTM."
+                     : manager.isRunning
+                     ? "Tether Host installs macOS in a separate VM."
                      : "Tether Host installs macOS and opens the new VM here.")
                 .foregroundStyle(.secondary)
+                if manager.isRunning {
+                    Text("Your current VM will keep running. The new VM will be saved for you to start later.")
+                        .font(.callout).foregroundStyle(.secondary)
+                }
             }
 
             if manager.isBusy {
@@ -533,13 +541,17 @@ struct HostWorkspaceView: View {
                         Task {
                             if let id = await manager.install(for: model.providerSetup.provider) {
                                 await model.refresh()
-                                model.selectVM(id)
+                                if !manager.isRunning || manager.runningVMID == id {
+                                    model.selectVM(id)
+                                } else {
+                                    model.workspaceSection = .library
+                                }
                                 model.showsCreateVM = false
                             }
                         }
                     }
                     .buttonStyle(.borderedProminent)
-                    .disabled(manager.imageURL == nil || manager.isRunning
+                    .disabled(manager.imageURL == nil
                         || manager.creationResourceError != nil
                         || !model.providerSetup.availability.canContinue || manager.hasOtherHostCopy)
                 }
@@ -905,6 +917,8 @@ private struct VMMonitorView: View {
                 Menu {
                     Button("Connection details") { openSection(.phone) }
                     Button("VMs") { openSection(.library) }
+                    Button("Create another VM…") { model.showsCreateVM = true }
+                        .disabled(manager.isBusy)
                     Divider()
                     Button("Health") { openSection(.overview) }
                     Button("Diagnostics") { openSection(.diagnostics) }
@@ -1070,39 +1084,31 @@ struct VMCreationSettingsView: View {
     @ObservedObject var manager: NativeVMManager
 
     var body: some View {
-        DisclosureGroup {
-            VStack(alignment: .leading, spacing: 12) {
-                Stepper(value: $manager.creationMemoryGiB, in: manager.creationMemoryRange) {
-                    settingLabel("Memory", value: "\(manager.creationMemoryGiB) GB")
-                }
-                Stepper(value: $manager.creationCPUCount, in: manager.creationCPURange) {
-                    settingLabel("CPU cores", value: "\(manager.creationCPUCount)")
-                }
-                Stepper(value: $manager.creationDiskGiB, in: manager.creationDiskRange, step: 32) {
-                    settingLabel("Disk space", value: "\(manager.creationDiskGiB) GB")
-                }
-                Text("Disk space grows as the VM uses it, up to this limit.")
-                    .font(.caption).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                Button("Use recommended settings") { manager.resetCreationResources() }
-                    .buttonStyle(.borderless).font(.callout)
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Virtual machine settings").font(.headline)
+            Stepper(value: $manager.creationMemoryGiB, in: manager.creationMemoryRange) {
+                settingLabel("Memory (RAM)", value: "\(manager.creationMemoryGiB) GB")
             }
-            .padding(.top, 8)
-            .frame(maxWidth: 340)
-            .frame(maxWidth: .infinity, alignment: .leading)
-        } label: {
-            VStack(alignment: .leading, spacing: 3) {
-                Text("VM settings").fontWeight(.medium)
-                Text("\(manager.creationMemoryGiB) GB memory, \(manager.creationCPUCount) CPU cores, \(manager.creationDiskGiB) GB disk")
-                    .font(.caption).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+            Stepper(value: $manager.creationCPUCount, in: manager.creationCPURange) {
+                settingLabel("CPU cores", value: "\(manager.creationCPUCount)")
             }
-        }
-        .disabled(manager.isBusy)
-        if let error = manager.creationResourceError {
-            Text(error).font(.callout).foregroundStyle(.orange)
+            Stepper(value: $manager.creationDiskGiB, in: manager.creationDiskRange, step: 32) {
+                settingLabel("Disk space", value: "\(manager.creationDiskGiB) GB")
+            }
+            Text("Disk space grows as the VM uses it, up to this limit.")
+                .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+            Button("Use recommended settings") { manager.resetCreationResources() }
+                .buttonStyle(.borderless).font(.callout)
+            if let error = manager.creationResourceError {
+                Text(error).font(.callout).foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
+        .frame(maxWidth: 400, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 8)
+        .disabled(manager.isBusy)
     }
 
     private func settingLabel(_ title: String, value: String) -> some View {

@@ -56,7 +56,9 @@ Users can choose an older available release instead (macOS 14 or newer).
 **VM settings** in the same step lets users set memory, CPU cores, and disk capacity,
 with host-aware defaults and a reset button. The settings carry into the creation
 dialog and are saved per VM for later starts and UTM export. Existing VMs retain
-their previous defaults. Disk capacity is a growing sparse disk limit, not an
+their previous defaults. **Create another VM** remains available with existing VMs,
+including while one is running. Installation leaves the running VM untouched and
+saves the new VM for a later start. Disk capacity is a growing sparse disk limit, not an
 immediate reservation of that much host space. Images
 newer than the host are excluded by Tether's conservative selection policy. Historical versions are discovered
 through ipsw.me metadata; image downloads and redirects are restricted to Apple HTTPS

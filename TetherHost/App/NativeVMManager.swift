@@ -17,6 +17,7 @@ enum NativeVMError: LocalizedError {
     case missingVM
     case invalidVM
     case anotherVMRunning
+    case cannotStartDuringInstall
     case anotherHostCopyRunning
     case guestDiskUnavailable
     case cannotRemoveRunningVM
@@ -36,6 +37,7 @@ enum NativeVMError: LocalizedError {
         case .missingVM: "The selected Tether VM is missing. Refresh the VM list."
         case .invalidVM: "The Tether VM is incomplete or damaged. Create a new VM from an IPSW."
         case .anotherVMRunning: "Another Tether VM is already running. Shut it down before starting this one."
+        case .cannotStartDuringInstall: "Wait for VM installation to finish before starting a VM."
         case .anotherHostCopyRunning: "Another Tether Host for Mac copy is open. Quit it before starting this VM."
         case .guestDiskUnavailable: "The guest setup disk could not be prepared. Check the Tether Host installation and try Start VM again."
         case .cannotRemoveRunningVM: "Shut down the built-in VM before deleting its files."
@@ -611,6 +613,7 @@ final class NativeVMManager: ObservableObject {
         let id = VirtualMachineID(rawValue: UUID())
         let stage = rootURL.appendingPathComponent(".creating-\(id.description)", isDirectory: true)
         let destination = rootURL.appendingPathComponent(id.description, isDirectory: true)
+        var presentedInstallerVM: VZVirtualMachine?
         do {
             try FileManager.default.createDirectory(at: rootURL, withIntermediateDirectories: true)
             let capacity = try rootURL
@@ -640,8 +643,11 @@ final class NativeVMManager: ObservableObject {
                 includeGuestDisk: false
             )
             let vm = VZVirtualMachine(configuration: configuration)
-            virtualMachine = vm
-            showsDisplay = true
+            if !isRunning {
+                virtualMachine = vm
+                presentedInstallerVM = vm
+                showsDisplay = true
+            }
             status = "Installing macOS from the selected IPSW. This can take a while; keep Tether Host open."
             let installer = VZMacOSInstaller(virtualMachine: vm, restoringFromImageAt: imageURL)
             let progressMonitor = Task { [weak self] in
@@ -656,8 +662,10 @@ final class NativeVMManager: ObservableObject {
             }
             try await installer.install()
             if vm.state == .running { try await vm.stop() }
-            virtualMachine = nil
-            showsDisplay = false
+            if let presentedInstallerVM, virtualMachine === presentedInstallerVM {
+                virtualMachine = nil
+                showsDisplay = false
+            }
 
             let version = restoreImage.operatingSystemVersion
             let manifest = NativeVirtualMachineManifest(
@@ -682,12 +690,18 @@ final class NativeVMManager: ObservableObject {
                     return nil
                 }
             }
+            if isRunning {
+                status = "New VM installed and saved. Shut down the running VM, then select this VM and choose Start VM."
+                return id
+            }
             status = "Starting the fresh VM…"
-            try await boot(id)
+            try await boot(id, allowWhileInstalling: true)
             return id
         } catch {
-            virtualMachine = nil
-            showsDisplay = false
+            if let presentedInstallerVM, virtualMachine === presentedInstallerVM {
+                virtualMachine = nil
+                showsDisplay = false
+            }
             try? FileManager.default.removeItem(at: stage)
             if FileManager.default.fileExists(atPath: destination.appendingPathComponent(NativeVirtualMachineStore.manifestFilename).path) {
                 status = "macOS is installed, but the VM could not start: \(error.localizedDescription)"
@@ -772,8 +786,8 @@ final class NativeVMManager: ObservableObject {
         throw UTMAdapterError.vmNotFound(id)
     }
 
-    func boot(_ id: VirtualMachineID) async throws {
-        guard !isBusy || virtualMachine == nil else { return }
+    func boot(_ id: VirtualMachineID, allowWhileInstalling: Bool = false) async throws {
+        guard !isBusy || allowWhileInstalling else { throw NativeVMError.cannotStartDuringInstall }
         if isRunning, runningID == id { showsDisplay = true; return }
         if isRunning { throw NativeVMError.anotherVMRunning }
         guard !hasOtherHostCopy else { throw NativeVMError.anotherHostCopyRunning }
@@ -958,7 +972,8 @@ final class NativeVMManager: ObservableObject {
         }
     }
 
-    fileprivate func guestStopped(error: Error?) {
+    fileprivate func guestStopped(_ identity: ObjectIdentifier, error: Error?) {
+        guard virtualMachine.map(ObjectIdentifier.init) == identity else { return }
         if let runningID { markBundleUsed(runningID) }
         isRunning = false
         shutdownRequested = false
@@ -1070,11 +1085,13 @@ private final class NativeVMDelegate: NSObject, VZVirtualMachineDelegate, @unche
     weak var owner: NativeVMManager?
 
     nonisolated func guestDidStop(_ virtualMachine: VZVirtualMachine) {
-        Task { @MainActor [weak owner] in owner?.guestStopped(error: nil) }
+        let identity = ObjectIdentifier(virtualMachine)
+        Task { @MainActor [weak owner] in owner?.guestStopped(identity, error: nil) }
     }
 
     nonisolated func virtualMachine(_ virtualMachine: VZVirtualMachine, didStopWithError error: any Error) {
-        Task { @MainActor [weak owner] in owner?.guestStopped(error: error) }
+        let identity = ObjectIdentifier(virtualMachine)
+        Task { @MainActor [weak owner] in owner?.guestStopped(identity, error: error) }
     }
 }
 
