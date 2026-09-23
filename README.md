@@ -50,9 +50,10 @@ the provider and VM-state checks. Guest dependency detection never uses host
 Hermes, Tailscale, or developer tools.
 
 The app creates a read-only `Tether Guest Setup.iso` containing a small
-guest helper, without shared host folders or automatic clipboard synchronization. Inside the macOS guest,
-double-click **Tether Guest Installer.app** on that disk and follow its six-step
-guide; no second Tether Host installation is needed. The helper first checks real guest HTTPS access through
+guest helper, without shared host folders or automatic clipboard synchronization.
+Inside the macOS guest, double-click **Tether Guest Installer.app** on that disk
+and follow its six-step guide. Users do not need to install Tether Host in the
+VM or run a separate manual Hermes setup. The helper first checks real guest HTTPS access through
 the host's NAT, then checks Tailscale, verifies its publisher signature, and
 guides sign-in when needed.
 It then installs the pinned Hermes runtime when absent or configures a working
