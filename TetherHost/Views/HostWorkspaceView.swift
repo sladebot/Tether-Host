@@ -7,17 +7,14 @@ struct HostWorkspaceView: View {
     @ObservedObject var manager: NativeVMManager
     @Environment(\.scenePhase) private var scenePhase
     @State private var showToken = false
-    @State private var showsVMMonitor = true
+    @State private var showsSetupPanel = true
+    @State private var autoCollapsedForCurrentRun = false
     @State private var showsPhoneInstructions = false
     @State private var isVMFullScreen = false
     @State private var fullScreenWindow: NSWindow?
 
     private var canShowVMMonitor: Bool {
         model.providerSetup.provider == .builtIn && manager.isRunning
-    }
-
-    private var showsMonitor: Bool {
-        canShowVMMonitor && showsVMMonitor
     }
 
     private var managerHasError: Bool {
@@ -27,28 +24,33 @@ struct HostWorkspaceView: View {
     }
 
     var body: some View {
-        HStack(spacing: 0) {
-            VStack(spacing: 0) {
-                sidebar
-                Divider()
-                sectionContent
-            }
-            .frame(minWidth: isVMFullScreen ? 0 : 500, maxWidth: isVMFullScreen ? 0 : .infinity)
-            .clipped()
-            .allowsHitTesting(!isVMFullScreen)
-            .accessibilityHidden(isVMFullScreen)
-            if showsMonitor || isVMFullScreen {
-                Divider()
-                VMMonitorView(manager: manager, isFullScreen: isVMFullScreen) {
-                    guard let window = NSApp.keyWindow else { return }
-                    fullScreenWindow = window
-                    isVMFullScreen = !window.styleMask.contains(.fullScreen)
-                    window.toggleFullScreen(nil)
+        GeometryReader { geometry in
+            HStack(spacing: 0) {
+                if !isVMFullScreen && (showsSetupPanel || !canShowVMMonitor) {
+                    VStack(spacing: 0) {
+                        sidebar
+                        Divider()
+                        sectionContent
+                    }
+                    .frame(width: canShowVMMonitor ? min(400, max(300, geometry.size.width * 0.4)) : geometry.size.width)
                 }
-                .frame(minWidth: isVMFullScreen ? 600 : 430, maxWidth: .infinity, maxHeight: .infinity)
+                if canShowVMMonitor {
+                    if showsSetupPanel && !isVMFullScreen { Divider() }
+                    VMMonitorView(manager: manager, isFullScreen: isVMFullScreen,
+                                  showsSetupPanel: showsSetupPanel,
+                                  toggleSetupPanel: toggleSetupPanel,
+                                  openSection: openSection) {
+                        guard let window = NSApp.keyWindow else { return }
+                        fullScreenWindow = window
+                        isVMFullScreen = !window.styleMask.contains(.fullScreen)
+                        window.toggleFullScreen(nil)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
             }
         }
-        .frame(minWidth: showsMonitor ? 960 : 680, minHeight: 620)
+        .frame(minWidth: 680, minHeight: 620)
+        .onAppear(perform: collapseCompletedSetup)
         .task {
             model.checkProviderInstallation()
             while !Task.isCancelled {
@@ -74,11 +76,27 @@ struct HostWorkspaceView: View {
         .onChange(of: manager.isRunning) { _, running in
             model.syncHostSleepAssertion()
             if !running { model.invalidateLiveGuestReadiness() }
+            if running { collapseCompletedSetup() }
+            else {
+                autoCollapsedForCurrentRun = false
+                showsSetupPanel = true
+                if isVMFullScreen {
+                    fullScreenWindow?.toggleFullScreen(nil)
+                    isVMFullScreen = false
+                    fullScreenWindow = nil
+                }
+            }
+        }
+        .onChange(of: model.isPhoneSetupComplete) { _, complete in
+            if complete { collapseCompletedSetup() }
         }
         .onChange(of: model.workspaceSection) { _, section in
             if section != .hermes { showToken = false }
-            if section == .phone || section == .overview || section == .library || section == .diagnostics {
-                showsVMMonitor = false
+        }
+        .onChange(of: model.showsCreateVM) { _, showing in
+            if showing {
+                showsSetupPanel = true
+                if isVMFullScreen { fullScreenWindow?.toggleFullScreen(nil) }
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didExitFullScreenNotification)) { notification in
@@ -94,6 +112,29 @@ struct HostWorkspaceView: View {
         .tint(.accentColor)
     }
 
+    private func collapseCompletedSetup() {
+        guard !autoCollapsedForCurrentRun, canShowVMMonitor,
+              model.isPhoneSetupComplete else { return }
+        showsSetupPanel = false
+        autoCollapsedForCurrentRun = true
+    }
+
+    private func toggleSetupPanel() {
+        if isVMFullScreen {
+            showsSetupPanel = true
+            fullScreenWindow?.toggleFullScreen(nil)
+        } else {
+            showsSetupPanel.toggle()
+        }
+    }
+
+    private func openSection(_ section: HostWorkspaceSection) {
+        model.workspaceSection = section
+        if section == .phone { showsPhoneInstructions = true }
+        showsSetupPanel = true
+        if isVMFullScreen { fullScreenWindow?.toggleFullScreen(nil) }
+    }
+
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .firstTextBaseline) {
@@ -105,10 +146,6 @@ struct HostWorkspaceView: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                if canShowVMMonitor {
-                    Button(showsVMMonitor ? "Hide VM" : "Show VM") { showsVMMonitor.toggle() }
-                        .buttonStyle(.borderless)
-                }
             }
 
             HStack(spacing: 3) {
@@ -137,6 +174,9 @@ struct HostWorkspaceView: View {
     private func dependencyButton(
         _ dependency: HostSetupDependency, number: Int, title: String
     ) -> some View {
+        let visibleTitle = canShowVMMonitor
+            ? (dependency == .vm ? "Mac" : dependency == .tailscale ? "Guest" : title)
+            : title
         let completed = dependency == .phone
             ? model.isPhoneSetupComplete : model.setupDependencies.isCompleted(dependency)
         let section = HostWorkspaceSection(dependency)
@@ -146,7 +186,7 @@ struct HostWorkspaceView: View {
             HStack(spacing: 5) {
                 Image(systemName: completed ? "checkmark.circle.fill" : "\(number).circle")
                     .foregroundStyle(completed ? Color.accentColor : .secondary)
-                Text(title).lineLimit(1)
+                Text(visibleTitle).lineLimit(1)
             }
             .font(.caption.weight(model.workspaceSection == section ? .semibold : .regular))
             .frame(maxWidth: .infinity)
@@ -231,8 +271,8 @@ struct HostWorkspaceView: View {
                         Button("Desktop is ready") { model.confirmUTMDesktopReady() }
                             .buttonStyle(.borderedProminent)
                     }
-                    if canShowVMMonitor && !showsVMMonitor {
-                        Button("Show VM desktop") { showsVMMonitor = true }
+                    if canShowVMMonitor {
+                        Button("Show VM desktop") { showsSetupPanel = false }
                     }
                 } else if model.providerSetup.provider == .utm {
                     Text("This VM is off. Start it in UTM, then refresh its status here.")
@@ -527,8 +567,8 @@ struct HostWorkspaceView: View {
                     .fixedSize(horizontal: false, vertical: true)
                 Text("Follow the guide to join Tailscale and sign in. The Tailscale app on this physical Mac does not count.")
                     .foregroundStyle(.secondary)
-                if canShowVMMonitor && !showsVMMonitor {
-                    Button("Show VM desktop") { showsVMMonitor = true }
+                if canShowVMMonitor {
+                    Button("Show VM desktop") { showsSetupPanel = false }
                         .buttonStyle(.borderedProminent)
                 } else if model.providerSetup.provider == .utm {
                     Button("Open UTM") { model.openUTM() }
@@ -537,7 +577,7 @@ struct HostWorkspaceView: View {
                     Button("I signed in to Tailscale in the VM") { model.confirmTailscaleSetup() }
                         .buttonStyle(.borderedProminent)
                 }
-                if canShowVMMonitor && !showsVMMonitor {
+                if canShowVMMonitor {
                     Button("I signed in to Tailscale in the VM") { model.confirmTailscaleSetup() }
                 } else if model.providerSetup.provider == .utm {
                     Button("I signed in to Tailscale in the VM") { model.confirmTailscaleSetup() }
@@ -669,7 +709,7 @@ struct HostWorkspaceView: View {
                     .foregroundStyle(.secondary)
                 if model.setupDependencies.hermesReady {
                     if canShowVMMonitor {
-                        Button("Open VM") { showsVMMonitor = true }
+                        Button("Open VM") { showsSetupPanel = false }
                             .buttonStyle(.borderedProminent)
                     } else {
                         Button("Connection details") { showsPhoneInstructions = true }
@@ -686,7 +726,9 @@ struct HostWorkspaceView: View {
             } else {
                 sectionHeader("Connect your iPhone", detail: "Test the private connection in Tether on your iPhone.")
                 if model.setupDependencies.hermesReady {
-                    Label("Connection verified from this Mac; phone test still needed",
+                    Label(model.isPhoneSetupComplete
+                          ? "Connection verified from this Mac. iPhone setup was confirmed by you."
+                          : "Connection verified from this Mac; phone test still needed",
                           systemImage: "checkmark.circle.fill")
                         .foregroundStyle(.secondary)
                 } else {
@@ -756,6 +798,9 @@ private struct VMMonitorView: View {
     @EnvironmentObject private var model: AppViewModel
     @ObservedObject var manager: NativeVMManager
     let isFullScreen: Bool
+    let showsSetupPanel: Bool
+    let toggleSetupPanel: () -> Void
+    let openSection: (HostWorkspaceSection) -> Void
     let toggleFullScreen: () -> Void
     @State private var showingForcePowerOff = false
     @State private var clipboardIsBusy = false
@@ -786,8 +831,29 @@ private struct VMMonitorView: View {
                     Text("Virtual machine").font(.headline)
                     Text(displayedVMName)
                         .font(.caption).foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
                 }
                 Spacer()
+                Button(action: toggleSetupPanel) {
+                    Label(showsSetupPanel ? "Hide Setup" : "Show Setup", systemImage: "sidebar.left")
+                }
+                .labelStyle(.iconOnly)
+                .buttonStyle(.borderless)
+                .help(showsSetupPanel && !isFullScreen ? "Hide setup" : "Show setup")
+                .accessibilityLabel(showsSetupPanel && !isFullScreen ? "Hide setup" : "Show setup")
+                Menu {
+                    Button("Connection details") { openSection(.phone) }
+                    Button("VMs") { openSection(.library) }
+                    Divider()
+                    Button("Health") { openSection(.overview) }
+                    Button("Diagnostics") { openSection(.diagnostics) }
+                } label: {
+                    Label("Details", systemImage: "ellipsis.circle")
+                }
+                .labelStyle(.iconOnly)
+                .menuStyle(.borderlessButton)
+                .help("Connection details, VMs, and diagnostics")
                 if model.providerSetup.provider == .builtIn, manager.isRunning {
                     Menu {
                         Button("Send host text to VM") { sendHostClipboard() }
@@ -795,6 +861,7 @@ private struct VMMonitorView: View {
                     } label: {
                         Label("Clipboard", systemImage: "doc.on.clipboard")
                     }
+                    .labelStyle(.iconOnly)
                     .disabled(clipboardIsBusy)
                     .help("Transfer copied text only when you choose an action")
                     Button {
@@ -804,6 +871,7 @@ private struct VMMonitorView: View {
                               systemImage: isFullScreen ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
                     }
                     .buttonStyle(.borderless)
+                    .labelStyle(.iconOnly)
                     .help(isFullScreen ? "Return to the setup workspace" : "Show the VM across the entire screen")
                 }
                 Label(isOn ? "On" : "Off", systemImage: "power")
@@ -839,12 +907,13 @@ private struct VMMonitorView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            if !isFullScreen {
+            if !isFullScreen && (showsSetupPanel || hasManagerError || !model.setupDependencies.vmReady
+                                 || clipboardMessage != nil || manager.shutdownRequested) {
                 VStack(alignment: .leading, spacing: 10) {
                 if hasManagerError || !model.setupDependencies.vmReady {
                     Text(manager.status).font(.callout).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
-                } else {
+                } else if showsSetupPanel {
                     Label("macOS desktop ready", systemImage: "checkmark.circle.fill")
                         .font(.callout).foregroundStyle(.secondary)
                 }
@@ -860,7 +929,7 @@ private struct VMMonitorView: View {
                         .disabled(manager.isBusy)
                     }
                 }
-                if model.preventsHostSleep {
+                if showsSetupPanel && model.preventsHostSleep {
                     Label("Keeping this Mac awake while the VM runs", systemImage: "moon.zzz.slash")
                         .font(.caption).foregroundStyle(.secondary)
                 }

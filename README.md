@@ -5,8 +5,12 @@
 Setup keeps the current task in focus: prepare a VM, connect its private network,
 verify the assistant, and connect an iPhone. Provider choices, existing VM
 management, and manual connection entry are available in contextual details.
-The VM display can be shown when guest interaction is needed and hidden while
-reviewing connection instructions. Health and diagnostics are secondary tools.
+The running VM stays visible beside setup instructions. Health and diagnostics
+are secondary tools.
+After iPhone setup is confirmed, a running built-in VM uses the full workspace.
+The setup panel collapses automatically and can be reopened from the VM toolbar.
+Opening the VM from the completion screen also closes the setup panel; stopping
+the VM restores setup and recovery controls.
 
 Setup pages remain readable when the VM stops. Live checks must pass again before
 connection verification or phone completion is available. After a successful
