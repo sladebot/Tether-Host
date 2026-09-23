@@ -16,9 +16,9 @@ struct VMInventoryView: View {
                         .font(.headline)
                     Spacer()
                     if !model.isInsideGuest {
-                        Button("Create New VM") { model.startNewVMSetup() }
+                        Button("Create VM…", systemImage: "plus") { model.startNewVMSetup() }
                             .buttonStyle(.borderedProminent)
-                            .accessibilityHint("Opens creation for the selected VM provider")
+                            .accessibilityHint("Opens VM creation for the selected provider")
                     }
                 }
                 Picker("Show VMs from", selection: Binding(
@@ -46,10 +46,10 @@ struct VMInventoryView: View {
             .padding()
             if model.candidateVMs.isEmpty {
                 EmptyEvidenceView(
-                    title: "No VM found",
+                    title: "No virtual machines",
                     message: model.providerSetup.provider == .builtIn
-                        ? "Choose Create New VM to install macOS with Apple Virtualization."
-                        : "No UTM VM is registered here. Switch to Apple Virtualization to see VMs created in this app.",
+                        ? "Create a VM from a macOS restore image."
+                        : "Create a UTM VM or choose Apple Virtualization to see VMs created here.",
                     symbol: "macpro.gen3"
                 )
             } else {

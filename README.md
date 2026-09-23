@@ -1,5 +1,22 @@
 # Tether Host for Mac
 
+## Guided onboarding
+
+Setup keeps the current task in focus: prepare a VM, connect its private network,
+verify the assistant, and connect an iPhone. Provider choices, existing VM
+management, and manual connection entry are available in contextual details.
+The VM display can be shown when guest interaction is needed and hidden while
+reviewing connection instructions. Health and diagnostics are secondary tools.
+
+Setup pages remain readable when the VM stops. Live checks must pass again before
+connection verification or phone completion is available. After a successful
+**Test Connection** on the phone, **I tested the connection on my iPhone** records the user's
+confirmation for that VM and endpoint; it does not claim ongoing phone reachability.
+Previously selected UTM VMs survive upgrades, while desktop and network checks
+are repeated when the host app relaunches.
+
+## VM setup
+
 Tether Host for Mac is the macOS companion for the Tether iOS app. Its first-launch
 Setup Assistant defaults to built-in Apple Virtualization and also offers UTM. Both paths
 accept a compatible macOS IPSW and install a fresh VM in Tether Host. For UTM,
@@ -108,9 +125,9 @@ example `build/Tether-Host-for-Mac-v1.0.0-build-19-preview.dmg`, with a matching
 app signature and DMG checksum; this is not a notarized public release.
 See `docs/mac-studio-install-test.md` for the installed-app test results.
 
-On the host, setup uses a two-column workspace. The selected dependency and
-its controls stay on the left; the built-in VM display, power state, and
-controls stay on the right as you move between steps. Tailscale and Hermes
+On the host, setup uses a focused workspace with an optional VM display. The
+selected task stays on the left when the display is shown; connection and
+management pages can use the space when it is hidden. Tailscale and Hermes
 setup both become available after the VM desktop is ready; the iPhone step
 waits for the verified private connection. Tailscale sign-in and first
 desktop readiness are explicitly confirmed by the user because the host does

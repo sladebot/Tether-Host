@@ -535,7 +535,7 @@ final class NativeVMManager: ObservableObject {
             shutdownRequested = false
             showsDisplay = true
             markBundleUsed(id)
-            status = "Tether Host VM started. Finish the macOS welcome screens in this window."
+            status = "VM started. Finish macOS setup or sign in to continue."
         } catch {
             virtualMachine = nil
             showsDisplay = false
@@ -684,7 +684,7 @@ final class NativeVMManager: ObservableObject {
         runningID = nil
         virtualMachine = nil
         showsDisplay = false
-        status = error.map { "The VM stopped: \($0.localizedDescription)" } ?? "The VM shut down. Select Start / Show to boot it again."
+        status = error.map { "The VM stopped: \($0.localizedDescription)" } ?? "The VM is off. Choose Start VM to resume."
     }
 
     private func markBundleUsed(_ id: VirtualMachineID) {

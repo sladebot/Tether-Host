@@ -8,9 +8,9 @@ struct TetherHostApp: App {
         WindowGroup("Tether Host for Mac") {
             HostRootView()
                 .environmentObject(model)
-                .frame(minWidth: 1040, minHeight: 700)
+                .frame(minWidth: 680, minHeight: 620)
         }
-        .defaultSize(width: 1320, height: 820)
+        .defaultSize(width: 840, height: 700)
         .commands {
             CommandGroup(after: .toolbar) {
                 Button("Refresh Status") { Task { await model.refresh() } }
