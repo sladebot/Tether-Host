@@ -9,8 +9,9 @@ import TetherHostCore
 enum NativeVMError: LocalizedError {
     case unsupportedImage
     case newerGuestRequiresHostUpdate(guest: Int, host: Int)
-    case insufficientSpace
+    case insufficientSpace(Int)
     case insufficientDownloadSpace
+    case utmCleanupIncomplete(String)
     case invalidResources(String)
     case noCompatibleDownload(host: String)
     case imageCatalogUnavailable
@@ -29,8 +30,9 @@ enum NativeVMError: LocalizedError {
         case .unsupportedImage: "This macOS IPSW is not compatible with this Mac's virtualization hardware. Choose another IPSW."
         case .newerGuestRequiresHostUpdate(let guest, let host):
             "This is a macOS \(guest) IPSW, but this Mac runs macOS \(host). Choose a macOS \(host) IPSW or update this Mac first."
-        case .insufficientSpace: "At least 45 GB of free disk space is needed to install a fresh macOS VM."
-        case .insufficientDownloadSpace: "At least 65 GB of free disk space is needed to download macOS and install a fresh VM."
+        case .insufficientSpace(let gib): "At least \(gib) GB of free space is needed on the selected VM drive to install this macOS VM."
+        case .utmCleanupIncomplete(let detail): "UTM registered the new VM, but cleanup did not finish. Both copies may remain; run only one copy. \(detail)"
+        case .insufficientDownloadSpace: "At least 25 GB of free space is needed in Application Support to cache the macOS download."
         case .invalidResources(let message): message
         case .noCompatibleDownload(let host): "No downloadable macOS IPSW was found for macOS \(host). Update this Mac or choose a compatible IPSW manually."
         case .imageCatalogUnavailable: "Could not check available macOS images. Check your internet connection, try again, or choose a compatible IPSW manually."
@@ -172,6 +174,9 @@ final class NativeVMManager: ObservableObject {
     private static let macOS262SHA256 = "bc7c67b2a2cc4ac8c9da0c2b149b9f31e153cd542ce387e6fb8620e41b5278ef"
     private static let selectedImageKey = "restoreImage.lastSelectedPath"
     private static let downloadedImageKey = "restoreImage.lastDownloadedFilename"
+    private static let creationFolderPathKey = "vmCreation.folderPath"
+    private static let creationFolderBookmarkKey = "vmCreation.folderBookmark"
+    private static let creationFolderVolumeKey = "vmCreation.volumeIdentity"
 
     static var canDownloadHostImage: Bool {
         true // Keep the action visible so unsupported hosts receive an explanation.
@@ -195,6 +200,7 @@ final class NativeVMManager: ObservableObject {
     @Published var creationCPUCount: Int
     @Published var creationMemoryGiB: Int
     @Published var creationDiskGiB: Int
+    @Published private(set) var selectedCreationStorageURL: URL?
 
     private var restoreImage: VZMacOSRestoreImage?
     private var activeDownloadID: UUID?
@@ -214,6 +220,14 @@ final class NativeVMManager: ObservableObject {
         desktopReadyVMID = preferences.string(forKey: "setup.nativeDesktopReadyVMID").flatMap(VirtualMachineID.init)
         rootURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Tether Host for Mac/Virtual Machines", isDirectory: true)
+        if let path = preferences.string(forKey: Self.creationFolderPathKey) {
+            var stale = false
+            let bookmarked = preferences.data(forKey: Self.creationFolderBookmarkKey).flatMap {
+                try? URL(resolvingBookmarkData: $0, options: [.withoutUI, .withoutMounting],
+                         bookmarkDataIsStale: &stale)
+            }
+            selectedCreationStorageURL = bookmarked ?? URL(fileURLWithPath: path, isDirectory: true)
+        }
         vmDelegate.owner = self
         if let savedPath = preferences.string(forKey: Self.selectedImageKey) {
             let savedURL = URL(fileURLWithPath: savedPath)
@@ -249,6 +263,81 @@ final class NativeVMManager: ObservableObject {
     var creationCPURange: ClosedRange<Int> { creationLimits.cpu }
     var creationMemoryRange: ClosedRange<Int> { creationLimits.memoryGiB }
     var creationDiskRange: ClosedRange<Int> { creationLimits.diskGiB }
+    var creationStorageDisplayName: String {
+        selectedCreationStorageURL?.path ?? "This Mac (default)"
+    }
+    var creationStorageValidationMessage: String? {
+        guard let folder = selectedCreationStorageURL else { return nil }
+        let resolvedFolder = folder.resolvingSymlinksInPath()
+        let resolvedDefault = rootURL.resolvingSymlinksInPath()
+        if resolvedFolder == resolvedDefault || resolvedFolder.path.hasPrefix(resolvedDefault.path + "/") {
+            return "Choose a folder outside Tether's default Virtual Machines folder."
+        }
+        var ancestor = resolvedFolder
+        while ancestor.path != "/" {
+            if ancestor.pathExtension.lowercased() == "utm" ||
+                FileManager.default.fileExists(atPath: ancestor.appendingPathComponent(NativeVirtualMachineStore.manifestFilename).path) {
+                return "Choose a storage folder outside an existing virtual machine."
+            }
+            ancestor.deleteLastPathComponent()
+        }
+        guard FileManager.default.fileExists(atPath: folder.path),
+              let volume = try? NativeVMStorageRegistry.volumeIdentity(at: folder),
+              volume == preferences.string(forKey: Self.creationFolderVolumeKey) else {
+            return "The selected VM drive is unavailable or has changed. Reconnect it or choose another folder."
+        }
+        guard FileManager.default.isWritableFile(atPath: folder.path) else {
+            return "The selected VM folder is not writable. Choose a folder where you can save files."
+        }
+        guard (try? folder.resourceValues(forKeys: [.volumeSupportsSparseFilesKey]))?
+            .volumeSupportsSparseFiles == true else {
+            return "This drive does not support sparse VM disk images. Choose an APFS folder."
+        }
+        return nil
+    }
+
+    func chooseCreationStorageFolder() {
+        guard !isBusy else { return }
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Use This Folder"
+        panel.message = "New virtual machines will be saved here. macOS downloads stay on this Mac."
+        if panel.runModal() == .OK, let folder = panel.url?.standardizedFileURL {
+            do {
+                guard folder != rootURL, !folder.path.hasPrefix(rootURL.path + "/") else {
+                    status = "Choose a folder outside Tether's default Virtual Machines folder."
+                    return
+                }
+                let volume = try NativeVMStorageRegistry.volumeIdentity(at: folder)
+                guard FileManager.default.isWritableFile(atPath: folder.path) else {
+                    status = "The selected VM folder is not writable. Choose another folder."
+                    return
+                }
+                guard (try? folder.resourceValues(forKeys: [.volumeSupportsSparseFilesKey]))?
+                    .volumeSupportsSparseFiles == true else {
+                    status = "This drive does not support sparse VM disk images. Choose an APFS folder."
+                    return
+                }
+                preferences.set(try folder.bookmarkData(), forKey: Self.creationFolderBookmarkKey)
+                preferences.set(folder.path, forKey: Self.creationFolderPathKey)
+                preferences.set(volume, forKey: Self.creationFolderVolumeKey)
+                selectedCreationStorageURL = folder
+            } catch {
+                status = "Could not use this VM folder: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    func resetCreationStorageToDefault() {
+        guard !isBusy else { return }
+        preferences.removeObject(forKey: Self.creationFolderBookmarkKey)
+        preferences.removeObject(forKey: Self.creationFolderPathKey)
+        preferences.removeObject(forKey: Self.creationFolderVolumeKey)
+        selectedCreationStorageURL = nil
+    }
     var creationResourceError: String? {
         creationLimits.validationMessage(for: NativeVMResources(
             cpuCount: creationCPUCount, memoryGiB: creationMemoryGiB, diskGiB: creationDiskGiB
@@ -524,7 +613,7 @@ final class NativeVMManager: ObservableObject {
             let available = try destination.deletingLastPathComponent()
                 .resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
                 .volumeAvailableCapacityForImportantUsage ?? 0
-            guard available >= 65 * 1_073_741_824 else {
+            guard available >= 25 * 1_073_741_824 else {
                 throw NativeVMError.insufficientDownloadSpace
             }
             let staged = destination.deletingLastPathComponent()
@@ -611,15 +700,25 @@ final class NativeVMManager: ObservableObject {
         isBusy = true
         defer { isBusy = false }
         let id = VirtualMachineID(rawValue: UUID())
-        let stage = rootURL.appendingPathComponent(".creating-\(id.description)", isDirectory: true)
-        let destination = rootURL.appendingPathComponent(id.description, isDirectory: true)
+        let creationRoot = selectedCreationStorageURL ?? rootURL
+        let stage = creationRoot.appendingPathComponent(".creating-\(id.description)", isDirectory: true)
+        let destination = creationRoot.appendingPathComponent(id.description, isDirectory: true)
         var presentedInstallerVM: VZVirtualMachine?
         do {
-            try FileManager.default.createDirectory(at: rootURL, withIntermediateDirectories: true)
-            let capacity = try rootURL
+            if let creationStorageValidationMessage {
+                status = creationStorageValidationMessage
+                return nil
+            }
+            if selectedCreationStorageURL == nil {
+                try FileManager.default.createDirectory(at: rootURL, withIntermediateDirectories: true)
+            }
+            let capacity = try creationRoot
                 .resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
                 .volumeAvailableCapacityForImportantUsage ?? 0
-            guard capacity >= 45 * 1_073_741_824 else { throw NativeVMError.insufficientSpace }
+            let requiredGiB = min(resources.diskGiB + 4, 45)
+            guard capacity >= Int64(requiredGiB) * 1_073_741_824 else {
+                throw NativeVMError.insufficientSpace(requiredGiB)
+            }
             try FileManager.default.createDirectory(at: stage, withIntermediateDirectories: false)
             let hardware = requirements.hardwareModel
             let machineID = VZMacMachineIdentifier()
@@ -680,13 +779,14 @@ final class NativeVMManager: ObservableObject {
                 to: stage.appendingPathComponent(NativeVirtualMachineStore.manifestFilename), options: .atomic
             )
             try FileManager.default.moveItem(at: stage, to: destination)
+            try NativeVMStorageRegistry(defaultRootURL: rootURL).register(manifest, at: destination)
             if provider == .utm {
                 do {
                     try await moveInstalledVMToUTM(id, nativeBundle: destination)
                     status = "Fresh macOS VM registered with UTM. Open it in UTM to finish the welcome screens."
                     return id
                 } catch {
-                    status = "macOS was installed, but UTM registration was not confirmed: \(error.localizedDescription) The Apple VM remains saved in Tether Host."
+                    status = "macOS was installed, but UTM setup could not finish: \(error.localizedDescription) The Apple VM remains saved in Tether Host."
                     return nil
                 }
             }
@@ -721,9 +821,8 @@ final class NativeVMManager: ObservableObject {
             status = "Install a compatible UTM in Applications before moving this VM."
             return false
         }
-        let nativeBundle = rootURL.appendingPathComponent(id.description, isDirectory: true)
         let locator = VirtualMachineBundleLocator(nativeRoot: rootURL, utmRoots: [])
-        guard locator.locate(id, provider: .builtIn) == nativeBundle else {
+        guard let nativeBundle = locator.locate(id, provider: .builtIn) else {
             status = "The exact Apple VM bundle could not be found. Refresh the VM list."
             return false
         }
@@ -734,14 +833,15 @@ final class NativeVMManager: ObservableObject {
             status = "VM \(id.description.prefix(8)) now appears in UTM."
             return true
         } catch {
-            status = "Could not confirm UTM registration: \(error.localizedDescription) The Apple VM is still saved in Tether Host."
+            status = "UTM setup could not finish: \(error.localizedDescription) The Apple VM is still saved in Tether Host."
             return false
         }
     }
 
     private func moveInstalledVMToUTM(_ id: VirtualMachineID, nativeBundle: URL) async throws {
-        let packageRoot = rootURL.deletingLastPathComponent()
-            .appendingPathComponent("UTM Virtual Machines", isDirectory: true)
+        let external = nativeBundle.deletingLastPathComponent() != rootURL
+        let packageRoot = external ? nativeBundle.deletingLastPathComponent() :
+            rootURL.deletingLastPathComponent().appendingPathComponent("UTM Virtual Machines", isDirectory: true)
         let candidate = packageRoot.appendingPathComponent("\(id.description).utm", isDirectory: true)
         let locator = VirtualMachineBundleLocator(nativeRoot: rootURL, utmRoots: [packageRoot])
         let package: URL
@@ -763,7 +863,16 @@ final class NativeVMManager: ObservableObject {
         }
         status = "Registering the VM with UTM…"
         try await registerWithUTM(package, id: id)
-        try FileManager.default.removeItem(at: nativeBundle)
+        do {
+            let registry = NativeVMStorageRegistry(defaultRootURL: rootURL)
+            if external {
+                let manifest = try readManifest(at: nativeBundle)
+                try registry.registerUTM(id: id, name: manifest.name, at: package)
+            }
+            try removeNativeBundle(nativeBundle, id: id)
+        } catch {
+            throw NativeVMError.utmCleanupIncomplete(error.localizedDescription)
+        }
     }
 
     private func registerWithUTM(_ package: URL, id: VirtualMachineID) async throws {
@@ -791,8 +900,8 @@ final class NativeVMManager: ObservableObject {
         if isRunning, runningID == id { showsDisplay = true; return }
         if isRunning { throw NativeVMError.anotherVMRunning }
         guard !hasOtherHostCopy else { throw NativeVMError.anotherHostCopyRunning }
-        let bundle = rootURL.appendingPathComponent(id.description, isDirectory: true)
-        guard FileManager.default.fileExists(atPath: bundle.path) else { throw NativeVMError.missingVM }
+        let locator = VirtualMachineBundleLocator(nativeRoot: rootURL, utmRoots: [])
+        guard let bundle = locator.locate(id, provider: .builtIn) else { throw NativeVMError.missingVM }
         guard await prepareGuestDisk() else { throw NativeVMError.guestDiskUnavailable }
         let hardwareData = try Data(contentsOf: bundle.appendingPathComponent("hardware.bin"))
         let machineData = try Data(contentsOf: bundle.appendingPathComponent("machine.bin"))
@@ -912,9 +1021,29 @@ final class NativeVMManager: ObservableObject {
         guard !hasOtherHostCopy else { throw NativeVMError.cannotRemoveWithOtherHostCopy }
         let locator = VirtualMachineBundleLocator(nativeRoot: rootURL, utmRoots: [])
         guard let bundle = locator.locate(id, provider: .builtIn) else { throw NativeVMError.missingVM }
-        try FileManager.default.removeItem(at: bundle)
+        try removeNativeBundle(bundle, id: id)
         clearDesktopReady(for: id)
         status = "Tether Host VM \(id.description) and its files were deleted."
+    }
+
+    private func readManifest(at bundle: URL) throws -> NativeVirtualMachineManifest {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try decoder.decode(NativeVirtualMachineManifest.self,
+                                  from: Data(contentsOf: bundle.appendingPathComponent(NativeVirtualMachineStore.manifestFilename)))
+    }
+
+    private func removeNativeBundle(_ bundle: URL, id: VirtualMachineID) throws {
+        let registry = NativeVMStorageRegistry(defaultRootURL: rootURL)
+        let external = bundle.deletingLastPathComponent() != rootURL
+        let manifest = external ? try readManifest(at: bundle) : nil
+        if external { try registry.unregister(id) }
+        do {
+            try FileManager.default.removeItem(at: bundle)
+        } catch {
+            if let manifest { try? registry.register(manifest, at: bundle) }
+            throw error
+        }
     }
 
     var hasOtherHostCopy: Bool {
@@ -984,8 +1113,10 @@ final class NativeVMManager: ObservableObject {
     }
 
     private func markBundleUsed(_ id: VirtualMachineID) {
-        let bundle = rootURL.appendingPathComponent(id.description, isDirectory: true)
-        try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: bundle.path)
+        let locator = VirtualMachineBundleLocator(nativeRoot: rootURL, utmRoots: [])
+        if let bundle = locator.locate(id, provider: .builtIn) {
+            try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: bundle.path)
+        }
     }
 }
 

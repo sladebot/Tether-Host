@@ -138,6 +138,10 @@ private struct VMRecordRow: View {
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 5) {
                     Text(vm.name).font(.headline)
+                    if vm.state == .unavailable {
+                        Text("Storage unavailable. Reconnect the drive and refresh.")
+                            .font(.callout).foregroundStyle(.secondary)
+                    }
                     Text(vm.id.rawValue.uuidString)
                         .font(.system(.caption, design: .monospaced))
                         .foregroundStyle(.secondary)

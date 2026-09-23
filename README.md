@@ -56,7 +56,10 @@ Users can choose an older available release instead (macOS 14 or newer).
 VM creation follows **Choose macOS → Configure your VM → Create**. After selecting
 an installation image, a dedicated configuration screen lets users enter memory,
 CPU cores, and disk capacity, with host-aware defaults and a reset button. Back
-preserves the settings. These are saved per VM for later starts and UTM export. Existing VMs retain
+preserves the settings. The configuration step also offers a folder picker for
+internal or external VM storage. New disk capacities start at 24 GB; capacities
+below 64 GB may not leave enough space for installation and updates. The selected
+resources and location are saved per VM for later starts and UTM export. Existing VMs retain
 their previous defaults. **Create another VM** remains available with existing VMs,
 including while one is running. Installation leaves the running VM untouched and
 saves the new VM for a later start. Disk capacity is a growing sparse disk limit, not an
@@ -67,7 +70,10 @@ servers. Published SHA-256 digests are checked when available, and the downloade
 image's compatibility, version, and build are verified before caching. Apple's current
 image discovery and the pinned 26.2 image provide fallback candidates. If discovery
 fails or no matching image exists, setup explains the issue and retains manual IPSW
-selection. Downloads need about 65 GB free for the image and a fresh VM.
+selection. The macOS download cache stays on this Mac and requires 25 GB free.
+Installation checks free space on the selected VM volume separately; the required
+amount depends on the virtual disk capacity and filesystem. Keep external storage
+connected while its VM is running.
 The UTM path requires a compatible installation in `/Applications/UTM.app`.
 
 ## Install the latest preview

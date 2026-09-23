@@ -65,7 +65,7 @@ public struct NativeVMResourceLimits: Sendable {
         let memoryMaximum = min(hostMemoryLimit, Int(maximumMemoryBytes / gib))
         cpu = cpuMinimum...max(cpuMinimum, cpuMaximum)
         memoryGiB = memoryMinimum...max(memoryMinimum, memoryMaximum)
-        diskGiB = 64...1024
+        diskGiB = 24...1024
         if cpuMaximum < cpuMinimum {
             hostCapabilityError = "This macOS image needs at least \(cpuMinimum) CPU cores; this Mac can provide \(max(0, cpuMaximum))."
         } else if memoryMaximum < memoryMinimum {
@@ -139,6 +139,114 @@ public enum AppleVirtualizationSupport {
     }
 }
 
+/// Remembers complete VM bundles created outside the default VM directory. The
+/// bookmark follows a renamed or remounted volume; the saved path is used only
+/// to explain where an unavailable VM was last seen.
+public struct NativeVMStorageRegistry: Sendable {
+    private struct Entry: Codable {
+        let id: VirtualMachineID
+        let name: String
+        let bookmark: Data
+        let lastPath: String
+        let volumeIdentity: String
+        let provider: VMProvider?
+        var resolvedProvider: VMProvider { provider ?? .builtIn }
+    }
+
+    public let defaultRootURL: URL
+    private var fileURL: URL {
+        defaultRootURL.deletingLastPathComponent().appendingPathComponent("external-vms.json")
+    }
+
+    public init(defaultRootURL: URL) {
+        self.defaultRootURL = defaultRootURL.standardizedFileURL
+    }
+
+    private func entries() throws -> [Entry] {
+        guard FileManager.default.fileExists(atPath: fileURL.path) else { return [] }
+        return try JSONDecoder().decode([Entry].self, from: Data(contentsOf: fileURL))
+    }
+
+    private func save(_ entries: [Entry]) throws {
+        try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        try encoder.encode(entries).write(to: fileURL, options: .atomic)
+    }
+
+    public func register(_ manifest: NativeVirtualMachineManifest, at bundleURL: URL) throws {
+        let bundle = bundleURL.standardizedFileURL
+        guard bundle.lastPathComponent == manifest.id.description else {
+            throw NativeVirtualMachineStoreError.identityMismatch
+        }
+        guard bundle.deletingLastPathComponent() != defaultRootURL else { return }
+        let folder = bundle.deletingLastPathComponent()
+        let bookmark = try folder.bookmarkData()
+        let volumeIdentity = try Self.volumeIdentity(at: folder)
+        var saved = try entries().filter { $0.id != manifest.id || $0.resolvedProvider != .builtIn }
+        saved.append(Entry(id: manifest.id, name: manifest.name, bookmark: bookmark,
+                           lastPath: folder.path, volumeIdentity: volumeIdentity, provider: .builtIn))
+        try save(saved)
+    }
+
+    public func registerUTM(id: VirtualMachineID, name: String, at packageURL: URL) throws {
+        let package = packageURL.standardizedFileURL
+        guard package.lastPathComponent == "\(id.description).utm" else {
+            throw NativeVirtualMachineStoreError.identityMismatch
+        }
+        let folder = package.deletingLastPathComponent()
+        let bookmark = try folder.bookmarkData()
+        let volumeIdentity = try Self.volumeIdentity(at: folder)
+        var saved = try entries().filter { $0.id != id || $0.resolvedProvider != .utm }
+        saved.append(Entry(id: id, name: name, bookmark: bookmark, lastPath: folder.path,
+                           volumeIdentity: volumeIdentity, provider: .utm))
+        try save(saved)
+    }
+
+    public func unregister(_ id: VirtualMachineID, provider: VMProvider = .builtIn) throws {
+        let saved = try entries()
+        guard saved.contains(where: { $0.id == id && $0.resolvedProvider == provider }) else { return }
+        try save(saved.filter { $0.id != id || $0.resolvedProvider != provider })
+    }
+
+    public func knownExternalVMs() throws -> [(id: VirtualMachineID, name: String, bundle: URL?)] {
+        try entries().filter { $0.resolvedProvider == .builtIn }.map { entry in
+            (entry.id, entry.name, resolvedBundle(for: entry))
+        }
+    }
+
+    public func location(of id: VirtualMachineID, provider: VMProvider = .builtIn) -> URL? {
+        guard let entry = try? entries().first(where: { $0.id == id && $0.resolvedProvider == provider }) else { return nil }
+        return resolvedBundle(for: entry)
+    }
+
+    private func resolvedBundle(for entry: Entry) -> URL? {
+        var stale = false
+        guard let folder = try? URL(resolvingBookmarkData: entry.bookmark,
+                                    options: [.withoutUI, .withoutMounting], bookmarkDataIsStale: &stale),
+              (try? Self.volumeIdentity(at: folder)) == entry.volumeIdentity else { return nil }
+        let name = entry.resolvedProvider == .utm ? "\(entry.id.description).utm" : entry.id.description
+        return folder.appendingPathComponent(name, isDirectory: true)
+    }
+
+    public static func volumeIdentity(at folder: URL) throws -> String {
+        let values = try folder.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey,
+                                                          .volumeUUIDStringKey, .volumeIdentifierKey])
+        guard values.isDirectory == true, values.isSymbolicLink != true else {
+            throw NativeVirtualMachineStoreError.invalidRoot
+        }
+        if let uuid = values.volumeUUIDString { return uuid }
+        guard let identifier = values.volumeIdentifier else {
+            throw NativeVirtualMachineStoreError.invalidRoot
+        }
+        return String(describing: identifier)
+    }
+
+    public func lastKnownLocation(of id: VirtualMachineID, provider: VMProvider = .builtIn) -> String? {
+        try? entries().first(where: { $0.id == id && $0.resolvedProvider == provider })?.lastPath
+    }
+}
+
 /// Owns the on-disk inventory for VMs run directly with Apple's
 /// Virtualization.framework. A complete VM bundle is rooted at its immutable UUID
 /// and contains a Tether-owned manifest plus signed guest artifacts.
@@ -157,13 +265,12 @@ public struct NativeVirtualMachineStore: VirtualMachineReading, Sendable {
         }
         let fileManager = FileManager.default
         guard rootURL.isFileURL else { throw NativeVirtualMachineStoreError.invalidRoot }
-        guard fileManager.fileExists(atPath: rootURL.path) else { return [] }
-
-        let children = try fileManager.contentsOfDirectory(
+        let registry = NativeVMStorageRegistry(defaultRootURL: rootURL)
+        let children = fileManager.fileExists(atPath: rootURL.path) ? try fileManager.contentsOfDirectory(
             at: rootURL,
             includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey],
             options: [.skipsHiddenFiles]
-        ).sorted { $0.lastPathComponent < $1.lastPathComponent }
+        ).sorted { $0.lastPathComponent < $1.lastPathComponent } : []
 
         var records: [VirtualMachineRecord] = []
         for bundleURL in children {
@@ -196,6 +303,15 @@ public struct NativeVirtualMachineStore: VirtualMachineReading, Sendable {
             records.append(VirtualMachineRecord(id: manifest.id, name: manifest.name, state: .stopped))
         }
 
+        let locator = VirtualMachineBundleLocator(nativeRoot: rootURL, utmRoots: [])
+        for external in try registry.knownExternalVMs() {
+            guard !records.contains(where: { $0.id == external.id }) else {
+                throw NativeVirtualMachineStoreError.duplicateID(external.id)
+            }
+            let available = locator.locate(external.id, provider: .builtIn) != nil
+            records.append(VirtualMachineRecord(id: external.id, name: external.name,
+                                                state: available ? .stopped : .unavailable))
+        }
         if let duplicate = Dictionary(grouping: records, by: \.id).first(where: { $0.value.count > 1 })?.key {
             throw NativeVirtualMachineStoreError.duplicateID(duplicate)
         }

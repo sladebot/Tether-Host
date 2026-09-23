@@ -122,7 +122,7 @@ private struct NativeVMSetupView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             SetupPhaseBox(number: 1, title: "Create a new macOS VM", symbol: "internaldrive") {
-                Text("Choose a macOS restore image on this Mac or download one from Apple. Allow about 65 GB of free space for the image and VM.")
+                Text("Choose a macOS restore image on this Mac or download one from Apple. The download is cached on this Mac; VM installation space is checked separately.")
                     .foregroundStyle(.secondary)
                 if !manager.downloadImageOptions.isEmpty {
                     Picker("macOS version", selection: $manager.selectedDownloadVersion) {

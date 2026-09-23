@@ -10,10 +10,13 @@ final class NativeVMResourceTests: XCTestCase {
         )
         XCTAssertEqual(limits.cpu, 4...8)
         XCTAssertEqual(limits.memoryGiB, 4...4)
-        XCTAssertEqual(limits.diskGiB, 64...1024)
+        XCTAssertEqual(limits.diskGiB, 24...1024)
         XCTAssertEqual(limits.defaults, NativeVMResources(cpuCount: 4, memoryGiB: 4, diskGiB: 128))
         XCTAssertNotNil(limits.validationMessage(for: NativeVMResources(cpuCount: 3, memoryGiB: 4, diskGiB: 128)))
-        XCTAssertNotNil(limits.validationMessage(for: NativeVMResources(cpuCount: 4, memoryGiB: 4, diskGiB: 32)))
+        XCTAssertNotNil(limits.validationMessage(for: NativeVMResources(cpuCount: 4, memoryGiB: 4, diskGiB: 23)))
+        for capacity in [24, 32, 40, 48, 64] {
+            XCTAssertNil(limits.validationMessage(for: NativeVMResources(cpuCount: 4, memoryGiB: 4, diskGiB: capacity)))
+        }
         XCTAssertNil(limits.validationMessage(for: limits.defaults))
     }
 

@@ -297,6 +297,8 @@ struct HostWorkspaceView: View {
                 } else {
                     Text(manager.hasOtherHostCopy
                          ? "Another Tether Host window is managing your VM. Finish there and quit that copy before starting it here."
+                         : vm.state == .unavailable
+                         ? "This VM’s storage is unavailable. Reconnect its drive, then refresh the VM list."
                          : manager.isRunning && manager.runningVMID != vm.id
                          ? "Another VM is running. Shut it down before starting this one."
                          : "This VM is off. Start it to continue setup.")
@@ -306,7 +308,7 @@ struct HostWorkspaceView: View {
                         .disabled(manager.isRunning || manager.isBusy || manager.hasOtherHostCopy)
                 }
             } else {
-                Text("Download a compatible macOS image or choose one already on this Mac. Allow about 65 GB of free space and keep Tether Host open during installation.")
+                Text("Download a compatible macOS image or choose one already on this Mac. Choose where to store the VM in the next step. Keep Tether Host open during installation.")
                     .foregroundStyle(.secondary)
                 downloadVersionPicker
                 if manager.hasOtherHostCopy {
@@ -360,7 +362,7 @@ struct HostWorkspaceView: View {
                                         Text(String(candidate.id.description.suffix(8))).font(.caption.monospaced())
                                     }
                                     Spacer()
-                                    Text(candidate.state == .started ? "Running" : "Off").font(.caption)
+                                    Text(candidate.state == .started ? "Running" : candidate.state == .unavailable ? "Unavailable" : "Off").font(.caption)
                                 }
                             }
                             .buttonStyle(.plain)
@@ -487,6 +489,8 @@ struct HostWorkspaceView: View {
                                 .fixedSize(horizontal: false, vertical: true)
                             Divider().padding(.vertical, 4)
                             VMCreationSettingsView(manager: manager)
+                            Divider().padding(.vertical, 4)
+                            creationStoragePicker
                             if manager.hasOtherHostCopy {
                                 Text("Quit the other Tether Host copy before creating this VM.")
                                     .font(.callout).foregroundStyle(.orange)
@@ -496,7 +500,7 @@ struct HostWorkspaceView: View {
                             }
                         } else {
                         Text("macOS installation image").font(.headline)
-                        Text("Download a compatible macOS restore image or choose an IPSW on this Mac. Allow about 65 GB of free space for the image and VM.")
+                        Text("Download a compatible macOS restore image or choose an IPSW on this Mac. The download is cached on this Mac. You can store the VM on an external drive in the next step.")
                             .font(.callout).foregroundStyle(.secondary)
                         downloadVersionPicker
                         if manager.hasCachedHostImage {
@@ -551,7 +555,7 @@ struct HostWorkspaceView: View {
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .frame(height: 380)
+                .frame(height: showsVMConfiguration ? 440 : 380)
                 HStack {
                     Button("Cancel") { model.showsCreateVM = false }
                     Spacer()
@@ -573,6 +577,7 @@ struct HostWorkspaceView: View {
                     .buttonStyle(.borderedProminent)
                     .disabled(manager.imageURL == nil
                         || manager.creationResourceError != nil
+                        || manager.creationStorageValidationMessage != nil
                         || !model.providerSetup.availability.canContinue || manager.hasOtherHostCopy)
                     } else {
                         Button("Continue to configuration") { showsVMConfiguration = true }
@@ -585,6 +590,29 @@ struct HostWorkspaceView: View {
         .padding(24)
         .frame(width: 520)
         .frame(minHeight: 340)
+    }
+
+    private var creationStoragePicker: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Storage location").font(.headline)
+            Label(manager.creationStorageDisplayName, systemImage: "externaldrive")
+                .font(.callout).textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack {
+                Button("Choose folder…") { manager.chooseCreationStorageFolder() }
+                if manager.selectedCreationStorageURL != nil {
+                    Button("Use this Mac") { manager.resetCreationStorageToDefault() }
+                        .buttonStyle(.borderless)
+                }
+            }
+            Text("Choose a folder on this Mac or an external drive. Keep the drive connected while the VM runs.")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if let error = manager.creationStorageValidationMessage {
+                Text(error).font(.callout).foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
     }
 
     private var downloadVersionPicker: some View {
@@ -1116,10 +1144,17 @@ struct VMCreationSettingsView: View {
             resourceRow("CPU cores", value: $manager.creationCPUCount,
                         range: manager.creationCPURange, unit: "cores")
             resourceRow("Disk space", value: $manager.creationDiskGiB,
-                        range: manager.creationDiskRange, unit: "GB", step: 32)
+                        range: manager.creationDiskRange, unit: "GB", step: 8)
             Text("Disk space grows as the VM uses it, up to this limit.")
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+            if manager.creationDiskGiB < 64 {
+                Text(manager.creationDiskGiB < 40
+                     ? "Experimental disk size. macOS installation may fail; use 64 GB or more for room to install and update."
+                     : "Below 64 GB, space for macOS and updates is limited. Installation may require a larger disk.")
+                    .font(.caption).foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             Button("Use recommended settings") { manager.resetCreationResources() }
                 .buttonStyle(.borderless).font(.callout)
             if let error = manager.creationResourceError {

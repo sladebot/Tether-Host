@@ -614,6 +614,10 @@ final class AppViewModel: ObservableObject {
                     }
                     try FileManager.default.removeItem(at: bundle)
                 }
+                let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+                try NativeVMStorageRegistry(defaultRootURL: support.appendingPathComponent(
+                    "Tether Host for Mac/Virtual Machines", isDirectory: true
+                )).unregister(record.id, provider: .utm)
             }
             guard !FileManager.default.fileExists(atPath: bundle.path) else {
                 throw VMRemovalError.filesRemain(bundle)

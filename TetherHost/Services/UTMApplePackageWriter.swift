@@ -11,7 +11,7 @@ public enum UTMApplePackageError: LocalizedError {
         switch self {
         case .invalidNativeVM: "The installed Apple VM is incomplete; its UTM package was not created."
         case .packageAlreadyExists: "A UTM package with this exact VM identity already exists."
-        case .cloneUnavailable: "The VM disk could not be cloned on this volume. The original Apple VM is safe."
+        case .cloneUnavailable: "The VM disk could not be copied into the UTM package. Check free space in Application Support; the original Apple VM is safe."
         case .missingGuestSetupDisk: "The Tether guest setup disk is missing; the UTM package was not created."
         }
     }
@@ -35,7 +35,7 @@ public enum UTMApplePackageWriter {
         if let resources = manifest.resources {
             guard (2...64).contains(resources.cpuCount),
                   (4...512).contains(resources.memoryGiB),
-                  (64...1024).contains(resources.diskGiB) else {
+                  (24...1024).contains(resources.diskGiB) else {
                 throw UTMApplePackageError.invalidNativeVM
             }
         }
@@ -109,7 +109,14 @@ public enum UTMApplePackageWriter {
     }
 
     private static func clone(_ source: URL, to destination: URL) throws {
-        guard clonefile(source.path, destination.path, 0) == 0 else {
+        if clonefile(source.path, destination.path, 0) == 0 { return }
+        // clonefile requires one filesystem. An external VM may need an actual
+        // copy into the local UTM package; the source remains untouched until
+        // UTM confirms registration.
+        guard errno == EXDEV else { throw UTMApplePackageError.cloneUnavailable }
+        do {
+            try FileManager.default.copyItem(at: source, to: destination)
+        } catch {
             throw UTMApplePackageError.cloneUnavailable
         }
     }

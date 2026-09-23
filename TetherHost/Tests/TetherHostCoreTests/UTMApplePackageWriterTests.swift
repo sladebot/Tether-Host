@@ -11,7 +11,7 @@ final class UTMApplePackageWriterTests: XCTestCase {
         try FileManager.default.createDirectory(at: native, withIntermediateDirectories: true)
         let manifest = NativeVirtualMachineManifest(
             id: id, name: "Tether Test", guestImageVersion: "26.2",
-            resources: NativeVMResources(cpuCount: 6, memoryGiB: 12, diskGiB: 256)
+            resources: NativeVMResources(cpuCount: 6, memoryGiB: 12, diskGiB: 24)
         )
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601

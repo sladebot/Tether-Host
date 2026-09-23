@@ -1,5 +1,29 @@
 # Focused onboarding
 
+## Build 55: storage location and smaller virtual disks
+
+The Configure your VM step includes a storage folder picker, including mounted
+external drives, and a Use this Mac reset. New disk capacities start at 24 GB with
+8 GB stepper increments and direct entry; below 64 GB, setup explains that macOS
+installation and updates may require more capacity. The recommended default remains
+128 GB. This does not shrink or relocate existing VMs.
+
+Native and UTM bundles honor the selected final storage location. A persisted
+registry uses folder bookmarks and volume identity to find them after relaunch;
+missing native storage remains visible as unavailable, and exact lookup never
+falls back to a different local copy of a registered external VM. The picker
+rejects unwritable locations, storage inside an existing VM, and volumes without
+sparse-file support. Downloads remain in the local cache (25 GB free-space check),
+while installation checks the target volume separately.
+
+Validation: native build, signature and DMG integrity checks, 65 core tests, and
+onboarding smoke checks passed. Registry tests covered relaunch, missing storage,
+and rejection of a local UTM duplicate when registered external storage is missing.
+The isolated UI verified folder selection, restoration after relaunch, reset to
+this Mac, and 24 GB accepted with an experimental warning. Full macOS installation
+on a 24 GB disk and physical drive disconnect during a running VM remain untested.
+Build 55 was installed on disk without stopping the running VM.
+
 ## Build 54: a dedicated configuration step
 
 Creation is now an explicit two-step flow: Choose macOS, then Configure your VM.
