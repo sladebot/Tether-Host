@@ -46,6 +46,7 @@ class GuestSetupTests(unittest.TestCase):
     def test_guest_shell_installs_hermes_command_and_uses_prompting_permission_probe(self):
         script = (module_path.parent / 'Set up Tether Guest.command').read_text()
         self.assertIn('command_path="$command_directory/hermes"', script)
+        self.assertIn('[ -x "$command_path" ]', script)
         self.assertIn('guest_setup.py" verify-computer-use', script)
         self.assertNotIn('"$HERMES_BIN" computer-use doctor', script)
 

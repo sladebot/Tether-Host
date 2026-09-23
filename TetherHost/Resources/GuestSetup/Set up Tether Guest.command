@@ -47,10 +47,11 @@ install_hermes_command() {
     local command_path="$command_directory/hermes"
     local shell_profile="$HOME/.zprofile"
     /bin/mkdir -p "$command_directory"
-    if [ -e "$command_path" ] && [ ! -L "$command_path" ]; then
-        fail 'A different ~/.local/bin/hermes file already exists. Move it aside, then retry.'
+    if [ -e "$command_path" ] || [ -L "$command_path" ]; then
+        [ -x "$command_path" ] || fail 'The existing ~/.local/bin/hermes command is not executable. Repair it, then retry.'
+    else
+        /bin/ln -s "$HERMES_BIN" "$command_path"
     fi
-    /bin/ln -sfn "$HERMES_BIN" "$command_path"
     if ! /usr/bin/grep -Fq '# Tether Hermes command' "$shell_profile" 2>/dev/null; then
         printf '\n# Tether Hermes command\nexport PATH="$HOME/.local/bin:$PATH"\n' >> "$shell_profile"
     fi
