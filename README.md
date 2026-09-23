@@ -53,9 +53,10 @@ required host software update for that combination in local testing.
 The first setup step includes a macOS version picker. It defaults to the newest
 available image matching the host release and not exceeding its full version.
 Users can choose an older available release instead (macOS 14 or newer).
-**VM settings** in the same step lets users set memory, CPU cores, and disk capacity,
-with host-aware defaults and a reset button. The settings carry into the creation
-dialog and are saved per VM for later starts and UTM export. Existing VMs retain
+VM creation follows **Choose macOS → Configure your VM → Create**. After selecting
+an installation image, a dedicated configuration screen lets users enter memory,
+CPU cores, and disk capacity, with host-aware defaults and a reset button. Back
+preserves the settings. These are saved per VM for later starts and UTM export. Existing VMs retain
 their previous defaults. **Create another VM** remains available with existing VMs,
 including while one is running. Installation leaves the running VM untouched and
 saves the new VM for a later start. Disk capacity is a growing sparse disk limit, not an

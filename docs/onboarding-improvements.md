@@ -1,5 +1,18 @@
 # Focused onboarding
 
+## Build 54: a dedicated configuration step
+
+Creation is now an explicit two-step flow: Choose macOS, then Configure your VM.
+Continue requires an inspected image; the configuration step shows that image
+alongside editable RAM, CPU, and disk values and a final Create action. Back keeps
+resource choices. The first onboarding page links into this flow instead of
+showing a second copy of the resource controls.
+
+Validation: native build, DMG verification, and onboarding smoke checks passed.
+The isolated UI fixture verified Continue into configuration, direct numeric input,
+rejection of 32 GB disk capacity, and preservation of 256 GB after Back/Continue.
+External storage selection is not part of this build.
+
 ## Build 53: visible VM settings and creation alongside a running VM
 
 Memory, CPU, and disk settings are always visible in setup and creation, with a

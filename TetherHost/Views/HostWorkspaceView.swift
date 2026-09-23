@@ -6,6 +6,7 @@ struct HostWorkspaceView: View {
     @EnvironmentObject private var model: AppViewModel
     @ObservedObject var manager: NativeVMManager
     @Environment(\.scenePhase) private var scenePhase
+    @State private var showsVMConfiguration = false
     @State private var showToken = false
     @State private var showsSetupPanel = true
     @State private var autoCollapsedForCurrentRun = false
@@ -96,6 +97,7 @@ struct HostWorkspaceView: View {
         }
         .onChange(of: model.showsCreateVM) { _, showing in
             if showing {
+                showsVMConfiguration = false
                 showsSetupPanel = true
                 if isVMFullScreen { fullScreenWindow?.toggleFullScreen(nil) }
             }
@@ -307,7 +309,6 @@ struct HostWorkspaceView: View {
                 Text("Download a compatible macOS image or choose one already on this Mac. Allow about 65 GB of free space and keep Tether Host open during installation.")
                     .foregroundStyle(.secondary)
                 downloadVersionPicker
-                VMCreationSettingsView(manager: manager)
                 if manager.hasOtherHostCopy {
                     Text("Another copy of Tether Host is open. Quit that copy before creating a VM here.")
                         .font(.callout).foregroundStyle(.secondary)
@@ -429,7 +430,10 @@ struct HostWorkspaceView: View {
     private var createVMSheet: some View {
         VStack(alignment: .leading, spacing: 20) {
             VStack(alignment: .leading, spacing: 5) {
-                Text("Create a macOS VM").font(.title2.bold())
+                Text(showsVMConfiguration ? "Configure your VM" : "Choose macOS")
+                    .font(.title2.bold())
+                Text(showsVMConfiguration ? "Step 2 of 2 · Configure and create" : "Step 1 of 2 · Installation image")
+                    .font(.callout).foregroundStyle(.secondary)
                 Text(model.providerSetup.provider == .utm
                      ? "Tether Host installs macOS, then adds the new VM to UTM."
                      : manager.isRunning
@@ -477,11 +481,24 @@ struct HostWorkspaceView: View {
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 12) {
+                        if showsVMConfiguration {
+                            Label(manager.imageDescription, systemImage: "checkmark.circle.fill")
+                                .font(.callout).foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Divider().padding(.vertical, 4)
+                            VMCreationSettingsView(manager: manager)
+                            if manager.hasOtherHostCopy {
+                                Text("Quit the other Tether Host copy before creating this VM.")
+                                    .font(.callout).foregroundStyle(.orange)
+                            }
+                            if managerHasError {
+                                Text(manager.status).font(.callout).foregroundStyle(.orange)
+                            }
+                        } else {
                         Text("macOS installation image").font(.headline)
                         Text("Download a compatible macOS restore image or choose an IPSW on this Mac. Allow about 65 GB of free space for the image and VM.")
                             .font(.callout).foregroundStyle(.secondary)
                         downloadVersionPicker
-                        VMCreationSettingsView(manager: manager)
                         if manager.hasCachedHostImage {
                             Label("A downloaded macOS image is available on this Mac.",
                                   systemImage: "checkmark.circle.fill")
@@ -530,14 +547,17 @@ struct HostWorkspaceView: View {
                                   systemImage: "exclamationmark.triangle.fill")
                                 .foregroundStyle(.orange)
                         }
+                        }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .frame(minHeight: 280, maxHeight: 440)
+                .frame(height: 380)
                 HStack {
                     Button("Cancel") { model.showsCreateVM = false }
                     Spacer()
-                    Button(model.providerSetup.provider == .utm ? "Create in UTM" : "Create built-in VM") {
+                    if showsVMConfiguration {
+                    Button("Back") { showsVMConfiguration = false }
+                    Button(model.providerSetup.provider == .utm ? "Create in UTM" : "Create VM") {
                         Task {
                             if let id = await manager.install(for: model.providerSetup.provider) {
                                 await model.refresh()
@@ -554,6 +574,11 @@ struct HostWorkspaceView: View {
                     .disabled(manager.imageURL == nil
                         || manager.creationResourceError != nil
                         || !model.providerSetup.availability.canContinue || manager.hasOtherHostCopy)
+                    } else {
+                        Button("Continue to configuration") { showsVMConfiguration = true }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(manager.imageURL == nil)
+                    }
                 }
             }
         }
@@ -1086,15 +1111,12 @@ struct VMCreationSettingsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Virtual machine settings").font(.headline)
-            Stepper(value: $manager.creationMemoryGiB, in: manager.creationMemoryRange) {
-                settingLabel("Memory (RAM)", value: "\(manager.creationMemoryGiB) GB")
-            }
-            Stepper(value: $manager.creationCPUCount, in: manager.creationCPURange) {
-                settingLabel("CPU cores", value: "\(manager.creationCPUCount)")
-            }
-            Stepper(value: $manager.creationDiskGiB, in: manager.creationDiskRange, step: 32) {
-                settingLabel("Disk space", value: "\(manager.creationDiskGiB) GB")
-            }
+            resourceRow("Memory (RAM)", value: $manager.creationMemoryGiB,
+                        range: manager.creationMemoryRange, unit: "GB")
+            resourceRow("CPU cores", value: $manager.creationCPUCount,
+                        range: manager.creationCPURange, unit: "cores")
+            resourceRow("Disk space", value: $manager.creationDiskGiB,
+                        range: manager.creationDiskRange, unit: "GB", step: 32)
             Text("Disk space grows as the VM uses it, up to this limit.")
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -1111,12 +1133,20 @@ struct VMCreationSettingsView: View {
         .disabled(manager.isBusy)
     }
 
-    private func settingLabel(_ title: String, value: String) -> some View {
-        HStack {
+    private func resourceRow(_ title: String, value: Binding<Int>,
+                             range: ClosedRange<Int>, unit: String, step: Int = 1) -> some View {
+        HStack(spacing: 8) {
             Text(title)
             Spacer()
-            Text(value).monospacedDigit().foregroundStyle(.secondary)
+            TextField(title, value: value, format: .number.grouping(.never))
+                .textFieldStyle(.roundedBorder)
+                .multilineTextAlignment(.trailing)
+                .frame(width: 68)
+                .accessibilityLabel(title)
+            Text(unit).foregroundStyle(.secondary).frame(width: 38, alignment: .leading)
+            Stepper(title, value: value, in: range, step: step)
+                .labelsHidden()
+                .accessibilityLabel(title)
         }
-        .accessibilityElement(children: .combine)
     }
 }
