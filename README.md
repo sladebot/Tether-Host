@@ -10,10 +10,6 @@ Tether Host prepares an isolated macOS guest for [Tether Flow on iPhone](https:/
 
 ![Tether Host workspace with guided VM setup and an embedded macOS guest](./screenshots/host-workspace.png)
 
-### Security overview
-
-![Tether Host security overview with evidence-based isolation status](./screenshots/security-overview.png)
-
 ## Overview
 
 Tether Host supports two VM providers:
