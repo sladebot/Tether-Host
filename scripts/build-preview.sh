@@ -90,6 +90,9 @@ For a pre-existing UTM VM, attach the included ISO manually once.
 Dependency detection for Tailscale and Hermes runs inside the VM. Software on
 the physical Mac never satisfies those checks. The installer guides Tailscale
 sign-in, model login, guest permissions, service configuration, and verification.
+When macOS asks whether CuaDriver may bypass the private window picker and
+directly access the guest screen and audio, choose Allow. The computer-use step
+does not complete until it verifies a real guest desktop capture.
 After guest Verify connection succeeds, a built-in VM sends its private URL and
 token directly to Tether Host. Tether Host fills them and tests Hermes from this
 Mac before enabling the iPhone step. UTM retains manual entry and file import.

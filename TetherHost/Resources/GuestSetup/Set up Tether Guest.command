@@ -190,16 +190,17 @@ fi
 
 if [ "$ACTION" = computer-use ]; then
 stage '5 of 6 — Installing Hermes computer use inside this VM'
-printf 'macOS needs two separate CuaDriver permissions: Accessibility and Screen & System Audio Recording. This guide will open each setting in turn.\n'
+printf 'macOS needs CuaDriver Accessibility and Screen & System Audio Recording access.\n'
+printf 'When macOS says CuaDriver wants to bypass the private window picker and directly access your screen and audio, click Allow. This lets computer use capture the full guest display without stopping at a window picker.\n'
 "$HERMES_BIN" computer-use install
-stage '5 of 6 — Requesting and testing guest computer-use permissions'
+stage '5 of 6 — Requesting direct guest screen access'
 if ! "$PYTHON_BIN" "$SCRIPT_DIRECTORY/guest_setup.py" verify-computer-use; then
     stage '5 of 6 — Allow CuaDriver in guest Accessibility'
     open 'x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility' || open -a 'System Settings'
     wait_for_user 'In this VM, open Privacy & Security > Accessibility and enable CuaDriver. If it is absent, use + to add /Applications/CuaDriver.app. Return here after granting access.'
     stage '5 of 6 — Allow CuaDriver in guest Screen Recording'
     open 'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture' || open -a 'System Settings'
-    wait_for_user 'In this VM, open Privacy & Security > Screen & System Audio Recording and enable CuaDriver. If it is absent, use + to add /Applications/CuaDriver.app. Restart the driver if macOS asks, then return here.'
+    wait_for_user 'In this VM, open Privacy & Security > Screen & System Audio Recording and enable CuaDriver. If macOS asks to bypass the private window picker and directly access your screen and audio, click Allow. If CuaDriver is absent, use + to add /Applications/CuaDriver.app. Restart the driver if macOS asks, then return here.'
     stage '5 of 6 — Rechecking Accessibility, Screen Recording, and direct capture'
     "$PYTHON_BIN" "$SCRIPT_DIRECTORY/guest_setup.py" verify-computer-use || fail 'CuaDriver still cannot capture and control this VM. Recheck both guest permissions, then retry.'
 fi

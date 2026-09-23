@@ -39,9 +39,12 @@ screen permissions require independent console checks; file existence proves nei
    lifecycle under the standard account; confirm listener and process ownership.
 5. Configure guest Tailscale Serve for private HTTPS to `127.0.0.1:8642`, verify
    the exact DNS name from its status, and verify guest Funnel is disabled.
-6. Enable computer use for the API-server platform. Run guest computer-use doctor
-   in that same interactive account; test actual screen capture and a disposable
-   TextEdit interaction after the full isolation gate. App presence alone is insufficient.
+6. Enable computer use for the API-server platform. In that same interactive
+   account, grant Accessibility and Screen & System Audio Recording, then choose
+   **Allow** when macOS asks CuaDriver to bypass the private window picker. Verify
+   the signed app owns the grants and require a real full-desktop PNG capture;
+   app presence and read-only doctor output alone are insufficient. Test a
+   disposable TextEdit interaction after the full isolation gate.
 7. Probe the already-running API (no model or run requests are issued):
 
    ```sh

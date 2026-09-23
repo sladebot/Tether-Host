@@ -161,6 +161,7 @@ final class AppViewModel: ObservableObject {
     @Published private(set) var connectionVerifiedAt: Date?
     @Published private(set) var isVerifyingConnection = false
     @Published private(set) var connectionMessage = "Verify the guest endpoint before connecting your phone."
+    @Published private(set) var connectionCopyMessage: String?
     @Published private(set) var guestSetupStatus = "Guest setup has not started."
     @Published private(set) var guestSetupDiskStatus = "No guest setup disk has been created yet."
     @Published private(set) var guestSetupDiskURL: URL?
@@ -732,23 +733,35 @@ final class AppViewModel: ObservableObject {
     }
 
     func copyConnectionURL() {
-        guard connectionVerifiedAt != nil else { return }
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(connectionURL, forType: .string)
+        guard connectionVerifiedAt != nil, !connectionURL.isEmpty else { return }
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        guard pasteboard.setString(connectionURL, forType: .string) else { return }
+        showConnectionCopyMessage("Tailscale URL copied.")
     }
 
     func copyConnectionToken() {
-        guard connectionVerifiedAt != nil else { return }
+        guard connectionVerifiedAt != nil, !connectionToken.isEmpty else { return }
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         // Mark the credential as concealed/transient for clipboard consumers.
         pasteboard.setData(Data(), forType: NSPasteboard.PasteboardType("org.nspasteboard.ConcealedType"))
         pasteboard.setData(Data(), forType: NSPasteboard.PasteboardType("org.nspasteboard.TransientType"))
-        pasteboard.setString(connectionToken, forType: .string)
+        guard pasteboard.setString(connectionToken, forType: .string) else { return }
+        showConnectionCopyMessage("Hermes token copied. It will clear from the clipboard in 45 seconds.")
         let count = pasteboard.changeCount
         Task { @MainActor in
             try? await Task.sleep(for: .seconds(45))
             if pasteboard.changeCount == count { pasteboard.clearContents() }
+        }
+    }
+
+    private func showConnectionCopyMessage(_ message: String) {
+        connectionCopyMessage = message
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(4))
+            guard self?.connectionCopyMessage == message else { return }
+            self?.connectionCopyMessage = nil
         }
     }
 

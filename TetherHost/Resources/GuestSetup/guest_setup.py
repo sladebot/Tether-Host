@@ -19,6 +19,7 @@ class SetupFailure(Exception):
 STATE = Path.home() / 'Library/Application Support/Tether Host for Mac/Guest Setup'
 HERMES = Path.home() / '.hermes'
 HERMES_BIN = HERMES / 'hermes-agent/venv/bin/hermes'
+CUA_DRIVER_BIN = Path.home() / '.local/bin/cua-driver'
 
 
 def private_write(path, text):
@@ -194,6 +195,21 @@ def json_command(arguments, label, timeout=90):
     return result.returncode, payload
 
 
+def driver_json_command(arguments, label, timeout=90):
+    try:
+        result = subprocess.run([str(CUA_DRIVER_BIN), *arguments], text=True,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                timeout=timeout, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        raise SetupFailure(label + ' could not be completed.')
+    if result.returncode != 0:
+        raise SetupFailure(label + ' failed.')
+    try:
+        return json.loads(result.stdout)
+    except (TypeError, ValueError):
+        raise SetupFailure(label + ' returned an unreadable result.')
+
+
 def verify_computer_use():
     try:
         grant = subprocess.run([str(HERMES_BIN), 'computer-use', 'permissions', 'grant'],
@@ -201,7 +217,7 @@ def verify_computer_use():
     except (OSError, subprocess.TimeoutExpired):
         raise SetupFailure('CuaDriver permission and direct-capture verification could not run.')
     if grant.returncode != 0:
-        raise SetupFailure('CuaDriver could not verify Accessibility, Screen Recording, and direct capture. Complete both guest permissions, then retry.')
+        raise SetupFailure('CuaDriver could not verify Accessibility and direct capture of the full guest screen. Click Allow on the macOS private-window-picker prompt, complete both guest permissions, then retry.')
 
     _, permissions = json_command(
         ['computer-use', 'permissions', 'status', '--json'],
@@ -209,7 +225,15 @@ def verify_computer_use():
     if permissions.get('accessibility') is not True:
         raise SetupFailure('Enable CuaDriver in guest Accessibility, then retry.')
     if permissions.get('screen_recording') is not True:
-        raise SetupFailure('Enable CuaDriver in guest Screen & System Audio Recording, then retry.')
+        raise SetupFailure('Enable CuaDriver in guest Screen & System Audio Recording and click Allow on the private-window-picker prompt, then retry.')
+    if permissions.get('source', {}).get('attribution') != 'driver-daemon':
+        raise SetupFailure('CuaDriver permissions are not attributed to its signed app. Restart CuaDriver and retry this step.')
+    direct = permissions.get('direct_capture_verification', {})
+    if (direct.get('source') != 'permissions_grant'
+            or direct.get('bundle_id') != 'com.trycua.driver'
+            or not isinstance(direct.get('verified_at'), str)
+            or not direct['verified_at'].endswith('Z')):
+        raise SetupFailure('Choose Allow when CuaDriver asks to bypass the private window picker and directly access the guest screen and audio, then retry.')
 
     required = {'bundle_identity', 'tcc_accessibility', 'tcc_screen_recording', 'ax_capability'}
     # The prompt-capable direct-capture probe above is authoritative. The
@@ -221,6 +245,19 @@ def verify_computer_use():
     failed = sorted(check for check in required if checks.get(check) != 'pass')
     if failed:
         raise SetupFailure('CuaDriver did not pass: ' + ', '.join(failed) + '.')
+
+    # Exercise the same app-owned paths Hermes uses. Capture output stays in
+    # memory so the setup console never prints the guest screenshot or base64.
+    driver_json_command(['list_apps', '{}'], 'CuaDriver application access')
+    desktop = driver_json_command(['call', 'get_desktop_state', '{}'],
+                                  'CuaDriver direct guest-screen capture')
+    if (desktop.get('screenshot_mime_type') != 'image/png'
+            or not isinstance(desktop.get('screenshot_width'), int)
+            or desktop['screenshot_width'] <= 0
+            or not isinstance(desktop.get('screenshot_height'), int)
+            or desktop['screenshot_height'] <= 0
+            or not desktop.get('screenshot_png_b64')):
+        raise SetupFailure('CuaDriver did not return a valid full-screen PNG. Choose Allow on the direct screen/audio access prompt, then retry.')
 
 
 def test_model(endpoint, token):

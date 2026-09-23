@@ -27,7 +27,7 @@ private enum SetupStep: Int, CaseIterable {
         case .hermesConfigure:
             "Sign in to a model and start the authenticated Hermes gateway inside this VM."
         case .computerUse:
-            "Install Hermes computer use in this VM, grant its macOS permissions, and check that it is ready."
+            "Install Hermes computer use, grant direct guest screen access, and verify capture and control."
         case .verify:
             "Check private HTTPS, authentication, computer use, and a real model response before connecting your phone."
         }
@@ -44,7 +44,7 @@ private enum SetupStep: Int, CaseIterable {
         case .hermesConfigure:
             "Hermes may open a browser for model sign-in. Complete that sign-in inside this VM."
         case .computerUse:
-            "Two guest permissions are needed: Accessibility, then Screen & System Audio Recording. Enable CuaDriver in both; use + to add /Applications/CuaDriver.app if missing."
+            "When macOS says CuaDriver wants to bypass the private window picker and directly access your screen and audio, click Allow. Then enable CuaDriver in Accessibility and Screen & System Audio Recording if either check still needs attention."
         case .verify:
             "A successful check creates a private connection file in this VM. Keep its token private when adding your phone."
         }
@@ -56,7 +56,7 @@ private enum SetupStep: Int, CaseIterable {
         case .tailscale: "Set up Tailscale"
         case .hermesInstall: "Install Hermes"
         case .hermesConfigure: "Configure Hermes"
-        case .computerUse: "Install computer use"
+        case .computerUse: "Enable direct computer use"
         case .verify: "Verify Tether connection"
         }
     }

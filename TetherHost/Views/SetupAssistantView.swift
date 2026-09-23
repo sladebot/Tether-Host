@@ -487,8 +487,12 @@ private struct GuestConnectionSetupView: View {
             Text("Connect Tether iOS").font(.title2.bold())
             Button("Import Guest Connection…") { model.importConnectionFile() }
                 .disabled(model.isVerifyingConnection)
-            TextField("VM URL — https://your-vm.your-tailnet.ts.net", text: $model.connectionURL)
-                .textFieldStyle(.roundedBorder).disabled(model.isVerifyingConnection)
+            HStack {
+                TextField("VM URL — https://your-vm.your-tailnet.ts.net", text: $model.connectionURL)
+                    .textFieldStyle(.roundedBorder).disabled(model.isVerifyingConnection)
+                Button("Copy Tailscale URL") { model.copyConnectionURL() }
+                    .disabled(model.isVerifyingConnection || model.connectionVerifiedAt == nil || model.connectionURL.isEmpty)
+            }
             HStack {
                 Group {
                     if showToken {
@@ -501,6 +505,13 @@ private struct GuestConnectionSetupView: View {
                 .privacySensitive()
                 .disabled(model.isVerifyingConnection)
                 Button(showToken ? "Hide" : "Reveal") { showToken.toggle() }
+                Button("Copy Hermes Token") { model.copyConnectionToken() }
+                    .disabled(model.isVerifyingConnection || model.connectionVerifiedAt == nil || model.connectionToken.isEmpty)
+            }
+            if let copyMessage = model.connectionCopyMessage {
+                Label(copyMessage, systemImage: "checkmark.circle.fill")
+                    .font(.callout)
+                    .foregroundStyle(.green)
             }
             HStack {
                 Button(model.isVerifyingConnection ? "Verifying…" : "Verify Connection") {
@@ -515,8 +526,8 @@ private struct GuestConnectionSetupView: View {
                 Label("Verified \(date.formatted(date: .omitted, time: .shortened))", systemImage: "checkmark.circle.fill")
                     .foregroundStyle(.green)
                 HStack {
-                    Button("Copy URL") { model.copyConnectionURL() }
-                    Button("Copy Token") { model.copyConnectionToken() }
+                    Button("Copy Tailscale URL") { model.copyConnectionURL() }
+                    Button("Copy Hermes Token") { model.copyConnectionToken() }
                 }
                 Text("In Tether iOS, add a Hermes API Server connection, enter this URL and token, and tap Test Connection. Your iPhone must be connected to the same Tailscale network. The token clipboard clears after 45 seconds unless you copy something else.")
                     .font(.callout).foregroundStyle(.secondary)

@@ -510,11 +510,15 @@ struct HostWorkspaceView: View {
             }
             Button("Import Guest Connection…") { model.importConnectionFile() }
                 .disabled(model.isVerifyingConnection)
-            TextField("Guest URL — https://your-vm.your-tailnet.ts.net", text: Binding(
-                get: { model.connectionURL }, set: { model.setConnectionURLFromUser($0) }
-            ))
-                .textFieldStyle(.roundedBorder)
-                .disabled(model.isVerifyingConnection)
+            HStack {
+                TextField("Guest URL — https://your-vm.your-tailnet.ts.net", text: Binding(
+                    get: { model.connectionURL }, set: { model.setConnectionURLFromUser($0) }
+                ))
+                    .textFieldStyle(.roundedBorder)
+                    .disabled(model.isVerifyingConnection)
+                Button("Copy Tailscale URL") { model.copyConnectionURL() }
+                    .disabled(model.isVerifyingConnection || model.connectionVerifiedAt == nil || model.connectionURL.isEmpty)
+            }
             HStack {
                 Group {
                     if showToken {
@@ -531,6 +535,13 @@ struct HostWorkspaceView: View {
                 .privacySensitive()
                 .disabled(model.isVerifyingConnection)
                 Button(showToken ? "Hide" : "Reveal") { showToken.toggle() }
+                Button("Copy Hermes Token") { model.copyConnectionToken() }
+                    .disabled(model.isVerifyingConnection || model.connectionVerifiedAt == nil || model.connectionToken.isEmpty)
+            }
+            if let copyMessage = model.connectionCopyMessage {
+                Label(copyMessage, systemImage: "checkmark.circle.fill")
+                    .font(.callout)
+                    .foregroundStyle(.green)
             }
             Button(model.isVerifyingConnection ? "Verifying…" : "Verify Hermes Connection") {
                 Task { await model.verifyConnection() }
@@ -555,8 +566,13 @@ struct HostWorkspaceView: View {
                 .foregroundStyle(.secondary)
             Text(model.connectionURL).font(.callout.monospaced()).textSelection(.enabled)
             HStack {
-                Button("Copy URL") { model.copyConnectionURL() }
-                Button("Copy Token") { model.copyConnectionToken() }
+                Button("Copy Tailscale URL") { model.copyConnectionURL() }
+                Button("Copy Hermes Token") { model.copyConnectionToken() }
+            }
+            if let copyMessage = model.connectionCopyMessage {
+                Label(copyMessage, systemImage: "checkmark.circle.fill")
+                    .font(.callout)
+                    .foregroundStyle(.green)
             }
             Text("The token clipboard clears after 45 seconds. After a VM reboot, unlock macOS and log in so the guest gateway and desktop permissions can resume.")
                 .font(.callout).foregroundStyle(.secondary)

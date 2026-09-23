@@ -29,6 +29,14 @@ macOS 26.2 host, setup can download Apple's macOS 26.2 IPSW in-app and verify
 its pinned SHA-256 digest before installation.
 The UTM path requires a compatible installation in `/Applications/UTM.app`.
 
+## Install the latest preview
+
+Download the newest versioned DMG from [GitHub Releases](https://github.com/sladebot/Tether-Host/releases),
+open it, and drag **Tether Host for Mac** to Applications. Preview builds are
+ad-hoc signed and are not notarized production releases; macOS may ask you to
+confirm the first launch. Keep only one installed copy so VM state and privacy
+permissions stay attached to the expected app.
+
 The welcome screen links to the official UTM download, a macOS IPSW download
 index, and UTM's macOS setup guide. UTM can download a compatible restore image
 automatically. Continue is blocked until the selected provider is available;
@@ -42,7 +50,7 @@ the provider and VM-state checks. Guest dependency detection never uses host
 Hermes, Tailscale, or developer tools.
 
 The app creates a read-only `Tether Guest Setup.iso` containing a small
-guest helper, without shared host folders or clipboard. Inside the macOS guest,
+guest helper, without shared host folders or automatic clipboard synchronization. Inside the macOS guest,
 double-click **Tether Guest Installer.app** on that disk and follow its six-step
 guide; no second Tether Host installation is needed. The helper first checks real guest HTTPS access through
 the host's NAT, then checks Tailscale, verifies its publisher signature, and
@@ -51,6 +59,12 @@ It then installs the pinned Hermes runtime when absent or configures a working
 existing guest installation, enables loopback bearer authentication, prompts for
 model login and guest permissions, starts the gateway, configures private HTTPS,
 and verifies a real model response. It refuses to run on the physical host.
+The computer-use step installs CuaDriver, requests Accessibility and Screen &
+System Audio Recording inside the VM, and tells the user to click **Allow** when
+macOS asks whether CuaDriver may bypass the private window picker. The step does
+not complete until direct guest-screen capture and Accessibility control both
+pass. macOS requires this one-time interactive consent; Tether Host cannot grant
+it silently.
 
 The helper displays the verified URL/token in its embedded setup console for entry in
 Tether iOS. For a built-in VM, the completed guest verification also releases
@@ -59,7 +73,10 @@ confirms live guest Tailscale status, and verifies Hermes from the Mac before
 unblocking the phone step. The host connection screen retains **Import Guest Connection…**
 for a private, user-owned `connection.json`, accepts an existing endpoint manually, checks TLS and
 API authentication/capabilities, stores the credential in Keychain, and provides
-masked reveal/copy controls for use in Tether iOS. The phone still needs Tailscale
+separate **Copy Tailscale URL** and **Copy Hermes Token** controls beside the
+verified values for use in Tether iOS. The token stays masked in the UI, is marked
+as concealed/transient on the macOS clipboard, and clears after 45 seconds when
+unchanged. The phone still needs Tailscale
 and its own Test Connection check. A host-side check does not certify phone reachability.
 If the guest helper cannot start, the guest Verify step keeps the connection
 verified but shows **Retry host handoff**. The same action can restart the helper

@@ -17,14 +17,23 @@ spec.loader.exec_module(guest)
 
 class GuestSetupTests(unittest.TestCase):
     def test_computer_use_verification_requires_live_grant_permissions_and_health(self):
-        permissions = {'accessibility': True, 'screen_recording': True}
+        permissions = {'accessibility': True, 'screen_recording': True,
+                       'source': {'attribution': 'driver-daemon'},
+                       'direct_capture_verification': {
+                           'source': 'permissions_grant', 'bundle_id': 'com.trycua.driver',
+                           'verified_at': '2026-09-22T20:00:00Z'}}
         checks = {'checks': [{'name': name, 'status': 'pass'} for name in
                              ('bundle_identity', 'tcc_accessibility', 'tcc_screen_recording', 'ax_capability')]}
+        desktop = {'screenshot_mime_type': 'image/png', 'screenshot_width': 1280,
+                   'screenshot_height': 720, 'screenshot_png_b64': 'valid'}
         grant = Mock(returncode=0)
         with patch.object(guest.subprocess, 'run', side_effect=[grant, Mock(returncode=0, stdout=json.dumps(permissions)),
-                                                               Mock(returncode=1, stdout=json.dumps(checks))]) as run:
+                                                               Mock(returncode=1, stdout=json.dumps(checks)),
+                                                               Mock(returncode=0, stdout='[]', stderr=''),
+                                                               Mock(returncode=0, stdout=json.dumps(desktop), stderr='')]) as run:
             guest.verify_computer_use()
         self.assertEqual(run.call_args_list[0].args[0][-3:], ['computer-use', 'permissions', 'grant'])
+        self.assertEqual(run.call_args_list[-1].args[0][-3:], ['call', 'get_desktop_state', '{}'])
 
     def test_computer_use_verification_rejects_unverified_capture_and_missing_grants(self):
         with patch.object(guest.subprocess, 'run', return_value=Mock(returncode=1)):
@@ -36,11 +45,39 @@ class GuestSetupTests(unittest.TestCase):
                 guest.verify_computer_use()
 
     def test_computer_use_verification_rejects_missing_required_health_check(self):
-        permissions = {'accessibility': True, 'screen_recording': True}
+        permissions = {'accessibility': True, 'screen_recording': True,
+                       'source': {'attribution': 'driver-daemon'},
+                       'direct_capture_verification': {
+                           'source': 'permissions_grant', 'bundle_id': 'com.trycua.driver',
+                           'verified_at': '2026-09-22T20:00:00Z'}}
         report = {'checks': [{'name': 'bundle_identity', 'status': 'pass'}]}
         with patch.object(guest.subprocess, 'run', side_effect=[Mock(returncode=0),
                 Mock(returncode=0, stdout=json.dumps(permissions)), Mock(returncode=1, stdout=json.dumps(report))]):
             with self.assertRaisesRegex(guest.SetupFailure, 'ax_capability'):
+                guest.verify_computer_use()
+
+    def test_computer_use_verification_rejects_missing_direct_capture_consent(self):
+        permissions = {'accessibility': True, 'screen_recording': True,
+                       'source': {'attribution': 'driver-daemon'}}
+        with patch.object(guest.subprocess, 'run', side_effect=[Mock(returncode=0),
+                Mock(returncode=0, stdout=json.dumps(permissions))]):
+            with self.assertRaisesRegex(guest.SetupFailure, 'private window picker'):
+                guest.verify_computer_use()
+
+    def test_computer_use_verification_rejects_invalid_desktop_capture(self):
+        permissions = {'accessibility': True, 'screen_recording': True,
+                       'source': {'attribution': 'driver-daemon'},
+                       'direct_capture_verification': {
+                           'source': 'permissions_grant', 'bundle_id': 'com.trycua.driver',
+                           'verified_at': '2026-09-22T20:00:00Z'}}
+        checks = {'checks': [{'name': name, 'status': 'pass'} for name in
+                             ('bundle_identity', 'tcc_accessibility', 'tcc_screen_recording', 'ax_capability')]}
+        with patch.object(guest.subprocess, 'run', side_effect=[Mock(returncode=0),
+                Mock(returncode=0, stdout=json.dumps(permissions)),
+                Mock(returncode=0, stdout=json.dumps(checks)),
+                Mock(returncode=0, stdout='[]', stderr=''),
+                Mock(returncode=0, stdout=json.dumps({'screenshot_width': 0}), stderr='')]):
+            with self.assertRaisesRegex(guest.SetupFailure, 'valid full-screen PNG'):
                 guest.verify_computer_use()
 
     def test_guest_shell_installs_hermes_command_and_uses_prompting_permission_probe(self):
@@ -48,6 +85,7 @@ class GuestSetupTests(unittest.TestCase):
         self.assertIn('command_path="$command_directory/hermes"', script)
         self.assertIn('[ -x "$command_path" ]', script)
         self.assertIn('guest_setup.py" verify-computer-use', script)
+        self.assertIn('bypass the private window picker and directly access your screen and audio, click Allow', script)
         self.assertNotIn('"$HERMES_BIN" computer-use doctor', script)
 
     def test_private_write_atomic_permissions_and_symlink_refusal(self):
