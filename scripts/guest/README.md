@@ -116,3 +116,19 @@ addresses (including any public Studio relay/Funnel) are not blocked, and the
 LaunchDaemon has not yet passed a full pre-FileVault-unlock test.
 External tailnet/host enforcement plus a non-admin Hermes runtime are still
 required before calling the VM fully isolated.
+
+## Ubuntu graphical installer build
+
+Ubuntu guest preparation installs Chromium from Ubuntu's stable Snap channel.
+Existing installations are reused; the computer-use stage checks the browser
+command as the desktop user before declaring readiness. Cloud-image setup uses
+Ubuntu's `chromium-browser` transitional package, which installs the same snap,
+instead of adding a second lightweight browser. Browser sandboxing remains enabled.
+
+`build-linux-installer.sh` builds a Linux ARM64 ELF executable with the Python
+GTK guide and guest backend embedded. It requires a Go compiler on the build
+machine (`TETHER_GO_BINARY` may point to one). The guest uses Ubuntu Desktop's
+system Python 3 / GTK 3 bindings; the graphical bootstrap installs VTE and other
+guest dependencies through polkit. The launcher does not require FUSE or run
+a local web server. Test launching directly from the read-only TETHERUBUNTU disk
+before distributing a new build. The Go compiler is a build dependency only.

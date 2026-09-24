@@ -22,18 +22,88 @@ chmod 700 "$TETHER_GUEST_STATE"
 if ! mkdir "$TETHER_GUEST_STATE/running.lock" 2>/dev/null; then
     fail 'Guest setup is already running. If it was interrupted, close the installer and remove the running.lock folder before retrying.'
 fi
+DNS_OVERRIDE_SERVICE=''
+DNS_ORIGINAL_SERVERS=''
+restore_guest_dns() {
+    [ -n "$DNS_OVERRIDE_SERVICE" ] || return 0
+    local service="$DNS_OVERRIDE_SERVICE"
+    local original="$DNS_ORIGINAL_SERVERS"
+    local servers=()
+    if [[ "$original" == "There aren't any DNS Servers set on "* ]]; then
+        servers=(Empty)
+    else
+        while IFS= read -r server; do
+            [ -n "$server" ] && servers+=("$server")
+        done <<< "$original"
+    fi
+    if [ "${#servers[@]}" -eq 0 ]; then servers=(Empty); fi
+    /usr/bin/sudo /usr/sbin/networksetup -setdnsservers "$service" "${servers[@]}" || {
+        printf 'Could not restore DNS for %s. Restore it in System Settings > Network > DNS.\n' "$service" >&2
+        return 1
+    }
+    DNS_OVERRIDE_SERVICE=''
+}
 cleanup() {
     result=$?
+    restore_guest_dns || result=1
     rmdir "$TETHER_GUEST_STATE/running.lock" 2>/dev/null || true
     if [ "$result" -ne 0 ]; then
         printf '%s\n' "Stopped during: $CURRENT_STAGE. Fix the error above, then run setup again." > "$TETHER_GUEST_STATE/status.txt"
     fi
+    exit "$result"
 }
 trap cleanup EXIT
 # Any changed guest dependency requires a fresh final verification.
 if [ "$ACTION" != internet ]; then rm -f "$TETHER_GUEST_STATE/connection.json" "$TETHER_GUEST_STATE/verified.ready"; fi
 stage() { CURRENT_STAGE="$1"; printf '\n%s\n' "$1"; printf '%s\n' "$1" > "$TETHER_GUEST_STATE/status.txt"; }
 wait_for_user() { printf '\n%s\nPress Return when finished, or Control-C to stop. ' "$1"; read -r _; }
+check_guest_https() {
+    /usr/bin/curl --proto '=https' --tlsv1.2 -sSI --connect-timeout 10 --max-time 20 "$1" > /dev/null 2>&1
+}
+guest_name_resolves() {
+    /usr/bin/dscacheutil -q host -a name "$1" 2>/dev/null | /usr/bin/grep -q '^ip_address:'
+}
+guest_vpn_active() {
+    local tailscale_bin='/Applications/Tailscale.app/Contents/MacOS/Tailscale'
+    if [ -x "$tailscale_bin" ] &&
+       /usr/bin/env TAILSCALE_BE_CLI=1 "$tailscale_bin" status --json 2>/dev/null |
+           /usr/bin/plutil -extract BackendState raw -o - - 2>/dev/null | /usr/bin/grep -qx Running; then
+        return 0
+    fi
+    /usr/sbin/scutil --nc list 2>/dev/null | /usr/bin/grep -q '(Connected)' && return 0
+    /usr/sbin/scutil --dns 2>/dev/null | /usr/bin/grep -q SupplementalMatchDomains && return 0
+    return 1
+}
+ensure_guest_download_dns() {
+    local hostname="$1"
+    local url="$2"
+    local interface ip service
+    if check_guest_https "$url"; then return 0; fi
+    if guest_name_resolves "$hostname"; then
+        fail "The VM resolves $hostname but cannot reach it over HTTPS. Check the guest network, then retry."
+    fi
+    interface="$(/sbin/route -n get default 2>/dev/null | /usr/bin/awk '$1 == "interface:" { print $2; exit }')"
+    case "$interface" in en[0-9]*) ;; *) fail 'The VM has no Ethernet default route for DNS recovery. Check its network settings, then retry.' ;; esac
+    ip="$(/usr/sbin/ipconfig getifaddr "$interface" 2>/dev/null || true)"
+    [ -n "$ip" ] || fail 'The VM has no Ethernet address. Check its network settings, then retry.'
+    /usr/bin/nslookup "$hostname" 1.1.1.1 > /dev/null 2>&1 ||
+        fail "The VM cannot reach a direct DNS server for $hostname. Check its network settings, then retry."
+    guest_vpn_active && fail 'The VM has an active VPN or split DNS policy. Check its DNS settings without replacing the VPN resolver, then retry.'
+    service="$(/usr/sbin/networksetup -listnetworkserviceorder | /usr/bin/awk -v device="$interface" '
+        /^\([0-9]+\) / { service = $0; sub(/^\([0-9]+\) /, "", service) }
+        index($0, "Device: " device ")") { print service; exit }
+    ')"
+    [ -n "$service" ] || fail 'Could not identify the VM Ethernet service for DNS recovery.'
+    DNS_ORIGINAL_SERVERS="$(/usr/sbin/networksetup -getdnsservers "$service")" || fail 'Could not read the VM Ethernet DNS settings.'
+    printf 'The VM DNS server cannot resolve %s. Using Cloudflare DNS temporarily for this step; the previous setting will be restored.\n' "$hostname"
+    /usr/bin/sudo /usr/sbin/networksetup -setdnsservers "$service" 1.1.1.1 || fail 'Could not set temporary guest DNS.'
+    DNS_OVERRIDE_SERVICE="$service"
+    for attempt in 1 2 3; do
+        if check_guest_https "$url"; then return 0; fi
+        /bin/sleep 2
+    done
+    fail "The VM still cannot reach $hostname over HTTPS. Check its network settings, then retry."
+}
 check_tailnet() {
     [ "$(/usr/bin/plutil -extract BackendState raw -o - "$TETHER_GUEST_STATE/tailscale-status.json" 2>/dev/null || true)" = Running ] || return 1
     TAILNET_NAME="$(/usr/bin/plutil -extract Self.DNSName raw -o - "$TETHER_GUEST_STATE/tailscale-status.json" 2>/dev/null || true)"
@@ -57,6 +127,7 @@ install_hermes_command() {
     fi
 }
 complete() {
+    restore_guest_dns || fail 'Could not restore the guest DNS setting after this step.'
     printf '%s\n' "Completed: $2" > "$TETHER_GUEST_STATE/status.txt"
     /usr/bin/touch "$TETHER_GUEST_STATE/$1.ready"
     printf '\n%s\n' "$2 is complete. Return to Tether Guest Installer for the next step."
@@ -67,33 +138,7 @@ stage '1 of 6 — Keeping this macOS VM awake'
 /bin/bash "$SCRIPT_DIRECTORY/Keep Tether VM Awake.command"
 
 stage '1 of 6 — Checking Internet inside this VM'
-check_guest_https() {
-    /usr/bin/curl --proto '=https' --tlsv1.2 -sSI --connect-timeout 10 --max-time 20 \
-        https://pkgs.tailscale.com/stable/ > /dev/null 2>&1
-}
-if ! check_guest_https; then
-    GUEST_INTERFACE="$(/sbin/route -n get default 2>/dev/null | /usr/bin/awk '$1 == "interface:" { print $2; exit }')"
-    GUEST_IP="$(/usr/sbin/ipconfig getifaddr "$GUEST_INTERFACE" 2>/dev/null || true)"
-    if [ -n "$GUEST_IP" ] && /usr/bin/nslookup pkgs.tailscale.com 1.1.1.1 > /dev/null 2>&1; then
-        printf '\nThe VM has an IP address (%s), but its assigned DNS server is not resolving names.\n' "$GUEST_IP"
-        printf 'Cloudflare DNS (1.1.1.1) works from inside this VM.\n'
-        printf 'Switch this VM to 1.1.1.1? DNS queries will be sent to Cloudflare. [y/N] '
-        read -r USE_CLOUDFLARE_DNS
-        if [ "$USE_CLOUDFLARE_DNS" = y ] || [ "$USE_CLOUDFLARE_DNS" = Y ]; then
-            NETWORK_SERVICE="$(/usr/sbin/networksetup -listnetworkserviceorder | /usr/bin/awk -v device="$GUEST_INTERFACE" '
-                /^\([0-9]+\) / { service = $0; sub(/^\([0-9]+\) /, "", service) }
-                index($0, "Device: " device ")") { print service; exit }
-            ')"
-            [ -n "$NETWORK_SERVICE" ] || fail 'Could not identify the VM Ethernet service. Set its DNS server to 1.1.1.1 in System Settings > Network, then retry.'
-            /usr/bin/sudo /usr/sbin/networksetup -setdnsservers "$NETWORK_SERVICE" 1.1.1.1
-            for attempt in 1 2 3; do
-                if check_guest_https; then break; fi
-                /bin/sleep 2
-            done
-        fi
-    fi
-    check_guest_https || fail 'The VM still cannot reach the Tailscale package server. In this VM, check System Settings > Network > Ethernet > DNS, then rerun setup.'
-fi
+ensure_guest_download_dns pkgs.tailscale.com https://pkgs.tailscale.com/stable/
 printf 'Guest HTTPS access is working.\n'
 complete internet 'Guest Internet'
 exit 0
@@ -106,6 +151,7 @@ stage '2 of 6 — Checking Tailscale inside this VM'
 TAILSCALE_BIN='/Applications/Tailscale.app/Contents/MacOS/Tailscale'
 if [ ! -x "$TAILSCALE_BIN" ]; then
     stage '2 of 6 — Installing Tailscale inside this VM'
+    ensure_guest_download_dns pkgs.tailscale.com https://pkgs.tailscale.com/stable/
     curl --proto '=https' --tlsv1.2 -fL --retry 2 --connect-timeout 15 --max-time 600 \
         https://pkgs.tailscale.com/stable/Tailscale-latest-macos.pkg -o "$TETHER_GUEST_STATE/Tailscale.pkg"
     pkgutil --check-signature "$TETHER_GUEST_STATE/Tailscale.pkg" > "$TETHER_GUEST_STATE/package-signature.txt"
@@ -147,6 +193,7 @@ if [ ! -x "$HERMES_BIN" ] || [ ! -x "$PYTHON_BIN" ]; then
     HERMES_REVISION="$(/usr/bin/plutil -extract hermes_revision raw -o - "$SCRIPT_DIRECTORY/components.json")"
     INSTALLER_URL="$(/usr/bin/plutil -extract hermes_installer_url raw -o - "$SCRIPT_DIRECTORY/components.json")"
     INSTALLER_DIGEST="$(/usr/bin/plutil -extract hermes_installer_sha256 raw -o - "$SCRIPT_DIRECTORY/components.json")"
+    ensure_guest_download_dns raw.githubusercontent.com "$INSTALLER_URL"
     curl --proto '=https' --tlsv1.2 -fL --retry 2 --connect-timeout 15 --max-time 180 "$INSTALLER_URL" -o "$TETHER_GUEST_STATE/hermes-install.sh"
     ACTUAL_DIGEST="$(shasum -a 256 "$TETHER_GUEST_STATE/hermes-install.sh" | awk '{print $1}')"
     [ "$ACTUAL_DIGEST" = "$INSTALLER_DIGEST" ] || fail 'The Hermes installer checksum did not match.'
@@ -162,6 +209,7 @@ install_hermes_command
 stage '3 of 6 — Installing Hermes API support'
 HERMES_UV="$HOME/.hermes/bin/uv"
 [ -x "$HERMES_UV" ] || fail 'Hermes managed uv is missing. Repair the Hermes installation in this VM, then retry.'
+ensure_guest_download_dns pypi.org https://pypi.org/simple/
 "$HERMES_UV" pip install --python "$PYTHON_BIN" -e "$HOME/.hermes/hermes-agent[messaging]"
 complete hermes-installed 'Hermes installation'
 exit 0

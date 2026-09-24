@@ -12,6 +12,7 @@ private enum ClipboardWire {
     static let get: UInt8 = 1
     static let set: UInt8 = 2
     static let getConnection: UInt8 = 3
+    static let checkReady: UInt8 = 4
     static let ok: UInt8 = 0
     static let invalidRequest: UInt8 = 1
     static let unavailable: UInt8 = 2
@@ -28,6 +29,11 @@ private enum ClipboardWire {
         let length = UInt32(payload.count)
         return [status, UInt8((length >> 24) & 0xff), UInt8((length >> 16) & 0xff),
                 UInt8((length >> 8) & 0xff), UInt8(length & 0xff)] + payload
+    }
+
+    static func accepts(opcode: UInt8, payloadSize: Int) -> Bool {
+        (opcode == get || opcode == set || opcode == getConnection || opcode == checkReady) &&
+            (opcode == set || payloadSize == 0)
     }
 }
 
@@ -181,8 +187,7 @@ private func handle(_ descriptor: Int32) {
         return
     }
     let opcode = header[0]
-    guard opcode == ClipboardWire.get || opcode == ClipboardWire.set || opcode == ClipboardWire.getConnection,
-          opcode == ClipboardWire.set || payloadSize == 0 else {
+    guard ClipboardWire.accepts(opcode: opcode, payloadSize: payloadSize) else {
         reply(descriptor, status: ClipboardWire.invalidRequest, text: "Unknown clipboard request.")
         return
     }
@@ -191,7 +196,11 @@ private func handle(_ descriptor: Int32) {
         reply(descriptor, status: ClipboardWire.invalidRequest, text: "Clipboard text must be UTF-8.")
         return
     }
-    if opcode == ClipboardWire.getConnection {
+    if opcode == ClipboardWire.checkReady {
+        // Reaching this running VM-only listener is the readiness check. Never
+        // inspect or modify NSPasteboard for this request.
+        reply(descriptor, status: ClipboardWire.ok, text: "")
+    } else if opcode == ClipboardWire.getConnection {
         guard let connection = verifiedConnection() else {
             reply(descriptor, status: ClipboardWire.unavailable, text: "No verified private connection is available in this VM.")
             return
@@ -280,6 +289,17 @@ private struct TetherGuestClipboardHelper {
             precondition(ClipboardWire.length(from: [ClipboardWire.set, 0, 1, 0, 0]) == 65_536)
             precondition(ClipboardWire.length(from: [ClipboardWire.set, 0, 1, 0, 1]) == nil)
             precondition(ClipboardWire.response(status: 0, text: "héllo") == [0, 0, 0, 0, 6] + Array("héllo".utf8))
+            precondition(ClipboardWire.accepts(opcode: ClipboardWire.checkReady, payloadSize: 0))
+            precondition(!ClipboardWire.accepts(opcode: ClipboardWire.checkReady, payloadSize: 1))
+            precondition(!ClipboardWire.accepts(opcode: 99, payloadSize: 0))
+            precondition(ClipboardWire.response(status: ClipboardWire.ok, text: "") == [0, 0, 0, 0, 0])
+            var pair = [Int32](repeating: -1, count: 2)
+            precondition(socketpair(AF_UNIX, SOCK_STREAM, 0, &pair) == 0)
+            writeExactly(pair[0], bytes: [ClipboardWire.checkReady, 0, 0, 0, 0])
+            handle(pair[1])
+            precondition(readExactly(pair[0], count: 5) == [ClipboardWire.ok, 0, 0, 0, 0])
+            Darwin.close(pair[0])
+            Darwin.close(pair[1])
             precondition(ClipboardWire.response(status: 0, text: String(repeating: "a", count: 65_537)) == nil)
             precondition(isPrivateEndpoint("https://guest.example.ts.net"))
             precondition(!isPrivateEndpoint("http://guest.example.ts.net"))

@@ -11,6 +11,7 @@ enum NativeVMError: LocalizedError {
     case newerGuestRequiresHostUpdate(guest: Int, host: Int)
     case insufficientSpace(Int)
     case insufficientDownloadSpace
+    case insufficientUbuntuDownloadSpace
     case utmCleanupIncomplete(String)
     case invalidResources(String)
     case noCompatibleDownload(host: String)
@@ -30,16 +31,17 @@ enum NativeVMError: LocalizedError {
         case .unsupportedImage: "This macOS IPSW is not compatible with this Mac's virtualization hardware. Choose another IPSW."
         case .newerGuestRequiresHostUpdate(let guest, let host):
             "This is a macOS \(guest) IPSW, but this Mac runs macOS \(host). Choose a macOS \(host) IPSW or update this Mac first."
-        case .insufficientSpace(let gib): "At least \(gib) GB of free space is needed on the selected VM drive to install this macOS VM."
+        case .insufficientSpace(let gib): "At least \(gib) GB of free space is needed on the selected VM drive to create this VM."
         case .utmCleanupIncomplete(let detail): "UTM registered the new VM, but cleanup did not finish. Both copies may remain; run only one copy. \(detail)"
         case .insufficientDownloadSpace: "At least 25 GB of free space is needed in Application Support to cache the macOS download."
+        case .insufficientUbuntuDownloadSpace: "At least 2 GB of free space is needed in Application Support to cache Ubuntu."
         case .invalidResources(let message): message
         case .noCompatibleDownload(let host): "No downloadable macOS IPSW was found for macOS \(host). Update this Mac or choose a compatible IPSW manually."
         case .imageCatalogUnavailable: "Could not check available macOS images. Check your internet connection, try again, or choose a compatible IPSW manually."
         case .missingVM: "The selected Tether VM is missing. Refresh the VM list."
-        case .invalidVM: "The Tether VM is incomplete or damaged. Create a new VM from an IPSW."
+        case .invalidVM: "The Tether VM is incomplete or damaged. Create a new VM."
         case .anotherVMRunning: "Another Tether VM is already running. Shut it down before starting this one."
-        case .cannotStartDuringInstall: "Wait for VM installation to finish before starting a VM."
+        case .cannotStartDuringInstall: "Wait for the current VM operation to finish before starting a VM."
         case .anotherHostCopyRunning: "Another Tether Host for Mac copy is open. Quit it before starting this VM."
         case .guestDiskUnavailable: "The guest setup disk could not be prepared. Check the Tether Host installation and try Start VM again."
         case .cannotRemoveRunningVM: "Shut down the built-in VM before deleting its files."
@@ -61,7 +63,7 @@ enum GuestClipboardError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .vmNotRunning: "Start the built-in VM before transferring clipboard text."
-        case .serviceUnavailable: "Open Tether Guest Installer in the VM and click Text clipboard (built-in)."
+        case .serviceUnavailable: "Open Tether Guest Installer in the VM to finish clipboard setup, then check the clipboard connection again."
         case .textTooLarge: "Clipboard text must be 64 KB or smaller."
         case .invalidResponse: "The VM sent an invalid clipboard response. Reopen Tether Guest Installer and enable the built-in VM text clipboard again."
         case .timedOut: "Clipboard transfer timed out. Check that the VM and Tether Guest Installer are responsive."
@@ -184,8 +186,13 @@ final class NativeVMManager: ObservableObject {
 
     @Published private(set) var imageURL: URL?
     @Published private(set) var imageDescription = "Choose a macOS IPSW to create a fresh VM."
+    @Published private(set) var ubuntuImageURL: URL?
+    @Published private(set) var ubuntuImageDescription = "Download Ubuntu Server 24.04 LTS for ARM64."
+    @Published private(set) var manualUbuntuImageURL: URL?
+    @Published private(set) var manualUbuntuImageDescription = "Download Ubuntu Desktop 24.04 LTS for ARM64 to install it yourself."
     @Published private(set) var status = "No VM installation has started."
     @Published private(set) var isBusy = false
+    @Published private(set) var startingVMID: VirtualMachineID?
     @Published private(set) var installationProgress: Double?
     @Published private(set) var downloadProgress: DownloadProgressEstimate?
     @Published private(set) var downloadImageOptions: [RestoreImageDownloadOption] = []
@@ -193,6 +200,7 @@ final class NativeVMManager: ObservableObject {
     @Published private(set) var recommendedDownloadVersion = ""
     @Published private(set) var isLoadingDownloadImageOptions = false
     @Published private(set) var isRunning = false
+    @Published private(set) var runningGuestOS: NativeGuestOS = .macOS
     @Published private(set) var shutdownRequested = false
     @Published private(set) var virtualMachine: VZVirtualMachine?
     @Published private(set) var desktopReadyVMID: VirtualMachineID?
@@ -201,24 +209,33 @@ final class NativeVMManager: ObservableObject {
     @Published var creationMemoryGiB: Int
     @Published var creationDiskGiB: Int
     @Published private(set) var selectedCreationStorageURL: URL?
+    @Published private(set) var creationStorageSelectionError: String?
+    private var creationGuestOS: NativeGuestOS = .macOS
 
     private var restoreImage: VZMacOSRestoreImage?
     private var activeDownloadID: UUID?
     private var downloadCandidates: [RemoteRestoreCandidate] = []
     private var runningID: VirtualMachineID?
+    private var forcePowerOffRequested = false
+    private var serialLogHandle: FileHandle?
     var runningVMID: VirtualMachineID? { isRunning ? runningID : nil }
     private let rootURL: URL
+    private let rootURLWasOverridden: Bool
     private let vmDelegate = NativeVMDelegate()
     private let preferences: UserDefaults
+    private let serialInputHandleOverride: FileHandle?
 
-    init(preferences: UserDefaults = .standard) {
+    init(preferences: UserDefaults = .standard, rootURLOverride: URL? = nil,
+         serialInputHandleOverride: FileHandle? = nil) {
         let defaults = Self.baseResourceLimits.defaults
         creationCPUCount = defaults.cpuCount
         creationMemoryGiB = defaults.memoryGiB
         creationDiskGiB = defaults.diskGiB
         self.preferences = preferences
+        self.serialInputHandleOverride = serialInputHandleOverride
+        rootURLWasOverridden = rootURLOverride != nil
         desktopReadyVMID = preferences.string(forKey: "setup.nativeDesktopReadyVMID").flatMap(VirtualMachineID.init)
-        rootURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        rootURL = rootURLOverride ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Tether Host for Mac/Virtual Machines", isDirectory: true)
         if let path = preferences.string(forKey: Self.creationFolderPathKey) {
             var stale = false
@@ -238,6 +255,17 @@ final class NativeVMManager: ObservableObject {
                 preferences.removeObject(forKey: Self.selectedImageKey)
             }
         }
+        Task { [weak self] in
+            guard let self else { return }
+            if let cached = try? await UbuntuVMImageService.verifiedCachedImage(in: self.ubuntuCacheDirectory) {
+                self.ubuntuImageURL = cached
+                self.ubuntuImageDescription = "Verified Ubuntu Server 24.04 LTS ARM64 image is ready."
+            }
+            if let cached = try? await UbuntuVMImageService.verifiedManualCachedImage(in: self.ubuntuCacheDirectory) {
+                self.manualUbuntuImageURL = cached
+                self.manualUbuntuImageDescription = "Verified Ubuntu Desktop 24.04 LTS ARM64 installer is ready."
+            }
+        }
     }
 
     private static var baseResourceLimits: NativeVMResourceLimits {
@@ -253,8 +281,10 @@ final class NativeVMManager: ObservableObject {
         NativeVMResourceLimits(
             hostCPUCount: ProcessInfo.processInfo.activeProcessorCount,
             hostMemoryBytes: ProcessInfo.processInfo.physicalMemory,
-            minimumCPUCount: restoreImage?.mostFeaturefulSupportedConfiguration?.minimumSupportedCPUCount ?? 2,
-            minimumMemoryBytes: restoreImage?.mostFeaturefulSupportedConfiguration?.minimumSupportedMemorySize ?? 4 * 1_073_741_824,
+            minimumCPUCount: creationGuestOS == .ubuntu ? 2 :
+                (restoreImage?.mostFeaturefulSupportedConfiguration?.minimumSupportedCPUCount ?? 2),
+            minimumMemoryBytes: creationGuestOS == .ubuntu ? 4 * 1_073_741_824 :
+                (restoreImage?.mostFeaturefulSupportedConfiguration?.minimumSupportedMemorySize ?? 4 * 1_073_741_824),
             maximumCPUCount: VZVirtualMachineConfiguration.maximumAllowedCPUCount,
             maximumMemoryBytes: VZVirtualMachineConfiguration.maximumAllowedMemorySize
         )
@@ -266,8 +296,18 @@ final class NativeVMManager: ObservableObject {
     var creationStorageDisplayName: String {
         selectedCreationStorageURL?.path ?? "This Mac (default)"
     }
+    var creationStorageWarning: String? {
+        guard let folder = selectedCreationStorageURL,
+              (try? folder.resourceValues(forKeys: [.volumeSupportsSparseFilesKey]))?
+                .volumeSupportsSparseFiles != true else { return nil }
+        let required = NativeVMStorageCapacity.requiredFreeGiB(
+            diskGiB: creationDiskGiB, guestOS: creationGuestOS, supportsSparseFiles: false
+        )
+        return "This drive cannot store sparse VM disks. A \(creationDiskGiB) GB VM may use the full \(creationDiskGiB) GB immediately. Keep at least \(required) GB free."
+    }
     var creationStorageValidationMessage: String? {
         guard let folder = selectedCreationStorageURL else { return nil }
+        if let creationStorageSelectionError { return creationStorageSelectionError }
         let resolvedFolder = folder.resolvingSymlinksInPath()
         let resolvedDefault = rootURL.resolvingSymlinksInPath()
         if resolvedFolder == resolvedDefault || resolvedFolder.path.hasPrefix(resolvedDefault.path + "/") {
@@ -289,9 +329,14 @@ final class NativeVMManager: ObservableObject {
         guard FileManager.default.isWritableFile(atPath: folder.path) else {
             return "The selected VM folder is not writable. Choose a folder where you can save files."
         }
-        guard (try? folder.resourceValues(forKeys: [.volumeSupportsSparseFilesKey]))?
-            .volumeSupportsSparseFiles == true else {
-            return "This drive does not support sparse VM disk images. Choose an APFS folder."
+        let sparse = (try? folder.resourceValues(forKeys: [.volumeSupportsSparseFilesKey]))?
+            .volumeSupportsSparseFiles == true
+        let requiredGiB = NativeVMStorageCapacity.requiredFreeGiB(
+            diskGiB: creationDiskGiB, guestOS: creationGuestOS, supportsSparseFiles: sparse
+        )
+        guard let available = try? NativeVMStorageCapacity.availableBytes(at: folder),
+              available >= Int64(requiredGiB) * NativeVMStorageCapacity.bytesPerGiB else {
+            return "This VM needs at least \(requiredGiB) GB free on the selected drive."
         }
         return nil
     }
@@ -304,29 +349,21 @@ final class NativeVMManager: ObservableObject {
         panel.canCreateDirectories = true
         panel.allowsMultipleSelection = false
         panel.prompt = "Use This Folder"
-        panel.message = "New virtual machines will be saved here. macOS downloads stay on this Mac."
+        panel.message = "New virtual machines will be saved here. OS downloads stay on this Mac."
         if panel.runModal() == .OK, let folder = panel.url?.standardizedFileURL {
+            // Keep the user's choice visible even if validation fails, so the
+            // inline error explains why this particular folder cannot be used.
+            selectedCreationStorageURL = folder
+            creationStorageSelectionError = nil
+            preferences.set(folder.path, forKey: Self.creationFolderPathKey)
+            preferences.removeObject(forKey: Self.creationFolderBookmarkKey)
+            preferences.removeObject(forKey: Self.creationFolderVolumeKey)
             do {
-                guard folder != rootURL, !folder.path.hasPrefix(rootURL.path + "/") else {
-                    status = "Choose a folder outside Tether's default Virtual Machines folder."
-                    return
-                }
                 let volume = try NativeVMStorageRegistry.volumeIdentity(at: folder)
-                guard FileManager.default.isWritableFile(atPath: folder.path) else {
-                    status = "The selected VM folder is not writable. Choose another folder."
-                    return
-                }
-                guard (try? folder.resourceValues(forKeys: [.volumeSupportsSparseFilesKey]))?
-                    .volumeSupportsSparseFiles == true else {
-                    status = "This drive does not support sparse VM disk images. Choose an APFS folder."
-                    return
-                }
                 preferences.set(try folder.bookmarkData(), forKey: Self.creationFolderBookmarkKey)
-                preferences.set(folder.path, forKey: Self.creationFolderPathKey)
                 preferences.set(volume, forKey: Self.creationFolderVolumeKey)
-                selectedCreationStorageURL = folder
             } catch {
-                status = "Could not use this VM folder: \(error.localizedDescription)"
+                creationStorageSelectionError = "Could not remember this VM folder: \(error.localizedDescription) Choose the folder again."
             }
         }
     }
@@ -337,6 +374,7 @@ final class NativeVMManager: ObservableObject {
         preferences.removeObject(forKey: Self.creationFolderPathKey)
         preferences.removeObject(forKey: Self.creationFolderVolumeKey)
         selectedCreationStorageURL = nil
+        creationStorageSelectionError = nil
     }
     var creationResourceError: String? {
         creationLimits.validationMessage(for: NativeVMResources(
@@ -345,15 +383,221 @@ final class NativeVMManager: ObservableObject {
     }
 
     func resetCreationResources() {
+        creationGuestOS = .macOS
         let defaults = creationLimits.defaults
         creationCPUCount = defaults.cpuCount
         creationMemoryGiB = defaults.memoryGiB
         creationDiskGiB = defaults.diskGiB
     }
 
+    func configureUbuntuCreationDefaults() {
+        guard !isBusy else { return }
+        creationGuestOS = .ubuntu
+        creationCPUCount = min(creationCPURange.upperBound, max(creationCPURange.lowerBound, 4))
+        creationMemoryGiB = min(creationMemoryRange.upperBound, max(creationMemoryRange.lowerBound, 8))
+        creationDiskGiB = 24
+    }
+
+    func configureMacOSCreationDefaults() {
+        guard !isBusy else { return }
+        resetCreationResources()
+    }
+
     private var restoreCacheDirectory: URL {
         rootURL.deletingLastPathComponent()
             .appendingPathComponent("Restore Images", isDirectory: true)
+    }
+
+    private var ubuntuCacheDirectory: URL {
+        rootURL.deletingLastPathComponent().appendingPathComponent("Ubuntu Images", isDirectory: true)
+    }
+
+    private var bundledUbuntuConverter: URL? {
+        Bundle.main.url(forResource: "qemu-img", withExtension: nil, subdirectory: "Tools")
+    }
+
+    var ubuntuConverterAvailable: Bool {
+        UbuntuVMImageService.converterURL(bundledUbuntuConverter) != nil
+    }
+
+    var ubuntuCreationReadinessMessage: String? {
+        if !ubuntuConverterAvailable { return UbuntuVMImageError.converterUnavailable.localizedDescription }
+        guard let ubuntuImageURL,
+              FileManager.default.fileExists(atPath: ubuntuImageURL.path) else {
+            return "The downloaded Ubuntu image is missing. Download and verify it again."
+        }
+        return creationResourceError ?? creationStorageValidationMessage
+    }
+
+    var manualUbuntuCreationReadinessMessage: String? {
+        guard let manualUbuntuImageURL,
+              FileManager.default.fileExists(atPath: manualUbuntuImageURL.path) else {
+            return "The Ubuntu installer is missing. Download and verify it again."
+        }
+        return creationResourceError ?? creationStorageValidationMessage
+    }
+
+    var hasCachedManualUbuntuImage: Bool {
+        FileManager.default.fileExists(atPath: UbuntuVMImageService.manualCachedImageURL(in: ubuntuCacheDirectory).path)
+    }
+
+    var hasCachedUbuntuImage: Bool {
+        FileManager.default.fileExists(atPath: UbuntuVMImageService.cachedImageURL(in: ubuntuCacheDirectory).path)
+    }
+
+    var ubuntuCachedImageSizeDescription: String {
+        let image = UbuntuVMImageService.cachedImageURL(in: ubuntuCacheDirectory)
+        guard let bytes = try? image.resourceValues(forKeys: [.fileSizeKey]).fileSize else { return "" }
+        return ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
+    }
+
+    func revealCachedUbuntuImageInFinder(manual: Bool = false) {
+        guard (manual ? hasCachedManualUbuntuImage : hasCachedUbuntuImage) else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([
+            manual ? UbuntuVMImageService.manualCachedImageURL(in: ubuntuCacheDirectory)
+                   : UbuntuVMImageService.cachedImageURL(in: ubuntuCacheDirectory)
+        ])
+    }
+
+    func downloadUbuntuImage() async {
+        guard !isBusy else { return }
+        isBusy = true
+        downloadProgress = nil
+        let downloadID = UUID()
+        activeDownloadID = downloadID
+        status = "Downloading and checking Ubuntu Server 24.04 LTS for ARM64…"
+        defer {
+            isBusy = false
+            activeDownloadID = nil
+            downloadProgress = nil
+        }
+        do {
+            try FileManager.default.createDirectory(at: ubuntuCacheDirectory, withIntermediateDirectories: true)
+            if try await UbuntuVMImageService.verifiedCachedImage(in: ubuntuCacheDirectory) == nil {
+                let capacity = try ubuntuCacheDirectory
+                    .resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
+                    .volumeAvailableCapacityForImportantUsage ?? 0
+                guard capacity >= 2 * 1_073_741_824 else { throw NativeVMError.insufficientUbuntuDownloadSpace }
+            }
+            let image = try await UbuntuVMImageService.downloadVerifiedImage(into: ubuntuCacheDirectory) {
+                [weak self] received, total, elapsed in
+                Task { @MainActor [weak self] in
+                    guard self?.activeDownloadID == downloadID else { return }
+                    self?.downloadProgress = DownloadProgressEstimate(
+                        receivedBytes: received, expectedBytes: total, elapsedSeconds: elapsed
+                    )
+                }
+            }
+            ubuntuImageURL = image
+            ubuntuImageDescription = "Verified Ubuntu Server 24.04 LTS ARM64 image is ready."
+            status = "Ubuntu image is ready. Configure the VM, then choose Create VM."
+        } catch {
+            ubuntuImageURL = nil
+            ubuntuImageDescription = "Ubuntu image could not be verified. Download it again."
+            status = "Ubuntu download failed: \(error.localizedDescription)"
+        }
+    }
+
+    func downloadManualUbuntuImage() async {
+        guard !isBusy else { return }
+        isBusy = true
+        downloadProgress = nil
+        let downloadID = UUID()
+        activeDownloadID = downloadID
+        status = "Downloading and checking Ubuntu Desktop 24.04 LTS for ARM64…"
+        defer {
+            isBusy = false
+            activeDownloadID = nil
+            downloadProgress = nil
+        }
+        do {
+            try FileManager.default.createDirectory(at: ubuntuCacheDirectory, withIntermediateDirectories: true)
+            if try await UbuntuVMImageService.verifiedManualCachedImage(in: ubuntuCacheDirectory) == nil {
+                let capacity = try NativeVMStorageCapacity.availableBytes(at: ubuntuCacheDirectory)
+                guard capacity >= 4 * 1_073_741_824 else { throw NativeVMError.insufficientSpace(4) }
+            }
+            let image = try await UbuntuVMImageService.downloadVerifiedManualImage(into: ubuntuCacheDirectory) {
+                [weak self] received, total, elapsed in
+                Task { @MainActor [weak self] in
+                    guard self?.activeDownloadID == downloadID else { return }
+                    self?.downloadProgress = DownloadProgressEstimate(
+                        receivedBytes: received, expectedBytes: total, elapsedSeconds: elapsed
+                    )
+                }
+            }
+            manualUbuntuImageURL = image
+            manualUbuntuImageDescription = "Verified Ubuntu Desktop 24.04 LTS ARM64 installer is ready."
+            status = "Ubuntu installer is ready. Configure the VM, then choose Create VM."
+        } catch {
+            manualUbuntuImageURL = nil
+            manualUbuntuImageDescription = "Ubuntu installer could not be verified. Download it again."
+            status = "Ubuntu installer download failed: \(error.localizedDescription)"
+        }
+    }
+
+    func guestOS(for id: VirtualMachineID) -> NativeGuestOS {
+        guard let bundle = VirtualMachineBundleLocator(nativeRoot: rootURL, utmRoots: [])
+            .locate(id, provider: .builtIn),
+              let manifest = try? readManifest(at: bundle) else { return .macOS }
+        return manifest.guestOS
+    }
+
+    /// A manual Ubuntu bundle contains `manual-install` and a blank `disk.img`.
+    /// `installer.iso` is attached at boot; ejection renames it to
+    /// `installer.ejected.iso` so the installed system boots from disk.
+    func isManualUbuntuInstallation(_ id: VirtualMachineID) -> Bool {
+        guard guestOS(for: id) == .ubuntu,
+              let bundle = VirtualMachineBundleLocator(nativeRoot: rootURL, utmRoots: [])
+                .locate(id, provider: .builtIn) else { return false }
+        return FileManager.default.fileExists(atPath: bundle.appendingPathComponent("manual-install").path)
+    }
+
+    func isUbuntuInstallerAttached(_ id: VirtualMachineID) -> Bool {
+        guard isManualUbuntuInstallation(id),
+              let bundle = VirtualMachineBundleLocator(nativeRoot: rootURL, utmRoots: [])
+                .locate(id, provider: .builtIn) else { return false }
+        return FileManager.default.fileExists(atPath: bundle.appendingPathComponent("installer.iso").path)
+    }
+
+    func revealUbuntuInstaller(for id: VirtualMachineID) {
+        guard isManualUbuntuInstallation(id),
+              let bundle = VirtualMachineBundleLocator(nativeRoot: rootURL, utmRoots: [])
+                .locate(id, provider: .builtIn) else { return }
+        let attached = bundle.appendingPathComponent("installer.iso")
+        let ejected = bundle.appendingPathComponent("installer.ejected.iso")
+        if FileManager.default.fileExists(atPath: attached.path) {
+            NSWorkspace.shared.activateFileViewerSelecting([attached])
+        } else if FileManager.default.fileExists(atPath: ejected.path) {
+            NSWorkspace.shared.activateFileViewerSelecting([ejected])
+        }
+    }
+
+    func ejectUbuntuInstaller(_ id: VirtualMachineID) {
+        guard !isRunning, !isBusy, !hasOtherHostCopy,
+              isManualUbuntuInstallation(id),
+              let bundle = VirtualMachineBundleLocator(nativeRoot: rootURL, utmRoots: [])
+                .locate(id, provider: .builtIn) else { return }
+        let attached = bundle.appendingPathComponent("installer.iso")
+        let ejected = bundle.appendingPathComponent("installer.ejected.iso")
+        do {
+            guard FileManager.default.fileExists(atPath: attached.path),
+                  !FileManager.default.fileExists(atPath: ejected.path) else {
+                throw NativeVMError.invalidVM
+            }
+            try FileManager.default.moveItem(at: attached, to: ejected)
+            status = "Ubuntu installer ejected. Start the VM to boot the installed disk."
+        } catch {
+            status = "Could not eject the Ubuntu installer: \(error.localizedDescription)"
+        }
+    }
+
+    func revealUbuntuCredentials(for id: VirtualMachineID? = nil) {
+        guard let id = id ?? runningID, guestOS(for: id) == .ubuntu,
+              let bundle = VirtualMachineBundleLocator(nativeRoot: rootURL, utmRoots: [])
+                .locate(id, provider: .builtIn) else { return }
+        let credentials = LinuxGuestSeedWriter.credentialsURL(in: bundle)
+        guard FileManager.default.fileExists(atPath: credentials.path) else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([credentials])
     }
 
     private var pinnedHostImageURL: URL {
@@ -423,21 +667,27 @@ final class NativeVMManager: ObservableObject {
         guard isRunning, let runningID else { return }
         desktopReadyVMID = runningID
         preferences.set(runningID.description, forKey: "setup.nativeDesktopReadyVMID")
-        status = "macOS desktop confirmed by you. Continue with the guest setup disk in the VM."
+        status = runningGuestOS == .ubuntu
+            ? "Ubuntu desktop confirmed by you. Continue with guest setup in the VM."
+            : "macOS desktop confirmed by you. Continue with the guest setup disk in the VM."
     }
 
     func confirmDesktopReadyFromGuestSetup() {
         guard isRunning, let runningID else { return }
         desktopReadyVMID = runningID
         preferences.set(runningID.description, forKey: "setup.nativeDesktopReadyVMID")
-        status = "The verified guest installer is running in the macOS desktop session."
+        status = runningGuestOS == .ubuntu
+            ? "The verified guest installer is running in Ubuntu."
+            : "The verified guest installer is running in the macOS desktop session."
     }
 
     func clearDesktopReady(for id: VirtualMachineID) {
         guard desktopReadyVMID == id else { return }
         desktopReadyVMID = nil
         preferences.removeObject(forKey: "setup.nativeDesktopReadyVMID")
-        status = "Finish the macOS welcome screens, then confirm when the desktop appears."
+        status = guestOS(for: id) == .ubuntu
+            ? "Sign in to Ubuntu, then confirm when its desktop appears."
+            : "Finish the macOS welcome screens, then confirm when the desktop appears."
     }
 
     func chooseIPSW() {
@@ -679,6 +929,127 @@ final class NativeVMManager: ObservableObject {
         }.value
     }
 
+    func installUbuntu(manual: Bool = false) async -> VirtualMachineID? {
+        guard !isBusy,
+              let imageURL = manual ? manualUbuntuImageURL : ubuntuImageURL else { return nil }
+        if let readinessMessage = manual ? manualUbuntuCreationReadinessMessage : ubuntuCreationReadinessMessage {
+            status = readinessMessage
+            return nil
+        }
+        guard !hasOtherHostCopy else {
+            status = NativeVMError.anotherHostCopyRunning.localizedDescription
+            return nil
+        }
+        if let creationResourceError {
+            status = creationResourceError
+            return nil
+        }
+        isBusy = true
+        defer { isBusy = false }
+        let id = VirtualMachineID(rawValue: UUID())
+        let resources = NativeVMResources(cpuCount: creationCPUCount,
+                                          memoryGiB: creationMemoryGiB,
+                                          diskGiB: creationDiskGiB)
+        let creationRoot = selectedCreationStorageURL ?? rootURL
+        let stage = creationRoot.appendingPathComponent(".creating-\(id.description)", isDirectory: true)
+        let destination = creationRoot.appendingPathComponent(id.description, isDirectory: true)
+        do {
+            let verifiedImage: URL?
+            if manual {
+                verifiedImage = try await UbuntuVMImageService.verifiedManualCachedImage(in: ubuntuCacheDirectory)
+            } else {
+                verifiedImage = try await UbuntuVMImageService.verifiedCachedImage(in: ubuntuCacheDirectory)
+            }
+            guard verifiedImage == imageURL else {
+                throw UbuntuVMImageError.checksumMismatch
+            }
+            if let creationStorageValidationMessage {
+                status = creationStorageValidationMessage
+                return nil
+            }
+            if selectedCreationStorageURL == nil {
+                try FileManager.default.createDirectory(at: rootURL, withIntermediateDirectories: true)
+            }
+            let sparse = (try? creationRoot.resourceValues(forKeys: [.volumeSupportsSparseFilesKey]))?
+                .volumeSupportsSparseFiles == true
+            let requiredGiB = NativeVMStorageCapacity.requiredFreeGiB(
+                diskGiB: resources.diskGiB, guestOS: .ubuntu, supportsSparseFiles: sparse
+            ) + (manual ? 4 : 0)
+            let capacity = try NativeVMStorageCapacity.availableBytes(at: creationRoot)
+            guard capacity >= Int64(requiredGiB) * NativeVMStorageCapacity.bytesPerGiB else {
+                throw NativeVMError.insufficientSpace(requiredGiB)
+            }
+            try FileManager.default.createDirectory(at: stage, withIntermediateDirectories: false)
+            status = manual ? "Preparing a blank Ubuntu disk and installer…" : "Preparing the Ubuntu disk…"
+            if manual {
+                let diskURL = stage.appendingPathComponent("disk.img")
+                try await UbuntuVMImageService.createBlankDisk(at: diskURL, diskGiB: resources.diskGiB)
+                try FileManager.default.copyItem(at: imageURL, to: stage.appendingPathComponent("installer.iso"))
+                try Data().write(to: stage.appendingPathComponent("manual-install"), options: .atomic)
+                _ = try await ManualUbuntuDNSSeedWriter.ensureSeed(
+                    in: stage, vmID: id,
+                    guestResourcesURL: Bundle.main.bundleURL.appendingPathComponent(
+                        "Contents/Resources/LinuxGuestSetup", isDirectory: true)
+                )
+            } else {
+                try await UbuntuVMImageService.createRawDisk(
+                    from: imageURL, at: stage.appendingPathComponent("disk.img"),
+                    diskGiB: resources.diskGiB,
+                    bundledConverter: bundledUbuntuConverter
+                )
+                let sourceDigest = try Data(contentsOf: imageURL.appendingPathExtension("sha256"))
+                try sourceDigest.write(to: stage.appendingPathComponent("ubuntu-image.sha256"), options: .atomic)
+            }
+            let machineID = VZGenericMachineIdentifier()
+            try machineID.dataRepresentation.write(to: stage.appendingPathComponent("machine.bin"), options: .atomic)
+            _ = try VZEFIVariableStore(creatingVariableStoreAt: stage.appendingPathComponent("efi-vars.bin"))
+            if !manual {
+                status = "Preparing Ubuntu first-boot setup…"
+                _ = try await LinuxGuestSeedWriter.createSeed(
+                    in: stage, vmID: id,
+                    guestResourcesURL: Bundle.main.bundleURL.appendingPathComponent(
+                        "Contents/Resources/LinuxGuestSetup", isDirectory: true)
+                )
+            }
+            let configuration = try makeUbuntuConfiguration(
+                bundle: stage, machineID: machineID, cpuCount: resources.cpuCount,
+                memorySize: UInt64(resources.memoryGiB) * 1_073_741_824,
+                serialLogHandle: nil
+            )
+            _ = configuration // Validation happens before the bundle is published.
+            let manifest = NativeVirtualMachineManifest(
+                id: id, name: "Ubuntu 24.04 · \(id.description.prefix(8))",
+                guestImageVersion: manual ? "Ubuntu Desktop 24.04 LTS ARM64 (manual install)" : "Ubuntu Server 24.04 LTS ARM64",
+                resources: resources, guestOS: .ubuntu
+            )
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            encoder.outputFormatting = [.sortedKeys]
+            try encoder.encode(manifest).write(
+                to: stage.appendingPathComponent(NativeVirtualMachineStore.manifestFilename), options: .atomic
+            )
+            try FileManager.default.moveItem(at: stage, to: destination)
+            try NativeVMStorageRegistry(defaultRootURL: rootURL).register(manifest, at: destination)
+            if isRunning {
+                status = manual
+                    ? "Ubuntu installer VM saved. Shut down the running VM, then start this VM to choose your own account."
+                    : "Ubuntu VM saved. Shut down the running VM, then start Ubuntu. Its console login is in ubuntu-credentials.txt."
+                return id
+            }
+            status = manual ? "Starting the Ubuntu installer…" : "Starting the fresh Ubuntu VM…"
+            try await boot(id, allowWhileInstalling: true)
+            return id
+        } catch {
+            try? FileManager.default.removeItem(at: stage)
+            if FileManager.default.fileExists(atPath: destination.appendingPathComponent(NativeVirtualMachineStore.manifestFilename).path) {
+                status = "Ubuntu VM was saved, but could not start: \(error.localizedDescription)"
+                return id
+            }
+            status = "Ubuntu VM creation failed: \(error.localizedDescription)"
+            return nil
+        }
+    }
+
     func install(for provider: VMProvider = .builtIn) async -> VirtualMachineID? {
         guard !isBusy, let imageURL, let restoreImage,
               let requirements = restoreImage.mostFeaturefulSupportedConfiguration else { return nil }
@@ -712,11 +1083,13 @@ final class NativeVMManager: ObservableObject {
             if selectedCreationStorageURL == nil {
                 try FileManager.default.createDirectory(at: rootURL, withIntermediateDirectories: true)
             }
-            let capacity = try creationRoot
-                .resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
-                .volumeAvailableCapacityForImportantUsage ?? 0
-            let requiredGiB = min(resources.diskGiB + 4, 45)
-            guard capacity >= Int64(requiredGiB) * 1_073_741_824 else {
+            let sparse = (try? creationRoot.resourceValues(forKeys: [.volumeSupportsSparseFilesKey]))?
+                .volumeSupportsSparseFiles == true
+            let requiredGiB = NativeVMStorageCapacity.requiredFreeGiB(
+                diskGiB: resources.diskGiB, guestOS: .macOS, supportsSparseFiles: sparse
+            )
+            let capacity = try NativeVMStorageCapacity.availableBytes(at: creationRoot)
+            guard capacity >= Int64(requiredGiB) * NativeVMStorageCapacity.bytesPerGiB else {
                 throw NativeVMError.insufficientSpace(requiredGiB)
             }
             try FileManager.default.createDirectory(at: stage, withIntermediateDirectories: false)
@@ -813,6 +1186,10 @@ final class NativeVMManager: ObservableObject {
     }
 
     func moveToUTM(_ id: VirtualMachineID) async -> Bool {
+        guard guestOS(for: id) == .macOS else {
+            status = "Ubuntu VMs can run only with Tether Host's built-in virtualization."
+            return false
+        }
         guard !isBusy, !isRunning, !hasOtherHostCopy else {
             status = "Shut down the Apple VM and quit any other Tether Host copy before moving it to UTM."
             return false
@@ -896,18 +1273,21 @@ final class NativeVMManager: ObservableObject {
     }
 
     func boot(_ id: VirtualMachineID, allowWhileInstalling: Bool = false) async throws {
-        guard !isBusy || allowWhileInstalling else { throw NativeVMError.cannotStartDuringInstall }
+        guard startingVMID == nil, !isBusy || allowWhileInstalling else { throw NativeVMError.cannotStartDuringInstall }
         if isRunning, runningID == id { showsDisplay = true; return }
         if isRunning { throw NativeVMError.anotherVMRunning }
         guard !hasOtherHostCopy else { throw NativeVMError.anotherHostCopyRunning }
+        // Reserve the lifecycle before the first await: repeated clicks must not
+        // create a second VZVirtualMachine while the first one is still starting.
+        let wasBusy = isBusy
+        isBusy = true
+        startingVMID = id
+        defer {
+            startingVMID = nil
+            isBusy = wasBusy
+        }
         let locator = VirtualMachineBundleLocator(nativeRoot: rootURL, utmRoots: [])
         guard let bundle = locator.locate(id, provider: .builtIn) else { throw NativeVMError.missingVM }
-        guard await prepareGuestDisk() else { throw NativeVMError.guestDiskUnavailable }
-        let hardwareData = try Data(contentsOf: bundle.appendingPathComponent("hardware.bin"))
-        let machineData = try Data(contentsOf: bundle.appendingPathComponent("machine.bin"))
-        guard let hardware = VZMacHardwareModel(dataRepresentation: hardwareData),
-              let machineID = VZMacMachineIdentifier(dataRepresentation: machineData),
-              hardware.isSupported else { throw NativeVMError.invalidVM }
         let manifestURL = bundle.appendingPathComponent(NativeVirtualMachineStore.manifestFilename)
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
@@ -916,6 +1296,26 @@ final class NativeVMManager: ObservableObject {
               manifest.schemaVersion == NativeVirtualMachineManifest.currentSchemaVersion else {
             throw NativeVMError.invalidVM
         }
+        if manifest.guestOS == .ubuntu {
+            await detachCompletedUbuntuInstaller(in: bundle)
+            if FileManager.default.fileExists(atPath: bundle.appendingPathComponent("manual-install").path),
+               FileManager.default.fileExists(atPath: bundle.appendingPathComponent("installer.iso").path) {
+                // Also upgrades manual bundles created before the DNS seed existed.
+                _ = try await ManualUbuntuDNSSeedWriter.ensureSeed(
+                    in: bundle, vmID: id,
+                    guestResourcesURL: Bundle.main.bundleURL.appendingPathComponent(
+                        "Contents/Resources/LinuxGuestSetup", isDirectory: true)
+                )
+            }
+            try await bootUbuntu(id, bundle: bundle, manifest: manifest)
+            return
+        }
+        guard await prepareGuestDisk() else { throw NativeVMError.guestDiskUnavailable }
+        let hardwareData = try Data(contentsOf: bundle.appendingPathComponent("hardware.bin"))
+        let machineData = try Data(contentsOf: bundle.appendingPathComponent("machine.bin"))
+        guard let hardware = VZMacHardwareModel(dataRepresentation: hardwareData),
+              let machineID = VZMacMachineIdentifier(dataRepresentation: machineData),
+              hardware.isSupported else { throw NativeVMError.invalidVM }
         // Old manifests did not store resources; preserve their launch behavior.
         let cpuCount = manifest.resources?.cpuCount ?? min(4, max(2, ProcessInfo.processInfo.activeProcessorCount / 2))
         let memoryGiB = manifest.resources?.memoryGiB ?? 8
@@ -934,8 +1334,10 @@ final class NativeVMManager: ObservableObject {
         virtualMachine = vm
         do {
             try await vm.start()
+            guard virtualMachine === vm, vm.state == .running else { throw NativeVMError.invalidVM }
             runningID = id
             isRunning = true
+            runningGuestOS = .macOS
             shutdownRequested = false
             showsDisplay = true
             markBundleUsed(id)
@@ -948,6 +1350,60 @@ final class NativeVMManager: ObservableObject {
         }
     }
 
+    private func bootUbuntu(_ id: VirtualMachineID, bundle: URL,
+                            manifest: NativeVirtualMachineManifest) async throws {
+        let machineData = try Data(contentsOf: bundle.appendingPathComponent("machine.bin"))
+        guard let machineID = VZGenericMachineIdentifier(dataRepresentation: machineData) else {
+            throw NativeVMError.invalidVM
+        }
+        let cpuCount = manifest.resources?.cpuCount ?? 4
+        let memoryGiB = manifest.resources?.memoryGiB ?? 8
+        guard cpuCount >= VZVirtualMachineConfiguration.minimumAllowedCPUCount,
+              cpuCount <= VZVirtualMachineConfiguration.maximumAllowedCPUCount,
+              memoryGiB > 0,
+              UInt64(memoryGiB) * 1_073_741_824 >= VZVirtualMachineConfiguration.minimumAllowedMemorySize,
+              UInt64(memoryGiB) * 1_073_741_824 <= VZVirtualMachineConfiguration.maximumAllowedMemorySize else {
+            throw NativeVMError.invalidVM
+        }
+        let serialURL = bundle.appendingPathComponent("serial.log")
+        if !FileManager.default.fileExists(atPath: serialURL.path) {
+            FileManager.default.createFile(atPath: serialURL.path, contents: nil)
+        }
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: serialURL.path)
+        let logHandle = try FileHandle(forWritingTo: serialURL)
+        try logHandle.seekToEnd()
+        do {
+            let configuration = try makeUbuntuConfiguration(
+                bundle: bundle, machineID: machineID, cpuCount: cpuCount,
+                memorySize: UInt64(memoryGiB) * 1_073_741_824,
+                serialLogHandle: logHandle
+            )
+            let vm = VZVirtualMachine(configuration: configuration)
+            vm.delegate = vmDelegate
+            virtualMachine = vm
+            try await vm.start()
+            guard virtualMachine === vm, vm.state == .running else { throw NativeVMError.invalidVM }
+            serialLogHandle = logHandle
+            runningID = id
+            isRunning = true
+            runningGuestOS = .ubuntu
+            shutdownRequested = false
+            showsDisplay = true
+            markBundleUsed(id)
+            status = isManualUbuntuInstallation(id)
+                ? (isUbuntuInstallerAttached(id)
+                    ? "Ubuntu installer is starting. Complete installation with your own account, then shut down so Tether can verify the disk and eject the installer automatically."
+                    : "Ubuntu is starting from its installed disk.")
+                : "Ubuntu is starting. On first boot, wait while the desktop and guest setup tools are prepared."
+        } catch {
+            try? logHandle.close()
+            virtualMachine = nil
+            showsDisplay = false
+            status = "Could not boot Ubuntu: \(error.localizedDescription)"
+            throw error
+        }
+    }
+
     func startOrShow(_ id: VirtualMachineID) async {
         do { try await boot(id) }
         catch {
@@ -955,14 +1411,15 @@ final class NativeVMManager: ObservableObject {
         }
     }
 
-    func requestShutdown() {
-        guard isRunning, let virtualMachine else { return }
+    func requestShutdown(for id: VirtualMachineID? = nil) {
+        guard isRunning, !isBusy, !shutdownRequested,
+              id == nil || runningID == id, let virtualMachine else { return }
         do {
             try virtualMachine.requestStop()
             shutdownRequested = true
-            status = "Asked macOS to shut down. Wait for the VM status to change to Off."
+            status = "Asked the guest to shut down. Wait for the VM status to change to Off."
         } catch {
-            status = "macOS did not accept the shutdown request: \(error.localizedDescription)"
+            status = "The guest did not accept the shutdown request: \(error.localizedDescription)"
         }
     }
 
@@ -970,6 +1427,11 @@ final class NativeVMManager: ObservableObject {
     /// installer listens on this private VM socket; neither clipboard is polled.
     func readGuestClipboardText() async throws -> String {
         try await transferGuestClipboard(opcode: 1, text: nil)
+    }
+
+    /// Checks the guest bridge without reading or changing either clipboard.
+    func checkGuestClipboardConnection() async throws {
+        _ = try await transferGuestClipboard(opcode: 4, text: nil)
     }
 
     func writeGuestClipboardText(_ text: String) async throws {
@@ -1003,14 +1465,25 @@ final class NativeVMManager: ObservableObject {
         }.value
     }
 
-    func forcePowerOff() async {
-        guard isRunning, !isBusy, let virtualMachine else { return }
+    func forcePowerOff(for id: VirtualMachineID? = nil) async {
+        guard isRunning, !isBusy, id == nil || runningID == id,
+              let virtualMachine else { return }
         isBusy = true
+        forcePowerOffRequested = true
+        if let runningID { markUbuntuStopSafety(runningID, clean: false) }
         status = "Powering off the VM…"
         defer { isBusy = false }
         do {
             try await virtualMachine.stop()
+            // A host-initiated stop completes here; guestDidStop is only for
+            // guest-initiated shutdown. Release state even if no delegate fires.
+            guestStopped(ObjectIdentifier(virtualMachine), error: nil)
         } catch {
+            if virtualMachine.state == .stopped {
+                guestStopped(ObjectIdentifier(virtualMachine), error: nil)
+                return
+            }
+            forcePowerOffRequested = false
             status = "Could not power off the VM: \(error.localizedDescription)"
         }
     }
@@ -1047,7 +1520,17 @@ final class NativeVMManager: ObservableObject {
     }
 
     var hasOtherHostCopy: Bool {
-        NSRunningApplication.runningApplications(withBundleIdentifier: "app.tether.host")
+        #if TETHER_E2E
+        let normalizedRoot = rootURL.standardizedFileURL.path
+        if rootURLWasOverridden,
+           Bundle.main.bundleIdentifier == "app.tether.ubuntu.e2e",
+           (normalizedRoot == "/tmp/tether-ubuntu-e2e" ||
+            normalizedRoot.hasPrefix("/tmp/tether-ubuntu-e2e/") ||
+            normalizedRoot.hasPrefix("/tmp/tether-ubuntu-e2e-")) {
+            return false
+        }
+        #endif
+        return NSRunningApplication.runningApplications(withBundleIdentifier: "app.tether.host")
             .contains { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }
     }
 
@@ -1087,6 +1570,87 @@ final class NativeVMManager: ObservableObject {
         return configuration
     }
 
+    private func makeUbuntuConfiguration(
+        bundle: URL, machineID: VZGenericMachineIdentifier,
+        cpuCount: Int, memorySize: UInt64, serialLogHandle: FileHandle?
+    ) throws -> VZVirtualMachineConfiguration {
+        let configuration = VZVirtualMachineConfiguration()
+        let bootLoader = VZEFIBootLoader()
+        bootLoader.variableStore = VZEFIVariableStore(url: bundle.appendingPathComponent("efi-vars.bin"))
+        configuration.bootLoader = bootLoader
+        let platform = VZGenericPlatformConfiguration()
+        platform.machineIdentifier = machineID
+        configuration.platform = platform
+        configuration.cpuCount = cpuCount
+        configuration.memorySize = memorySize
+        configuration.entropyDevices = [VZVirtioEntropyDeviceConfiguration()]
+        configuration.socketDevices = [VZVirtioSocketDeviceConfiguration()]
+        configuration.keyboards = [VZUSBKeyboardConfiguration()]
+        configuration.pointingDevices = [VZUSBScreenCoordinatePointingDeviceConfiguration()]
+        let graphics = VZVirtioGraphicsDeviceConfiguration()
+        graphics.scanouts = [VZVirtioGraphicsScanoutConfiguration(widthInPixels: 1600,
+                                                                  heightInPixels: 1000)]
+        configuration.graphicsDevices = [graphics]
+        let network = VZVirtioNetworkDeviceConfiguration()
+        network.macAddress = try ubuntuMACAddress(in: bundle)
+        network.attachment = VZNATNetworkDeviceAttachment()
+        configuration.networkDevices = [network]
+        let disk = try VZDiskImageStorageDeviceAttachment(
+            url: bundle.appendingPathComponent("disk.img"), readOnly: false)
+        if FileManager.default.fileExists(atPath: bundle.appendingPathComponent("manual-install").path) {
+            // Prefer the VM disk. A blank disk falls back to USB installation;
+            // after installation the disk must not sit behind its install media.
+            if FileManager.default.fileExists(atPath: bundle.appendingPathComponent("installer.iso").path) {
+                let installer = try VZDiskImageStorageDeviceAttachment(
+                    url: bundle.appendingPathComponent("installer.iso"), readOnly: true)
+                configuration.storageDevices = [VZVirtioBlockDeviceConfiguration(attachment: disk),
+                                                VZUSBMassStorageDeviceConfiguration(attachment: installer)]
+                let dnsSeed = try VZDiskImageStorageDeviceAttachment(
+                    url: ManualUbuntuDNSSeedWriter.seedURL(in: bundle), readOnly: true)
+                configuration.storageDevices.append(VZVirtioBlockDeviceConfiguration(attachment: dnsSeed))
+            } else {
+                configuration.storageDevices = [VZVirtioBlockDeviceConfiguration(attachment: disk)]
+            }
+        } else {
+            let seed = try VZDiskImageStorageDeviceAttachment(
+                url: bundle.appendingPathComponent("seed.iso"), readOnly: true)
+            configuration.storageDevices = [VZVirtioBlockDeviceConfiguration(attachment: disk),
+                                            VZVirtioBlockDeviceConfiguration(attachment: seed)]
+        }
+        let toolsDisk = Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/Tether Ubuntu Guest Tools.iso")
+        if FileManager.default.fileExists(atPath: toolsDisk.path) {
+            let attachment = try VZDiskImageStorageDeviceAttachment(url: toolsDisk, readOnly: true)
+            configuration.storageDevices.append(VZVirtioBlockDeviceConfiguration(attachment: attachment))
+        }
+        if let serialLogHandle {
+            let serial = VZVirtioConsoleDeviceSerialPortConfiguration()
+            serial.attachment = VZFileHandleSerialPortAttachment(
+                fileHandleForReading: serialInputHandleOverride,
+                fileHandleForWriting: serialLogHandle)
+            configuration.serialPorts = [serial]
+        }
+        try configuration.validate()
+        return configuration
+    }
+
+    private func ubuntuMACAddress(in bundle: URL) throws -> VZMACAddress {
+        let file = bundle.appendingPathComponent("network.mac")
+        if FileManager.default.fileExists(atPath: file.path) {
+            let stored = try String(contentsOf: file, encoding: .utf8)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let address = VZMACAddress(string: stored),
+                  address.isLocallyAdministeredAddress,
+                  address.isUnicastAddress else { throw NativeVMError.invalidVM }
+            return address
+        }
+        // VZ otherwise creates a different MAC on every launch. Ubuntu's
+        // persistent network configuration and DHCP identity need one address.
+        let address = VZMACAddress.randomLocallyAdministered()
+        try Data("\(address.string)\n".utf8).write(to: file, options: .atomic)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+        return address
+    }
+
     @discardableResult
     func prepareGuestDisk() async -> Bool {
         let destination = rootURL.deletingLastPathComponent().appendingPathComponent("Tether Guest Setup.iso")
@@ -1103,13 +1667,64 @@ final class NativeVMManager: ObservableObject {
 
     fileprivate func guestStopped(_ identity: ObjectIdentifier, error: Error?) {
         guard virtualMachine.map(ObjectIdentifier.init) == identity else { return }
-        if let runningID { markBundleUsed(runningID) }
+        let stoppedID = runningID
+        let cleanStop = error == nil && !forcePowerOffRequested
+        if let runningID {
+            markBundleUsed(runningID)
+            markUbuntuStopSafety(runningID, clean: cleanStop)
+        }
+        forcePowerOffRequested = false
         isRunning = false
         shutdownRequested = false
         runningID = nil
+        try? serialLogHandle?.close()
+        serialLogHandle = nil
+        runningGuestOS = .macOS
         virtualMachine = nil
         showsDisplay = false
         status = error.map { "The VM stopped: \($0.localizedDescription)" } ?? "The VM is off. Choose Start VM to resume."
+        if cleanStop, let stoppedID {
+            Task { @MainActor [weak self] in
+                guard let self, !self.isRunning, !self.isBusy, !self.hasOtherHostCopy,
+                      let bundle = VirtualMachineBundleLocator(nativeRoot: self.rootURL, utmRoots: [])
+                        .locate(stoppedID, provider: .builtIn) else { return }
+                self.isBusy = true
+                defer { self.isBusy = false }
+                await self.detachCompletedUbuntuInstaller(in: bundle)
+            }
+        }
+    }
+
+    private func markUbuntuStopSafety(_ id: VirtualMachineID, clean: Bool) {
+        guard isManualUbuntuInstallation(id),
+              let bundle = VirtualMachineBundleLocator(nativeRoot: rootURL, utmRoots: [])
+                .locate(id, provider: .builtIn) else { return }
+        let marker = bundle.appendingPathComponent("installer-unclean-stop")
+        if clean { try? FileManager.default.removeItem(at: marker) }
+        else { try? Data().write(to: marker, options: .atomic) }
+    }
+
+    /// Called only while lifecycle operations are reserved and the VM is stopped.
+    /// No guest filesystem is mounted and uncertain completion keeps the ISO.
+    private func detachCompletedUbuntuInstaller(in bundle: URL) async {
+        let fm = FileManager.default
+        let installer = bundle.appendingPathComponent("installer.iso")
+        let ejected = bundle.appendingPathComponent("installer.ejected.iso")
+        guard !isRunning, !hasOtherHostCopy,
+              fm.fileExists(atPath: bundle.appendingPathComponent("manual-install").path),
+              fm.fileExists(atPath: installer.path),
+              !fm.fileExists(atPath: ejected.path),
+              !fm.fileExists(atPath: bundle.appendingPathComponent("installer-unclean-stop").path) else { return }
+        let complete = await Task.detached(priority: .utility) {
+            (try? UbuntuInstallationVerifier.isComplete(diskURL: bundle.appendingPathComponent("disk.img"))) == true
+        }.value
+        guard complete, !isRunning, !hasOtherHostCopy else { return }
+        do {
+            try fm.moveItem(at: installer, to: ejected)
+            status = "Ubuntu installation verified. Its installer was ejected automatically; guest tools remain attached."
+        } catch {
+            status = "Ubuntu is installed, but its installer could not be ejected: \(error.localizedDescription)"
+        }
     }
 
     private func markBundleUsed(_ id: VirtualMachineID) {
@@ -1165,7 +1780,7 @@ private enum GuestClipboardTransport {
         guard status == 0 else {
             throw GuestClipboardError.guestRejected(text.isEmpty ? "Request failed." : text)
         }
-        if opcode == 2 && !text.isEmpty { throw GuestClipboardError.invalidResponse }
+        if (opcode == 2 || opcode == 4) && !text.isEmpty { throw GuestClipboardError.invalidResponse }
         return text
     }
 
@@ -1226,18 +1841,153 @@ private final class NativeVMDelegate: NSObject, VZVirtualMachineDelegate, @unche
     }
 }
 
+enum NativeVMTypeTextError: LocalizedError {
+    case empty
+    case tooLong
+    case unsupportedCharacter
+    case displayUnavailable
+    case vmNotRunning
+    case alreadyTyping
+    case eventUnavailable
+
+    var errorDescription: String? {
+        switch self {
+        case .empty: "The clipboard has no text to type."
+        case .tooLong: "Paste as typing supports up to 4,096 characters. Use the guest clipboard after signing in for longer text."
+        case .unsupportedCharacter: "Paste as typing supports printable US keyboard characters only. Use the guest clipboard after signing in for other text."
+        case .displayUnavailable: "Show this VM's display before pasting as typing."
+        case .vmNotRunning: "Start the VM before pasting as typing."
+        case .alreadyTyping: "Wait for the current paste to finish."
+        case .eventUnavailable: "The VM display could not receive a key event. Try again."
+        }
+    }
+}
+
+@MainActor
 struct NativeVMDisplay: NSViewRepresentable {
     let virtualMachine: VZVirtualMachine
+    private static weak var registeredView: VZVirtualMachineView?
+    private static var isTyping = false
+
+    private struct Stroke {
+        let keyCode: UInt16
+        let base: Character
+        let rendered: Character
+        let shift: Bool
+    }
+
+    /// Uses the VM's virtual keyboard before any guest clipboard service exists.
+    /// The caller owns clipboard access; this method never reads, logs, or stores text.
+    static func typeText(_ text: String, into vm: VZVirtualMachine) async throws {
+        guard !text.isEmpty else { throw NativeVMTypeTextError.empty }
+        guard text.utf8.count <= 4_096 else { throw NativeVMTypeTextError.tooLong }
+        // Resolve every key before sending the first one, so unsupported text
+        // never leaves a partially typed password in the guest.
+        let strokes = try text.unicodeScalars.map { scalar -> Stroke in
+            guard (0x20...0x7e).contains(scalar.value) else {
+                throw NativeVMTypeTextError.unsupportedCharacter
+            }
+            let rendered = Character(String(scalar))
+            let base: Character
+            let shift: Bool
+            if (0x41...0x5a).contains(scalar.value) {
+                base = Character(String(scalar).lowercased())
+                shift = true
+            } else if let shiftedBase = shiftedBases[rendered] {
+                base = shiftedBase
+                shift = true
+            } else {
+                base = rendered
+                shift = false
+            }
+            guard let keyCode = keyCodes[base] else {
+                throw NativeVMTypeTextError.unsupportedCharacter
+            }
+            return Stroke(keyCode: keyCode, base: base, rendered: rendered, shift: shift)
+        }
+        guard !isTyping else { throw NativeVMTypeTextError.alreadyTyping }
+        guard vm.state == .running else { throw NativeVMTypeTextError.vmNotRunning }
+        guard let view = registeredView, view.virtualMachine === vm,
+              let window = view.window, window.makeFirstResponder(view) else {
+            throw NativeVMTypeTextError.displayUnavailable
+        }
+
+        isTyping = true
+        var shiftDown = false
+        defer {
+            if shiftDown { try? sendShift(false, to: view) }
+            isTyping = false
+        }
+        for stroke in strokes {
+            try Task.checkCancellation()
+            guard vm.state == .running, view.window === window,
+                  window.firstResponder === view, view.virtualMachine === vm else {
+                throw NativeVMTypeTextError.displayUnavailable
+            }
+            if stroke.shift != shiftDown {
+                try sendShift(stroke.shift, to: view)
+                shiftDown = stroke.shift
+                try await Task.sleep(for: .milliseconds(5))
+            }
+            guard let down = keyEvent(.keyDown, stroke: stroke, view: view),
+                  let up = keyEvent(.keyUp, stroke: stroke, view: view) else {
+                throw NativeVMTypeTextError.eventUnavailable
+            }
+            view.keyDown(with: down)
+            view.keyUp(with: up)
+            try await Task.sleep(for: .milliseconds(5))
+        }
+    }
+
+    private static func sendShift(_ pressed: Bool, to view: VZVirtualMachineView) throws {
+        guard let event = NSEvent.keyEvent(
+            with: .flagsChanged, location: .zero,
+            modifierFlags: pressed ? [.shift] : [], timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: view.window?.windowNumber ?? 0, context: nil,
+            characters: "", charactersIgnoringModifiers: "", isARepeat: false, keyCode: 56
+        ) else { throw NativeVMTypeTextError.eventUnavailable }
+        view.flagsChanged(with: event)
+    }
+
+    private static func keyEvent(_ type: NSEvent.EventType, stroke: Stroke,
+                                 view: VZVirtualMachineView) -> NSEvent? {
+        NSEvent.keyEvent(
+            with: type, location: .zero,
+            modifierFlags: stroke.shift ? [.shift] : [],
+            timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: view.window?.windowNumber ?? 0, context: nil,
+            // AppKit preserves Shift in charactersIgnoringModifiers.
+            characters: String(stroke.rendered), charactersIgnoringModifiers: String(stroke.rendered),
+            isARepeat: false, keyCode: stroke.keyCode
+        )
+    }
+
+    private static let keyCodes: [Character: UInt16] = [
+        "a": 0, "s": 1, "d": 2, "f": 3, "h": 4, "g": 5, "z": 6, "x": 7, "c": 8, "v": 9,
+        "b": 11, "q": 12, "w": 13, "e": 14, "r": 15, "y": 16, "t": 17,
+        "1": 18, "2": 19, "3": 20, "4": 21, "6": 22, "5": 23, "=": 24, "9": 25,
+        "7": 26, "-": 27, "8": 28, "0": 29, "]": 30, "o": 31, "u": 32,
+        "[": 33, "i": 34, "p": 35, "l": 37, "j": 38, "'": 39, "k": 40,
+        ";": 41, "\\": 42, ",": 43, "/": 44, "n": 45, "m": 46, ".": 47,
+        " ": 49, "`": 50
+    ]
+    private static let shiftedBases: [Character: Character] = [
+        "!": "1", "@": "2", "#": "3", "$": "4", "%": "5", "^": "6", "&": "7", "*": "8",
+        "(": "9", ")": "0", "_": "-", "+": "=", "{": "[", "}": "]", ":": ";", "\"": "'",
+        "|": "\\", "<": ",", ">": ".", "?": "/", "~": "`"
+    ]
 
     func makeNSView(context: Context) -> VZVirtualMachineView {
         let view = VZVirtualMachineView()
         view.virtualMachine = virtualMachine
         view.capturesSystemKeys = true
         view.automaticallyReconfiguresDisplay = true
+        Self.registeredView = view
         return view
     }
 
     func updateNSView(_ view: VZVirtualMachineView, context: Context) {
         view.virtualMachine = virtualMachine
+        Self.registeredView = view
     }
 }

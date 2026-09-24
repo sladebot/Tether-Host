@@ -29,7 +29,7 @@ private enum SetupStep: Int, CaseIterable {
         case .computerUse:
             "Install Hermes computer use, grant direct guest screen access, and verify capture and control."
         case .verify:
-            "Check private HTTPS, authentication, computer use, and a real model response before connecting your phone."
+            "Check private HTTPS, authentication, computer use, a real model response, and the guest text clipboard bridge."
         }
     }
 
@@ -46,7 +46,7 @@ private enum SetupStep: Int, CaseIterable {
         case .computerUse:
             "When macOS says CuaDriver wants to bypass the private window picker and directly access your screen and audio, click Allow. Then enable CuaDriver in Accessibility and Screen & System Audio Recording if either check still needs attention."
         case .verify:
-            "A successful check creates a private connection file in this VM. Keep its token private when adding your phone."
+            "The installer also checks the built-in VM text clipboard helper. Transfers occur only when you press a host clipboard button."
         }
     }
 
@@ -208,11 +208,11 @@ final class TetherGuestInstaller: NSObject, NSApplicationDelegate, NSWindowDeleg
         actionButton.keyEquivalent = "\r"
         actionButton.frame = NSRect(x: 274, y: 429, width: 210, height: 32)
         content.addSubview(actionButton)
-        clipboardButton = NSButton(title: "Text clipboard (built-in)", target: self,
+        clipboardButton = NSButton(title: "Set up text clipboard", target: self,
                                    action: #selector(enableClipboardTransfer))
         clipboardButton.bezelStyle = .rounded
         clipboardButton.frame = NSRect(x: 496, y: 429, width: 190, height: 32)
-        clipboardButton.toolTip = "Enable explicit text transfers for Tether's built-in Apple VM. UTM manages its own clipboard settings."
+        clipboardButton.toolTip = "Sets up the built-in VM helper. Text moves only when you press a Tether Host clipboard button."
         content.addSubview(clipboardButton)
         addLabel("SETUP CONSOLE", to: content, frame: NSRect(x: 274, y: 343, width: 580, height: 22),
                  font: .systemFont(ofSize: 11, weight: .semibold), color: .secondaryLabelColor)
@@ -239,6 +239,11 @@ final class TetherGuestInstaller: NSObject, NSApplicationDelegate, NSWindowDeleg
                                                name: NSApplication.didChangeScreenParametersNotification, object: nil)
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+        // The helper is needed as soon as the guest reaches the desktop, so a
+        // Tailscale sign-in URL can be copied before final connection verify.
+        if isVirtualMac && !clipboardInstalledForCurrentVersion {
+            installClipboardTransfer(automatic: true)
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -316,12 +321,18 @@ final class TetherGuestInstaller: NSObject, NSApplicationDelegate, NSWindowDeleg
         setupProcess = process
         pendingOutput.removeAll()
         terminal.evaluateJavaScript("window.tetherTerminal.clear(); window.tetherTerminal.focus();")
+        let runningStep = selected
         process.terminationHandler = { [weak self] finished in
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.writeToTerminal(Data("\r\n\r\n\(finished.terminationStatus == 0 ? "Step finished." : "Step stopped. Read the error above, then try again.")\r\n".utf8))
                 self.setupProcess = nil
                 self.refresh()
+                if runningStep == .verify && finished.terminationStatus == 0 &&
+                    self.connectionVerified && !self.clipboardInstalledForCurrentVersion &&
+                    self.clipboardInstallProcess == nil {
+                    self.installClipboardTransfer(automatic: true)
+                }
             }
         }
         do {
@@ -361,34 +372,49 @@ final class TetherGuestInstaller: NSObject, NSApplicationDelegate, NSWindowDeleg
     }
 
     @objc private func enableClipboardTransfer() {
+        installClipboardTransfer(automatic: false)
+    }
+
+    private func installClipboardTransfer(automatic: Bool) {
         guard isVirtualMac, !isRunning, clipboardInstallProcess == nil else { return }
-        let retryingHandoff = selected == .verify && isComplete(.verify)
+        let retryingHandoff = connectionVerified
         guard let script = Bundle.main.resourceURL?.appendingPathComponent("install-clipboard-helper.sh"),
               FileManager.default.isExecutableFile(atPath: script.path) else {
-            if retryingHandoff { markHandoffRetryFailed() }
-            showError("The clipboard helper is missing. Open the latest guest setup disk and try again.")
+            markHandoffRetryFailed()
+            if !automatic {
+                showError("The clipboard helper is missing. Open the latest guest setup disk and try again.")
+            }
             return
         }
         clipboardButton.isEnabled = false
+        clipboardButton.title = "Setting up clipboard…"
+        statusLabel.stringValue = "Setting up text clipboard for explicit host button transfers…"
+        statusLabel.textColor = .secondaryLabelColor
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/bash")
         process.arguments = [script.path]
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = output
         process.terminationHandler = { [weak self] finished in
+            let details = output.fileHandleForReading.readDataToEndOfFile()
             DispatchQueue.main.async {
                 guard let self else { return }
+                if !details.isEmpty {
+                    self.writeToTerminal(Data("\r\nClipboard setup:\r\n".utf8) + details)
+                }
                 self.clipboardInstallProcess = nil
                 self.refresh()
+                if automatic { return }
                 let alert = NSAlert()
                 alert.messageText = finished.terminationStatus == 0
-                    ? (retryingHandoff ? "Host handoff enabled" : "Text clipboard helper installed")
-                    : (retryingHandoff ? "Could not enable host handoff" : "Could not enable text clipboard")
+                    ? (retryingHandoff ? "Clipboard and host handoff enabled" : "Text clipboard helper installed")
+                    : "Could not set up text clipboard"
                 alert.informativeText = finished.terminationStatus == 0
                     ? (retryingHandoff
                        ? "Leave this VM running. Tether Host will read the verified connection and test Hermes from the Mac."
                        : "Use Tether Host's Send to VM and Get from VM buttons to transfer text. Transfers happen only when you click a button.")
-                    : "Leave this VM running and try again. The helper is available on the latest Tether Guest Setup disk. The verified URL and token remain available in the setup console."
+                    : "Click Retry clipboard setup in the guest installer. The latest setup disk contains the helper."
                 alert.alertStyle = finished.terminationStatus == 0 ? .informational : .warning
                 alert.runModal()
             }
@@ -398,8 +424,12 @@ final class TetherGuestInstaller: NSObject, NSApplicationDelegate, NSWindowDeleg
         catch {
             clipboardInstallProcess = nil
             clipboardButton.isEnabled = true
-            if retryingHandoff { markHandoffRetryFailed() }
-            showError("Could not start clipboard setup: \(error.localizedDescription)")
+            markHandoffRetryFailed()
+            if automatic {
+                refresh()
+            } else {
+                showError("Could not start clipboard setup: \(error.localizedDescription)")
+            }
         }
     }
 
@@ -407,7 +437,7 @@ final class TetherGuestInstaller: NSObject, NSApplicationDelegate, NSWindowDeleg
         let ready = state.appendingPathComponent("handoff.ready")
         let failed = state.appendingPathComponent("handoff.failed")
         try? FileManager.default.removeItem(at: ready)
-        try? "Automatic host handoff needs attention. Retry from the guest installer.\n"
+        try? "Text clipboard setup needs attention. Retry from the guest installer.\n"
             .write(to: failed, atomically: true, encoding: .utf8)
         refresh()
     }
@@ -458,14 +488,12 @@ final class TetherGuestInstaller: NSObject, NSApplicationDelegate, NSWindowDeleg
         descriptionLabel.stringValue = selected.description
         guidanceLabel.stringValue = selected.guidance
         actionButton.title = isComplete(selected) ? "Run this check again" : selected.action
-        actionButton.isEnabled = isVirtualMac && !running && readSource == nil && terminalFD < 0 && isUnlocked(selected)
-        let installedHandoffVersion = try? String(contentsOf: state.appendingPathComponent("handoff.ready"), encoding: .utf8)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        let handoffInstalled = installedHandoffVersion == Bundle.main.infoDictionary?["CFBundleVersion"] as? String
+        actionButton.isEnabled = isVirtualMac && !running && clipboardInstallProcess == nil &&
+            readSource == nil && terminalFD < 0 && isUnlocked(selected)
+        let handoffInstalled = clipboardInstalledForCurrentVersion
         let handoffFailed = FileManager.default.fileExists(atPath: state.appendingPathComponent("handoff.failed").path)
-        clipboardButton.title = selected == .verify && isComplete(.verify)
-            ? "Retry host handoff"
-            : "Text clipboard (built-in)"
+        clipboardButton.title = clipboardInstallProcess != nil ? "Setting up clipboard…"
+            : (handoffInstalled ? "Text clipboard ready" : "Retry clipboard setup")
         clipboardButton.isEnabled = isVirtualMac && !running && clipboardInstallProcess == nil
 
         if !isVirtualMac {
@@ -476,20 +504,21 @@ final class TetherGuestInstaller: NSObject, NSApplicationDelegate, NSWindowDeleg
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             statusLabel.stringValue = current?.isEmpty == false ? current! : "A setup step is running in the console below."
             statusLabel.textColor = .secondaryLabelColor
+        } else if clipboardInstallProcess != nil {
+            statusLabel.stringValue = "Setting up text clipboard for explicit host button transfers…"
+            statusLabel.textColor = .secondaryLabelColor
+        } else if handoffFailed {
+            statusLabel.stringValue = "Text clipboard setup needs attention. Click Retry clipboard setup."
+            statusLabel.textColor = .systemOrange
+        } else if selected == .verify && connectionVerified && !handoffInstalled {
+            statusLabel.stringValue = "Connection verified. Text clipboard setup is unfinished; click Retry clipboard setup."
+            statusLabel.textColor = .systemOrange
         } else if isComplete(selected) {
             if selected == .tailscale {
                 statusLabel.stringValue = "Tailscale is connected in this VM\(tailnetName.map { " as \($0)" } ?? "")."
-            } else if selected == .verify && handoffFailed {
-                statusLabel.stringValue = "Connection verified. Automatic host handoff needs attention; click Retry host handoff or use the displayed details."
-                statusLabel.textColor = .systemOrange
-                return
-            } else if selected == .verify && !handoffInstalled {
-                statusLabel.stringValue = "Connection verified. Click Retry host handoff to send the details to Tether Host."
-                statusLabel.textColor = .systemOrange
-                return
             } else {
                 statusLabel.stringValue = selected == .verify
-                    ? "Connection verified. Host handoff helper installed; Tether Host will test the connection."
+                    ? "Connection verified. Text clipboard is installed for explicit host button transfers."
                     : "Step complete. Select the next step on the left."
             }
             statusLabel.textColor = .systemGreen
@@ -524,7 +553,18 @@ final class TetherGuestInstaller: NSObject, NSApplicationDelegate, NSWindowDeleg
     private func isComplete(_ step: SetupStep) -> Bool {
         if step == .tailscale { return tailnetConnected }
         return FileManager.default.fileExists(atPath: state.appendingPathComponent(step.receipt).path)
-            && (step != .verify || FileManager.default.fileExists(atPath: state.appendingPathComponent("connection.json").path))
+            && (step != .verify || (connectionVerified && clipboardInstalledForCurrentVersion))
+    }
+
+    private var connectionVerified: Bool {
+        FileManager.default.fileExists(atPath: state.appendingPathComponent("verified.ready").path) &&
+            FileManager.default.fileExists(atPath: state.appendingPathComponent("connection.json").path)
+    }
+
+    private var clipboardInstalledForCurrentVersion: Bool {
+        let installed = try? String(contentsOf: state.appendingPathComponent("handoff.ready"), encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return installed == Bundle.main.infoDictionary?["CFBundleVersion"] as? String
     }
 
     // Query the Tailscale daemon in this guest. A setup receipt is not evidence that it is still signed in.

@@ -1,18 +1,46 @@
 import SwiftUI
 import TetherHostCore
 
+private enum UbuntuInstallationMethod: String, CaseIterable {
+    case automatic
+    case manual
+}
+
+private struct PendingVMForceOff {
+    let id: VirtualMachineID
+    let name: String
+}
+
 /// A focused setup workspace with the VM desktop available when interaction is needed.
 struct HostWorkspaceView: View {
     @EnvironmentObject private var model: AppViewModel
     @ObservedObject var manager: NativeVMManager
     @Environment(\.scenePhase) private var scenePhase
     @State private var showsVMConfiguration = false
+    @State private var creationGuestOS: NativeGuestOS = .macOS
+    @State private var ubuntuInstallationMethod: UbuntuInstallationMethod = .automatic
     @State private var showToken = false
     @State private var showsSetupPanel = true
     @State private var autoCollapsedForCurrentRun = false
     @State private var showsPhoneInstructions = false
     @State private var isVMFullScreen = false
     @State private var fullScreenWindow: NSWindow?
+    @State private var pendingForceOff: PendingVMForceOff?
+
+    private var selectedGuestIsUbuntu: Bool {
+        guard let id = model.designatedVM?.id, model.providerSetup.provider == .builtIn else { return false }
+        return manager.guestOS(for: id) == .ubuntu
+    }
+
+    private var selectedGuestIsManualUbuntu: Bool {
+        guard let id = model.designatedVM?.id, model.providerSetup.provider == .builtIn else { return false }
+        return manager.isManualUbuntuInstallation(id)
+    }
+
+    private var selectedUbuntuInstallerAttached: Bool {
+        guard let id = model.designatedVM?.id else { return false }
+        return manager.isUbuntuInstallerAttached(id)
+    }
 
     private var canShowVMMonitor: Bool {
         model.providerSetup.provider == .builtIn && manager.isRunning
@@ -263,24 +291,33 @@ struct HostWorkspaceView: View {
         VStack(alignment: .leading, spacing: 20) {
             sectionHeader(model.designatedVM == nil ? "Set up your private assistant" : "Prepare your Mac",
                           detail: model.designatedVM == nil
-                            ? "Your assistant runs in a private macOS virtual machine on this Mac."
-                            : "Get the macOS desktop ready, then continue setup inside the VM.")
+                            ? "Your assistant runs in a private virtual machine on this Mac."
+                            : "Get the VM ready, then continue setup inside it.")
 
             if let vm = model.designatedVM {
                 Label(vm.name, systemImage: "desktopcomputer")
                     .font(.headline)
                 if model.setupDependencies.vmReady {
-                    Label("macOS desktop ready", systemImage: "checkmark.circle.fill")
+                    Label("VM desktop ready", systemImage: "checkmark.circle.fill")
                         .foregroundStyle(.secondary)
                     Button("Continue") { model.workspaceSection = .tailscale }
                         .buttonStyle(.borderedProminent)
                 } else if model.designatedVMIsRunning {
-                    Text("Finish the macOS welcome screens in the VM. When you can see the desktop, confirm it here.")
+                    Text(selectedGuestIsManualUbuntu && selectedUbuntuInstallerAttached
+                         ? "Complete the Ubuntu installer and choose your own account. Shut down when finished; Tether checks the installed disk and ejects the installer automatically when it can verify the installation."
+                         : selectedGuestIsManualUbuntu
+                         ? "Sign in to Ubuntu with the account you created during installation, then complete guest setup."
+                         : selectedGuestIsUbuntu
+                         ? "Ubuntu prepares guest setup on its first boot. Sign in as tether with the saved VM password, then open Tether Guest Setup."
+                         : "Finish the macOS welcome screens in the VM. When you can see the desktop, confirm it here.")
                         .foregroundStyle(.secondary)
+                    if selectedGuestIsUbuntu && !selectedGuestIsManualUbuntu {
+                        Button("Show Ubuntu login details") { manager.revealUbuntuCredentials() }
+                    }
                     if model.providerSetup.provider == .builtIn {
                         Button("Desktop is ready") { manager.confirmDesktopReady() }
                             .buttonStyle(.borderedProminent)
-                            .disabled(manager.isBusy)
+                            .disabled(manager.isBusy || (selectedGuestIsManualUbuntu && selectedUbuntuInstallerAttached))
                     } else {
                         Button("Desktop is ready") { model.confirmUTMDesktopReady() }
                             .buttonStyle(.borderedProminent)
@@ -306,11 +343,16 @@ struct HostWorkspaceView: View {
                     Button("Start VM") { Task { await manager.startOrShow(vm.id) } }
                         .buttonStyle(.borderedProminent)
                         .disabled(manager.isRunning || manager.isBusy || manager.hasOtherHostCopy)
+                    if selectedGuestIsManualUbuntu && selectedUbuntuInstallerAttached {
+                        Text("Tether checks for a completed installation before starting. If it cannot verify the disk, the installer stays attached. Manual ejection is also available after you confirm installation is complete.")
+                            .font(.callout).foregroundStyle(.secondary)
+                        Button("Eject installer manually") { manager.ejectUbuntuInstaller(vm.id) }
+                            .disabled(manager.isRunning || manager.isBusy || manager.hasOtherHostCopy)
+                    }
                 }
             } else {
-                Text("Download a compatible macOS image or choose one already on this Mac. Choose where to store the VM in the next step. Keep Tether Host open during installation.")
+                Text("Choose macOS or Ubuntu, then configure memory, disk space, and storage location.")
                     .foregroundStyle(.secondary)
-                downloadVersionPicker
                 if manager.hasOtherHostCopy {
                     Text("Another copy of Tether Host is open. Quit that copy before creating a VM here.")
                         .font(.callout).foregroundStyle(.secondary)
@@ -325,6 +367,9 @@ struct HostWorkspaceView: View {
             }
 
             providerAvailability
+            if selectedGuestIsUbuntu && !selectedGuestIsManualUbuntu && manager.hasCachedUbuntuImage && !manager.isBusy {
+                ubuntuDownloadCleanup
+            }
             if manager.isBusy {
                 ProgressView(manager.status)
             } else if manager.status != "No VM installation has started.", !manager.status.isEmpty,
@@ -354,21 +399,51 @@ struct HostWorkspaceView: View {
                     if !model.candidateVMs.isEmpty {
                         Text("Your virtual machines").font(.headline)
                         ForEach(model.candidateVMs) { candidate in
-                            Button { model.selectVM(candidate.id) } label: {
-                                HStack {
-                                    Image(systemName: model.designatedVM?.id == candidate.id ? "checkmark.circle.fill" : "circle")
-                                    Text(candidate.name).lineLimit(1)
-                                    if model.isDuplicate(candidate) {
-                                        Text(String(candidate.id.description.suffix(8))).font(.caption.monospaced())
+                            VStack(alignment: .leading, spacing: 6) {
+                                Button { model.selectVM(candidate.id) } label: {
+                                    HStack {
+                                        Image(systemName: model.designatedVM?.id == candidate.id ? "checkmark.circle.fill" : "circle")
+                                        Text(candidate.name).lineLimit(1)
+                                        if model.isDuplicate(candidate) {
+                                            Text(String(candidate.id.description.suffix(8))).font(.caption.monospaced())
+                                        }
+                                        Spacer()
+                                        Text(manager.startingVMID == candidate.id ? "Starting" :
+                                             manager.runningVMID == candidate.id ? "Running" :
+                                             candidate.state == .unavailable ? "Unavailable" :
+                                             candidate.state == .stopped ? "Off" : candidate.state.rawValue.capitalized)
+                                            .font(.caption)
                                     }
-                                    Spacer()
-                                    Text(candidate.state == .started ? "Running" : candidate.state == .unavailable ? "Unavailable" : "Off").font(.caption)
+                                }
+                                .buttonStyle(.plain)
+                                .disabled(manager.isBusy)
+                                .help(candidate.id.description)
+                                .accessibilityAddTraits(model.designatedVM?.id == candidate.id ? .isSelected : [])
+                                if model.providerSetup.provider == .builtIn {
+                                    HStack {
+                                        if manager.runningVMID == candidate.id {
+                                            Button("Show") { Task { await manager.startOrShow(candidate.id) } }
+                                            Button(manager.shutdownRequested ? "Shutting Down…" : "Shut Down") {
+                                                manager.requestShutdown(for: candidate.id)
+                                            }
+                                            .disabled(manager.isBusy || manager.shutdownRequested)
+                                            Button("Force Off…", role: .destructive) {
+                                                pendingForceOff = PendingVMForceOff(id: candidate.id, name: candidate.name)
+                                            }
+                                            .disabled(manager.isBusy)
+                                        } else {
+                                            Button(manager.startingVMID == candidate.id ? "Starting…" : "Start VM") {
+                                                model.selectVM(candidate.id)
+                                                Task { await manager.startOrShow(candidate.id) }
+                                            }
+                                            .disabled(manager.isBusy || manager.isRunning || manager.hasOtherHostCopy
+                                                      || candidate.state != .stopped)
+                                        }
+                                    }
+                                } else {
+                                    Button("Open UTM") { model.openUTM() }
                                 }
                             }
-                            .buttonStyle(.plain)
-                            .disabled(manager.isBusy)
-                            .help(candidate.id.description)
-                            .accessibilityAddTraits(model.designatedVM?.id == candidate.id ? .isSelected : [])
                         }
                     }
                     HStack {
@@ -380,11 +455,11 @@ struct HostWorkspaceView: View {
                         if model.vmBundleURL(for: vm) != nil {
                             Button("Show in Finder") { model.revealVMInFinder(vm) }
                         }
+                        if selectedGuestIsManualUbuntu {
+                            Button("Show Ubuntu installer in Finder") { manager.revealUbuntuInstaller(for: vm.id) }
+                        }
                         if model.providerSetup.provider == .builtIn {
-                            if manager.isRunning && manager.runningVMID == vm.id {
-                                Button("Shut Down VM") { manager.requestShutdown() }
-                                    .disabled(manager.isBusy || manager.shutdownRequested)
-                            } else if !manager.isRunning {
+                            if !manager.isRunning && !selectedGuestIsUbuntu {
                                 Button("Move to UTM") {
                                     Task {
                                         if await manager.moveToUTM(vm.id) {
@@ -406,6 +481,18 @@ struct HostWorkspaceView: View {
                 .buttonStyle(.borderless)
             }
             .font(.callout)
+        }
+        .alert("Force power off \(pendingForceOff?.name ?? "VM")?",
+               isPresented: Binding(get: { pendingForceOff != nil },
+                                    set: { if !$0 { pendingForceOff = nil } })) {
+            Button("Cancel", role: .cancel) { pendingForceOff = nil }
+            Button("Force Power Off", role: .destructive) {
+                guard let request = pendingForceOff else { return }
+                pendingForceOff = nil
+                Task { await manager.forcePowerOff(for: request.id) }
+            }
+        } message: {
+            Text("\(pendingForceOff?.name ?? "This VM") (\(pendingForceOff?.id.description ?? "")) will stop immediately. Unsaved work inside it will be lost.")
         }
     }
 
@@ -432,16 +519,16 @@ struct HostWorkspaceView: View {
     private var createVMSheet: some View {
         VStack(alignment: .leading, spacing: 20) {
             VStack(alignment: .leading, spacing: 5) {
-                Text(showsVMConfiguration ? "Configure your VM" : "Choose macOS")
+                Text(showsVMConfiguration ? "Configure your VM" : "Choose your operating system")
                     .font(.title2.bold())
                 Text(showsVMConfiguration ? "Step 2 of 2 · Configure and create" : "Step 1 of 2 · Installation image")
                     .font(.callout).foregroundStyle(.secondary)
-                Text(model.providerSetup.provider == .utm
-                     ? "Tether Host installs macOS, then adds the new VM to UTM."
-                     : manager.isRunning
-                     ? "Tether Host installs macOS in a separate VM."
-                     : "Tether Host installs macOS and opens the new VM here.")
-                .foregroundStyle(.secondary)
+                Text(creationGuestOS == .ubuntu
+                     ? (ubuntuInstallationMethod == .manual
+                        ? "Install Ubuntu 24.04 LTS and choose your own account."
+                        : "Ubuntu 24.04 LTS with Tether guest setup.")
+                     : "Choose a compatible macOS version for your new VM.")
+                    .foregroundStyle(.secondary)
                 if manager.isRunning {
                     Text("Your current VM will keep running. The new VM will be saved for you to start later.")
                         .font(.callout).foregroundStyle(.secondary)
@@ -484,11 +571,13 @@ struct HostWorkspaceView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 12) {
                         if showsVMConfiguration {
-                            Label(manager.imageDescription, systemImage: "checkmark.circle.fill")
+                            Label(creationGuestOS == .ubuntu
+                                  ? (ubuntuInstallationMethod == .manual ? manager.manualUbuntuImageDescription : manager.ubuntuImageDescription)
+                                  : manager.imageDescription, systemImage: "checkmark.circle.fill")
                                 .font(.callout).foregroundStyle(.secondary)
                                 .fixedSize(horizontal: false, vertical: true)
                             Divider().padding(.vertical, 4)
-                            VMCreationSettingsView(manager: manager)
+                            VMCreationSettingsView(manager: manager, guestOS: creationGuestOS)
                             Divider().padding(.vertical, 4)
                             creationStoragePicker
                             if manager.hasOtherHostCopy {
@@ -498,6 +587,52 @@ struct HostWorkspaceView: View {
                             if managerHasError {
                                 Text(manager.status).font(.callout).foregroundStyle(.orange)
                             }
+                        } else {
+                        Picker("Operating system", selection: $creationGuestOS) {
+                            Text("macOS").tag(NativeGuestOS.macOS)
+                            Text("Ubuntu").tag(NativeGuestOS.ubuntu)
+                        }
+                        .pickerStyle(.segmented)
+                        .onChange(of: creationGuestOS) { _, os in
+                            if os == .ubuntu { manager.configureUbuntuCreationDefaults() }
+                            else { manager.resetCreationResources() }
+                        }
+                        if creationGuestOS == .ubuntu {
+                            Text("Ubuntu 24.04 LTS").font(.headline)
+                            Picker("Installation method", selection: $ubuntuInstallationMethod) {
+                                Text("Automatic setup").tag(UbuntuInstallationMethod.automatic)
+                                Text("Install it myself").tag(UbuntuInstallationMethod.manual)
+                            }
+                            .pickerStyle(.segmented)
+                            Text(ubuntuInstallationMethod == .manual
+                                 ? "Download the Ubuntu Desktop installer. The VM starts with a blank 24 GB disk, and you choose the Ubuntu account during installation."
+                                 : "A lightweight Linux VM with a 24 GB disk that grows as you use it. Configure memory and storage in the next step.")
+                                .font(.callout).foregroundStyle(.secondary)
+                            if model.providerSetup.provider == .utm {
+                                Label("Ubuntu uses the built-in VM provider. Select Built-in in VM settings to continue.", systemImage: "info.circle")
+                                    .font(.callout).foregroundStyle(.secondary)
+                            }
+                            if !creationImageReady {
+                                Button(ubuntuInstallationMethod == .manual
+                                       ? (manager.hasCachedManualUbuntuImage ? "Verify downloaded installer" : "Download Ubuntu installer")
+                                       : (manager.hasCachedUbuntuImage ? "Use downloaded image" : "Download Ubuntu")) {
+                                    Task {
+                                        if ubuntuInstallationMethod == .manual { await manager.downloadManualUbuntuImage() }
+                                        else { await manager.downloadUbuntuImage() }
+                                    }
+                                }
+                                .buttonStyle(.borderedProminent)
+                            }
+                            if creationImageReady, let message = ubuntuReadinessMessage {
+                                Text(message).font(.callout).foregroundStyle(.orange)
+                            }
+                            Text(ubuntuInstallationMethod == .manual
+                                 ? manager.manualUbuntuImageDescription : manager.ubuntuImageDescription)
+                                .font(.callout).foregroundStyle(.secondary)
+                            if ubuntuInstallationMethod == .manual ? manager.hasCachedManualUbuntuImage : manager.hasCachedUbuntuImage {
+                                ubuntuDownloadCleanup
+                            }
+                            if managerHasError { Text(manager.status).font(.callout).foregroundStyle(.orange) }
                         } else {
                         Text("macOS installation image").font(.headline)
                         Text("Download a compatible macOS restore image or choose an IPSW on this Mac. The download is cached on this Mac. You can store the VM on an external drive in the next step.")
@@ -552,10 +687,11 @@ struct HostWorkspaceView: View {
                                 .foregroundStyle(.orange)
                         }
                         }
+                        }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .frame(height: showsVMConfiguration ? 440 : 380)
+                .frame(height: showsVMConfiguration ? 440 : (creationGuestOS == .ubuntu ? 300 : 380))
                 HStack {
                     Button("Cancel") { model.showsCreateVM = false }
                     Spacer()
@@ -563,7 +699,10 @@ struct HostWorkspaceView: View {
                     Button("Back") { showsVMConfiguration = false }
                     Button(model.providerSetup.provider == .utm ? "Create in UTM" : "Create VM") {
                         Task {
-                            if let id = await manager.install(for: model.providerSetup.provider) {
+                            let createdID = creationGuestOS == .ubuntu
+                                ? await manager.installUbuntu(manual: ubuntuInstallationMethod == .manual)
+                                : await manager.install(for: model.providerSetup.provider)
+                            if let id = createdID {
                                 await model.refresh()
                                 if !manager.isRunning || manager.runningVMID == id {
                                     model.selectVM(id)
@@ -575,14 +714,15 @@ struct HostWorkspaceView: View {
                         }
                     }
                     .buttonStyle(.borderedProminent)
-                    .disabled(manager.imageURL == nil
+                    .disabled(!creationImageReady
+                        || (creationGuestOS == .ubuntu && (model.providerSetup.provider != .builtIn || ubuntuReadinessMessage != nil))
                         || manager.creationResourceError != nil
                         || manager.creationStorageValidationMessage != nil
                         || !model.providerSetup.availability.canContinue || manager.hasOtherHostCopy)
                     } else {
                         Button("Continue to configuration") { showsVMConfiguration = true }
                             .buttonStyle(.borderedProminent)
-                            .disabled(manager.imageURL == nil)
+                            .disabled(!creationImageReady || (creationGuestOS == .ubuntu && (model.providerSetup.provider != .builtIn || ubuntuReadinessMessage != nil)))
                     }
                 }
             }
@@ -590,6 +730,33 @@ struct HostWorkspaceView: View {
         .padding(24)
         .frame(width: 520)
         .frame(minHeight: 340)
+    }
+
+    private var ubuntuDownloadCleanup: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Button("Show downloaded image in Finder") {
+                manager.revealCachedUbuntuImageInFinder(manual: ubuntuInstallationMethod == .manual)
+            }
+            .disabled(manager.isBusy)
+            Text(ubuntuInstallationMethod == .manual
+                 ? "After creating the VM, this cached download can be deleted in Finder. A copy of the installer stays with the VM until you remove it."
+                 : "After creating your VM, you can delete this downloaded image in Finder. Your VM keeps working; creating another Ubuntu VM will require a new download.")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var creationImageReady: Bool {
+        guard creationGuestOS == .ubuntu else { return manager.imageURL != nil }
+        return ubuntuInstallationMethod == .manual
+            ? (manager.manualUbuntuImageURL != nil && manager.hasCachedManualUbuntuImage)
+            : (manager.ubuntuImageURL != nil && manager.hasCachedUbuntuImage)
+    }
+
+    private var ubuntuReadinessMessage: String? {
+        ubuntuInstallationMethod == .manual
+            ? manager.manualUbuntuCreationReadinessMessage
+            : manager.ubuntuCreationReadinessMessage
     }
 
     private var creationStoragePicker: some View {
@@ -608,6 +775,10 @@ struct HostWorkspaceView: View {
             Text("Choose a folder on this Mac or an external drive. Keep the drive connected while the VM runs.")
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+            if let warning = manager.creationStorageWarning {
+                Text(warning).font(.callout).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             if let error = manager.creationStorageValidationMessage {
                 Text(error).font(.callout).foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
@@ -663,7 +834,7 @@ struct HostWorkspaceView: View {
                     .buttonStyle(.borderedProminent)
             } else if !model.setupDependencies.vmReady {
                 Text(model.designatedVMIsRunning
-                     ? "Confirm the macOS desktop before opening the guest guide."
+                     ? "Confirm the VM desktop before opening the guest guide."
                      : "Your VM is off. Start it to continue setup.")
                     .foregroundStyle(.secondary)
                 Button("Prepare VM") { model.workspaceSection = .vm }
@@ -687,7 +858,11 @@ struct HostWorkspaceView: View {
                 }
                 Text(model.guestSetupDiskStatus).font(.callout).foregroundStyle(.secondary)
             } else {
-                Label("In your VM, open Tether Guest Setup, then Tether Guest Installer.app.",
+                Label(selectedGuestIsManualUbuntu
+                      ? "In Ubuntu, open the attached Tether Ubuntu Guest Tools disk."
+                      : selectedGuestIsUbuntu
+                      ? "In Ubuntu, open Tether Guest Setup."
+                      : "In your VM, open Tether Guest Setup, then Tether Guest Installer.app.",
                       systemImage: "opticaldisc")
                     .fixedSize(horizontal: false, vertical: true)
                 Text("Follow the guide to join Tailscale and sign in. The Tailscale app on this physical Mac does not count.")
@@ -710,7 +885,11 @@ struct HostWorkspaceView: View {
             }
             DisclosureGroup("Guest setup help") {
                 VStack(alignment: .leading, spacing: 10) {
-                    Text("In the VM's Finder, open the Tether Guest Setup disk and run Tether Guest Installer.app. Its six-step guide checks Internet, sets up Tailscale and Hermes, requests any needed permissions, and verifies the connection.")
+                    Text(selectedGuestIsManualUbuntu
+                         ? "After Ubuntu is installed, open the TETHERUBUNTU disk in Files and launch Tether Guest Installer. Its guide prepares clipboard support before sign-in and shows setup progress."
+                         : selectedGuestIsUbuntu
+                         ? "Open Tether Guest Installer in the Ubuntu applications menu. The guide sets up clipboard support, Tailscale, Hermes, model sign-in, and connection verification."
+                         : "In the VM's Finder, open the Tether Guest Setup disk and run Tether Guest Installer.app. Its six-step guide checks Internet, sets up Tailscale and Hermes, requests any needed permissions, and verifies the connection.")
                     if model.providerSetup.provider == .utm {
                         Text("For an existing UTM VM, attach the exported disk as a removable drive in UTM first.")
                         if model.guestSetupDiskURL != nil {
@@ -896,7 +1075,7 @@ struct HostWorkspaceView: View {
                 }
                 DisclosureGroup("Connection help") {
                     VStack(alignment: .leading, spacing: 10) {
-                        Text("The token clipboard clears after 45 seconds. After a VM reboot, unlock macOS and log in so the guest gateway and desktop permissions can resume.")
+                        Text("The token clipboard clears after 45 seconds. After a VM reboot, unlock the VM and log in so the guest gateway and desktop permissions can resume.")
                         if model.isPhoneSetupComplete {
                             Button("Phone test needs attention") {
                                 model.resetPhoneSetup()
@@ -927,7 +1106,7 @@ private struct VMMonitorView: View {
     let toggleSetupPanel: () -> Void
     let openSection: (HostWorkspaceSection) -> Void
     let toggleFullScreen: () -> Void
-    @State private var showingForcePowerOff = false
+    @State private var pendingForceOff: PendingVMForceOff?
     @State private var clipboardIsBusy = false
     @State private var clipboardMessage: String?
 
@@ -975,13 +1154,6 @@ private struct VMMonitorView: View {
                     Divider()
                     Button("Health") { openSection(.overview) }
                     Button("Diagnostics") { openSection(.diagnostics) }
-                    if model.providerSetup.provider == .builtIn, manager.isRunning {
-                        Divider()
-                        Button("Send host text to VM") { sendHostClipboard() }
-                            .disabled(clipboardIsBusy)
-                        Button("Get VM text on host") { receiveGuestClipboard() }
-                            .disabled(clipboardIsBusy)
-                    }
                 } label: {
                     Label("More", systemImage: "ellipsis.circle")
                 }
@@ -989,6 +1161,43 @@ private struct VMMonitorView: View {
                 .menuStyle(.borderlessButton)
                 .help("Connection details and VM actions")
                 if model.providerSetup.provider == .builtIn, manager.isRunning {
+                    Menu {
+                        Button(manager.shutdownRequested ? "Shutting Down…" : "Shut Down") {
+                            guard let id = manager.runningVMID else { return }
+                            manager.requestShutdown(for: id)
+                        }
+                        .disabled(manager.isBusy || manager.shutdownRequested)
+                        Button("Force Off…", role: .destructive) {
+                            guard let id = manager.runningVMID else { return }
+                            pendingForceOff = PendingVMForceOff(id: id, name: displayedVMName)
+                        }
+                        .disabled(manager.isBusy)
+                    } label: {
+                        Label("Power", systemImage: "power")
+                    }
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
+                    .help("Shut down or force off \(displayedVMName)")
+                    Button("Paste as typing") { typeHostClipboard() }
+                        .disabled(clipboardIsBusy)
+                        .help("Click a text field in the VM first, then paste host text as keystrokes. Works at login without guest tools.")
+                    Menu {
+                        Button("Copy Mac text to VM") { sendHostClipboard() }
+                            .disabled(clipboardIsBusy)
+                        Button("Copy VM text to Mac") { receiveGuestClipboard() }
+                            .disabled(clipboardIsBusy)
+                        Divider()
+                        Button("Check clipboard connection") { checkClipboardConnection() }
+                            .disabled(clipboardIsBusy)
+                        Text(manager.runningGuestOS == .ubuntu
+                             ? "Clipboard is set up by Tether Guest Installer. Copy in Ubuntu, then choose Copy VM text to Mac."
+                             : "Clipboard is set up by Tether Guest Installer. Paste with Command-V.")
+                    } label: {
+                        Label("Clipboard", systemImage: "doc.on.clipboard")
+                    }
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
+                    .help("Transfer text between this Mac and the VM")
                     Button {
                         toggleFullScreen()
                     } label: {
@@ -1040,7 +1249,7 @@ private struct VMMonitorView: View {
                     Text(manager.status).font(.callout).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
                 } else if showsSetupPanel {
-                    Label("macOS desktop ready", systemImage: "checkmark.circle.fill")
+                    Label("VM desktop ready", systemImage: "checkmark.circle.fill")
                         .font(.callout).foregroundStyle(.secondary)
                 }
                 if model.providerSetup.provider == .builtIn {
@@ -1050,7 +1259,8 @@ private struct VMMonitorView: View {
                     }
                     if manager.shutdownRequested && manager.isRunning {
                         Button("Force Power Off", role: .destructive) {
-                            showingForcePowerOff = true
+                            guard let id = manager.runningVMID else { return }
+                            pendingForceOff = PendingVMForceOff(id: id, name: displayedVMName)
                         }
                         .disabled(manager.isBusy)
                     }
@@ -1064,18 +1274,54 @@ private struct VMMonitorView: View {
             }
         }
         .background(Color(nsColor: .windowBackgroundColor))
-        .confirmationDialog("Power off this VM immediately?", isPresented: $showingForcePowerOff) {
+        .alert("Force power off \(pendingForceOff?.name ?? "VM")?",
+               isPresented: Binding(get: { pendingForceOff != nil },
+                                    set: { if !$0 { pendingForceOff = nil } })) {
+            Button("Cancel", role: .cancel) { pendingForceOff = nil }
             Button("Force Power Off", role: .destructive) {
-                Task { await manager.forcePowerOff() }
+                guard let request = pendingForceOff else { return }
+                pendingForceOff = nil
+                Task { await manager.forcePowerOff(for: request.id) }
             }
         } message: {
-            Text("Unsaved work inside macOS will be lost. Use this only when Shut Down does not finish.")
+            Text("\(pendingForceOff?.name ?? "This VM") (\(pendingForceOff?.id.description ?? "")) will stop immediately. Unsaved work inside it will be lost. Use this only when Shut Down does not finish.")
+        }
+    }
+
+    private func checkClipboardConnection() {
+        clipboardIsBusy = true
+        Task {
+            defer { clipboardIsBusy = false }
+            do {
+                try await manager.checkGuestClipboardConnection()
+                clipboardMessage = "Clipboard connected. Use the Clipboard menu to copy text in either direction."
+            } catch {
+                clipboardMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func typeHostClipboard() {
+        guard let vm = manager.virtualMachine, manager.isRunning else { return }
+        guard let text = NSPasteboard.general.string(forType: .string), !text.isEmpty else {
+            clipboardMessage = "Copy text on this Mac, click the destination field in the VM, then choose Paste as typing."
+            return
+        }
+        clipboardIsBusy = true
+        Task {
+            defer { clipboardIsBusy = false }
+            do {
+                try await NativeVMDisplay.typeText(text, into: vm)
+                clipboardMessage = "Text typed into the VM. Review it before submitting."
+            } catch {
+                clipboardMessage = error.localizedDescription
+            }
         }
     }
 
     private func sendHostClipboard() {
         guard let text = NSPasteboard.general.string(forType: .string), !text.isEmpty else {
-            clipboardMessage = "Copy text on this Mac first, then choose Send host text to VM."
+            clipboardMessage = "Copy text on this Mac first, then choose Copy Mac text to VM."
             return
         }
         clipboardIsBusy = true
@@ -1083,7 +1329,9 @@ private struct VMMonitorView: View {
             defer { clipboardIsBusy = false }
             do {
                 try await manager.writeGuestClipboardText(text)
-                clipboardMessage = "Text sent to the VM clipboard. Press Command-V inside the VM to paste it."
+                clipboardMessage = manager.runningGuestOS == .ubuntu
+                    ? "Text sent to Ubuntu. Press Ctrl-V to paste, or Ctrl-Shift-V in Terminal."
+                    : "Text sent to the VM clipboard. Press Command-V inside the VM to paste it."
             } catch {
                 clipboardMessage = error.localizedDescription
             }
@@ -1135,6 +1383,7 @@ private extension HostSetupDependencies {
 /// Shared by first-run setup and VM creation; edits apply only to the new VM.
 struct VMCreationSettingsView: View {
     @ObservedObject var manager: NativeVMManager
+    var guestOS: NativeGuestOS = .macOS
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -1145,17 +1394,22 @@ struct VMCreationSettingsView: View {
                         range: manager.creationCPURange, unit: "cores")
             resourceRow("Disk space", value: $manager.creationDiskGiB,
                         range: manager.creationDiskRange, unit: "GB", step: 8)
-            Text("Disk space grows as the VM uses it, up to this limit.")
+            Text(manager.creationStorageWarning == nil
+                 ? "Disk space grows as the VM uses it, up to this limit."
+                 : "This drive reserves the full disk capacity when the VM is created.")
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            if manager.creationDiskGiB < 64 {
+            if guestOS == .macOS && manager.creationDiskGiB < 64 {
                 Text(manager.creationDiskGiB < 40
                      ? "Experimental disk size. macOS installation may fail; use 64 GB or more for room to install and update."
                      : "Below 64 GB, space for macOS and updates is limited. Installation may require a larger disk.")
                     .font(.caption).foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            Button("Use recommended settings") { manager.resetCreationResources() }
+            Button("Use recommended settings") {
+                if guestOS == .ubuntu { manager.configureUbuntuCreationDefaults() }
+                else { manager.resetCreationResources() }
+            }
                 .buttonStyle(.borderless).font(.callout)
             if let error = manager.creationResourceError {
                 Text(error).font(.callout).foregroundStyle(.orange)

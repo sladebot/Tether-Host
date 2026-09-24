@@ -118,6 +118,7 @@ struct SetupAssistantView: View {
 private struct NativeVMSetupView: View {
     @EnvironmentObject private var model: AppViewModel
     @ObservedObject var manager: NativeVMManager
+    @State private var pendingForceOff: VirtualMachineRecord?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -208,6 +209,17 @@ private struct NativeVMSetupView: View {
                                 model.selectVM(vm.id)
                                 Task { await manager.startOrShow(vm.id) }
                             }
+                            .disabled(manager.isBusy || manager.hasOtherHostCopy
+                                      || (manager.runningVMID != vm.id
+                                          && (manager.isRunning || vm.state != .stopped)))
+                            if manager.runningVMID == vm.id {
+                                Button(manager.shutdownRequested ? "Shutting Down…" : "Shut Down") {
+                                    manager.requestShutdown(for: vm.id)
+                                }
+                                .disabled(manager.isBusy || manager.shutdownRequested)
+                                Button("Force Off…", role: .destructive) { pendingForceOff = vm }
+                                    .disabled(manager.isBusy)
+                            }
                         }
                         if manager.isDesktopReady(for: vm.id) {
                             HStack {
@@ -276,6 +288,18 @@ private struct NativeVMSetupView: View {
             }
         }
         .task { await manager.loadDownloadImageOptions() }
+        .alert("Force power off \(pendingForceOff?.name ?? "VM")?",
+               isPresented: Binding(get: { pendingForceOff != nil },
+                                    set: { if !$0 { pendingForceOff = nil } })) {
+            Button("Cancel", role: .cancel) { pendingForceOff = nil }
+            Button("Force Power Off", role: .destructive) {
+                guard let vm = pendingForceOff else { return }
+                pendingForceOff = nil
+                Task { await manager.forcePowerOff(for: vm.id) }
+            }
+        } message: {
+            Text("\(pendingForceOff?.name ?? "This VM") (\(pendingForceOff?.id.description ?? "")) will stop immediately. Unsaved work inside it will be lost.")
+        }
     }
 }
 

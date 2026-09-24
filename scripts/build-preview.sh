@@ -20,6 +20,11 @@ TETHER_PREVIEW_DMG="${TETHER_PREVIEW_DMG:-$DEFAULT_PREVIEW_DMG}"
 mkdir -p "$(dirname "$TETHER_PREVIEW_DMG")"
 find "$APP_PATH/Contents/Resources/GuestSetup" -type d -name '__pycache__' -prune -exec rm -rf {} +
 find "$APP_PATH/Contents/Resources/GuestSetup" -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
+find "$APP_PATH/Contents/Resources/LinuxGuestSetup" -type d -name '__pycache__' -prune -exec rm -rf {} +
+find "$APP_PATH/Contents/Resources/LinuxGuestSetup" -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
+test -x "$APP_PATH/Contents/Resources/Tools/qemu-img"
+test -f "$APP_PATH/Contents/Resources/LinuxGuestSetup/vsock_helper.py"
+test -f "$APP_PATH/Contents/Resources/Tether Ubuntu Guest Tools.iso"
 codesign --force --deep --sign - --preserve-metadata=identifier,entitlements,flags,runtime "$APP_PATH"
 codesign --verify --deep --strict "$APP_PATH"
 mkdir "$STAGING_DIRECTORY/content"
@@ -70,17 +75,17 @@ cat >> "$STAGING_DIRECTORY/content/Read Me.txt" <<'NOTE'
 
 Drag Tether Host for Mac into Applications and launch it.
 Built-in Apple Virtualization is the default VM provider. Tether Host stores
-and displays its VM directly. A new VM needs a compatible macOS IPSW; an
-existing one does not. UTM remains an optional backup for existing UTM VMs
+and displays its VM directly. A new VM can use macOS or Ubuntu 24.04 LTS. Ubuntu uses a 24 GB disk by default (sparse on supported drives)
+and includes its own Linux guest installer. UTM remains an optional backup for existing UTM VMs
 or a new VM that appears in UTM. The four checks are:
 1. Create or select the exact VM.
-2. Install and boot macOS.
+2. Install and boot the selected operating system.
 3. Check/install/configure Tailscale inside the VM.
 4. Check/install/configure Hermes inside the VM, then verify it.
 
 The included Tether Guest Setup.iso carries a small guest helper without
-enabling host folder sharing. Built-in Apple VMs can optionally enable explicit,
-text-only clipboard transfer from the guest installer. Each clipboard transfer
+enabling host folder sharing. The guest installer prepares explicit, text-only clipboard transfer for built-in
+Apple VMs as part of setup. Each clipboard transfer
 requires a button click in Tether Host; clipboard contents are never synced continuously.
 Tether-created built-in and UTM VMs
 include a read-only copy. In the guest, open Tether Guest Installer.app and
