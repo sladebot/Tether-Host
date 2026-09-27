@@ -1,4 +1,4 @@
-"""Behavioral tests for the shared Ubuntu guest DNS preflight."""
+"""Behavioral tests for the shared Debian guest DNS preflight."""
 
 import os
 from pathlib import Path
@@ -36,6 +36,7 @@ echo getent >> "$TEST_LOG"
 echo "resolvectl $*" >> "$TEST_LOG"
 if [ "$1" = dns ]; then touch "$TEST_REPAIRED"; fi
 """,
+                "systemctl": "#!/bin/sh\n[ \"$1 $2\" = 'is-active --quiet' ]\n",
                 "timeout": "#!/bin/sh\nshift\nexec \"$@\"\n",
                 "sleep": "#!/bin/sh\nexit 0\n",
             }
@@ -107,7 +108,7 @@ fi
     def test_unresolved_dns_reports_failure_after_fallback(self):
         result, commands = self.run_helper(dns="failed")
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("could not resolve Ubuntu package servers", result.stderr)
+        self.assertIn("could not resolve Debian package servers", result.stderr)
         self.assertIn("resolvectl dns enp0s1 1.1.1.1 9.9.9.9", commands)
 
     def test_no_route_or_non_nat_interface_does_not_change_dns(self):

@@ -7,14 +7,14 @@ import Virtualization
 /// Destructive only within its own --root. The test never discovers or stops
 /// the user's saved VMs, and keeps its bundle for inspection after shutdown.
 @main
-struct UbuntuE2E {
+struct DebianE2E {
     @MainActor private static var displayWindow: NSWindow?
     @MainActor
     static func main() async {
         setbuf(stdout, nil)
         do { try await run() }
         catch {
-            fputs("Ubuntu E2E failed: \(error.localizedDescription)\n", stderr)
+            fputs("Debian E2E failed: \(error.localizedDescription)\n", stderr)
             exit(1)
         }
     }
@@ -27,12 +27,21 @@ struct UbuntuE2E {
         }
         let root = URL(fileURLWithPath: CommandLine.arguments[index + 1], isDirectory: true)
             .standardizedFileURL
-        guard root.path.hasPrefix("/tmp/tether-ubuntu-e2e"),
-              !root.path.contains("..") else {
-            throw Failure("Test root must be under /private/tmp/tether-ubuntu-e2e")
+        guard let resolvedRootPointer = root.path.withCString({ realpath($0, nil) }) else {
+            throw Failure("Test root must exist before launching the VM")
+        }
+        defer { free(resolvedRootPointer) }
+        let resolvedRoot = String(cString: resolvedRootPointer)
+        guard root.path == "/tmp/tether-debian-e2e" ||
+                root.path.hasPrefix("/tmp/tether-debian-e2e/") ||
+                root.path.hasPrefix("/tmp/tether-debian-e2e-"),
+              resolvedRoot == "/private/tmp/tether-debian-e2e" ||
+                resolvedRoot.hasPrefix("/private/tmp/tether-debian-e2e/") ||
+                resolvedRoot.hasPrefix("/private/tmp/tether-debian-e2e-") else {
+            throw Failure("Test root must be an isolated /tmp/tether-debian-e2e directory")
         }
         let vmRoot = root.appendingPathComponent("Virtual Machines", isDirectory: true)
-        let suite = "app.tether.ubuntu.e2e.\(UUID().uuidString)"
+        let suite = "app.tether.debian.e2e.\(UUID().uuidString)"
         guard let preferences = UserDefaults(suiteName: suite) else { throw Failure("No test defaults") }
         defer { preferences.removePersistentDomain(forName: suite) }
         let input = Pipe()
@@ -51,71 +60,72 @@ struct UbuntuE2E {
                 return
             }
             try await manager.boot(existingID)
-            guard manager.runningGuestOS == .ubuntu,
+            guard manager.runningGuestOS == .debian,
                   manager.virtualMachine != nil else {
-                throw Failure("Existing VM did not start as Ubuntu")
+                throw Failure("Existing VM did not start as Debian")
             }
-            print("Existing isolated Ubuntu VM is displayed; create \(root.appendingPathComponent("shutdown.request").path) to request guest shutdown.")
+            print("Existing isolated Debian VM is displayed; create \(root.appendingPathComponent("shutdown.request").path) to request guest shutdown.")
             if CommandLine.arguments.contains("--diagnose") {
-                let password = try readOneTimePassword(bundle.appendingPathComponent("ubuntu-credentials.txt"))
+                let password = try readOneTimePassword(bundle.appendingPathComponent("debian-credentials.txt"))
                 _ = try await console.login(password: password, newPassword: nil, timeoutSeconds: 300)
                 try console.send("cloud-init status --long")
-                try await console.waitFor("tether@tether-ubuntu", timeoutSeconds: 45)
+                try await console.waitFor("tether@debian-tether-vm", timeoutSeconds: 45)
                 try console.send("grep -Ei 'error|failed|traceback|fatal' /var/log/cloud-init.log | tail -35")
-                try await console.waitFor("tether@tether-ubuntu", timeoutSeconds: 45)
+                try await console.waitFor("tether@debian-tether-vm", timeoutSeconds: 45)
                 try console.send("sudo tail -n 100 /var/log/cloud-init-output.log")
                 try await console.waitFor("[sudo] password", timeoutSeconds: 30)
                 try console.send(password)
-                try await console.waitFor("tether@tether-ubuntu", timeoutSeconds: 45)
+                try await console.waitFor("tether@debian-tether-vm", timeoutSeconds: 45)
                 try console.send("sudo journalctl -u cloud-final --no-pager -n 80")
-                try await console.waitFor("tether@tether-ubuntu", timeoutSeconds: 45)
-                for command in ["ip link; ip -4 address; ip -4 route; getent hosts ports.ubuntu.com",
-                                "cat /etc/resolv.conf; resolvectl status --no-pager; resolvectl query ports.ubuntu.com",
-                                "sudo resolvectl dns enp0s1 1.1.1.1; resolvectl status --no-pager; resolvectl query ports.ubuntu.com; curl -4 -fsSI --max-time 15 https://ports.ubuntu.com/ubuntu-ports/dists/noble/InRelease | head -n 3",
-                                "getent ahostsv4 ports.ubuntu.com; ping -c 1 -W 3 192.168.64.1; ping -c 1 -W 3 1.1.1.1",
+                try await console.waitFor("tether@debian-tether-vm", timeoutSeconds: 45)
+                for command in ["ip link; ip -4 address; ip -4 route; getent hosts deb.debian.org",
+                                "cat /etc/resolv.conf; resolvectl status --no-pager 2>/dev/null || true; getent ahostsv4 deb.debian.org",
+                                "sudo /opt/tether-guest/dns-fallback.sh; curl -4 -fsSI --max-time 15 https://deb.debian.org/debian/dists/trixie/InRelease | head -n 3",
+                                "getent ahostsv4 deb.debian.org; ping -c 1 -W 3 192.168.64.1; ping -c 1 -W 3 1.1.1.1",
                                 "sudo cat /etc/netplan/*; networkctl; sudo journalctl -u systemd-networkd --no-pager -n 40",
                                 "sudo journalctl -u cloud-final -b -1 --no-pager -n 35; sudo grep -nEi 'network did not|indexes could not|scripts_user|failed|error' /var/log/cloud-init-output.log | tail -n 35",
                                 "systemctl get-default; systemctl is-active lightdm.service; systemctl status lightdm.service --no-pager -n 30; dpkg-query -W lightdm lightdm-gtk-greeter xfce4-session xserver-xorg-core 2>&1",
                                 "ls -la /usr/share/xgreeters /usr/share/xsessions /var/log/lightdm 2>&1; sudo journalctl -u lightdm.service -b --no-pager -n 65",
                                 "sudo tail -n 85 /var/log/lightdm/lightdm.log",
                                 "ls -la /dev/dri /tmp/.X11-unix 2>&1; lsmod | grep -E 'virtio_gpu|drm|gpu' || true; modinfo virtio_gpu 2>&1 | head -n 12; pgrep -a -f 'Xorg|Xwayland|lightdm|greeter' || true",
-                                "cat /etc/apt/sources.list.d/ubuntu.sources; apt-cache policy xfce4 lightdm epiphany-browser",
+                                "cat /etc/apt/sources.list.d/debian.sources; apt-cache policy xfce4 lightdm epiphany-browser",
+                                "sudo umount /mnt/tether-tools 2>/dev/null || true; device=$(/usr/sbin/blkid -L TETHERTOOLS || true); echo TETHER_DEVICE=$device; sudo mount -o ro \"$device\" /mnt/tether-tools; find /mnt/tether-tools -maxdepth 2 -printf '%M %p\\n'; sudo umount /mnt/tether-tools",
                                 "sudo blkid; sudo mkdir -p /mnt/tether-inspect; sudo mount -o ro /dev/vdb /mnt/tether-inspect; ls -la /mnt/tether-inspect; sudo umount /mnt/tether-inspect"] {
                     try console.send(command)
-                    try await console.waitFor("tether@tether-ubuntu", timeoutSeconds: 90)
+                    try await console.waitFor("tether@debian-tether-vm", timeoutSeconds: 90)
                 }
                 print("Cloud-init diagnostics captured in isolated serial.log.")
             }
             if CommandLine.arguments.contains("--repair-greeter") {
-                let password = try readOneTimePassword(bundle.appendingPathComponent("ubuntu-credentials.txt"))
+                let password = try readOneTimePassword(bundle.appendingPathComponent("debian-credentials.txt"))
                 _ = try await console.login(password: password, newPassword: nil, timeoutSeconds: 300)
                 try console.send("sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends lightdm-gtk-greeter")
                 try await console.waitFor("[sudo] password", timeoutSeconds: 30)
                 try console.send(password)
-                try await console.waitFor("tether@tether-ubuntu", timeoutSeconds: 600)
+                try await console.waitFor("tether@debian-tether-vm", timeoutSeconds: 600)
                 try console.send("sudo systemctl reset-failed lightdm.service; sudo systemctl start lightdm.service; systemctl status lightdm.service --no-pager -n 20; ls -la /usr/share/xgreeters /tmp/.X11-unix")
-                try await console.waitFor("tether@tether-ubuntu", timeoutSeconds: 90)
+                try await console.waitFor("tether@debian-tether-vm", timeoutSeconds: 90)
                 try await console.check("systemctl is-active --quiet lightdm.service && test -S /tmp/.X11-unix/X0 && pgrep -f '[l]ightdm-gtk-greeter' >/dev/null && echo REPAIR_GUI''_OK || echo REPAIR_GUI''_FAIL",
                                         pass: "REPAIR_GUI_OK", fail: "REPAIR_GUI_FAIL", timeoutSeconds: 45)
-                print("Isolated Ubuntu LightDM/greeter repair passed.")
+                print("Isolated Debian LightDM/greeter repair passed.")
             }
             if CommandLine.arguments.contains("--clipboard-e2e") {
-                let password = try readOneTimePassword(bundle.appendingPathComponent("ubuntu-credentials.txt"))
+                let password = try readOneTimePassword(bundle.appendingPathComponent("debian-credentials.txt"))
                 _ = try await console.login(password: password, newPassword: nil, timeoutSeconds: 300)
                 try await console.check("getent passwd tetherexpiryprobe >/dev/null && echo PROBE_''PRESENT || echo PROBE_''CLEANED",
                                         pass: "PROBE_CLEANED", fail: "PROBE_PRESENT", timeoutSeconds: 30)
                 try console.send("sudo -k; sudo mkdir -p /mnt/tether-tools")
                 try await console.waitFor("[sudo] password", timeoutSeconds: 30)
                 try console.send(password)
-                try await console.waitFor("tether@tether-ubuntu", timeoutSeconds: 60)
-                try await console.check("sudo mount -o ro /dev/vdc /mnt/tether-tools && test -f /mnt/tether-tools/update-guest-tools.sh && echo TOOLS_''MOUNTED || echo TOOLS_''MISSING",
+                try await console.waitFor("tether@debian-tether-vm", timeoutSeconds: 60)
+                try await console.check("test -e /dev/disk/by-label/TETHERTOOLS && sudo mount -o ro /dev/disk/by-label/TETHERTOOLS /mnt/tether-tools && test -x '/mnt/tether-tools/Tether Guest Installer' && '/mnt/tether-tools/Tether Guest Installer' --self-test | grep -qx TETHER_GUEST_INSTALLER_SELF_TEST_OK && test -x /opt/tether-guest/update-guest-tools.sh && echo TOOLS_''MOUNTED || echo TOOLS_''MISSING",
                                         pass: "TOOLS_MOUNTED", fail: "TOOLS_MISSING", timeoutSeconds: 60)
-                try console.send("sudo sh /mnt/tether-tools/update-guest-tools.sh")
-                try await console.waitFor("Tether guest tools updated", timeoutSeconds: 600)
+                try console.send("sudo sh /opt/tether-guest/update-guest-tools.sh")
+                try await console.waitFor("Tether guest tools installed", timeoutSeconds: 600)
                 try await console.check("sudo sh -c \"printf '[Seat:*]\\nautologin-user=tether\\nautologin-user-timeout=0\\nuser-session=xfce\\n' > /etc/lightdm/lightdm.conf.d/90-tether-clipboard-e2e.conf\" && echo AUTOLOGIN_''SET || echo AUTOLOGIN_''FAIL",
                                         pass: "AUTOLOGIN_SET", fail: "AUTOLOGIN_FAIL", timeoutSeconds: 30)
                 try console.send("sudo systemctl restart lightdm.service")
-                try await console.waitFor("tether@tether-ubuntu", timeoutSeconds: 90)
+                try await console.waitFor("tether@debian-tether-vm", timeoutSeconds: 90)
                 try await console.check("for i in $(seq 1 60); do pgrep -u tether -x xfce4-session >/dev/null && break; sleep 2; done; pgrep -u tether -x xfce4-session >/dev/null && echo XFCE_SESSION_''OK || echo XFCE_SESSION_''FAIL",
                                         pass: "XFCE_SESSION_OK", fail: "XFCE_SESSION_FAIL", timeoutSeconds: 150)
                 try await console.check("rm -f ~/.local/share/tether-guest/clipboard-enabled; echo CLIPBOARD_''RESET",
@@ -123,8 +133,8 @@ struct UbuntuE2E {
                 try console.send("printf '\\n' | XDG_SESSION_TYPE=x11 DISPLAY=:0 XAUTHORITY=$HOME/.Xauthority /opt/tether-guest/clipboard-toggle.sh")
                 try await console.waitFor("Tether text clipboard transfers are ON", timeoutSeconds: 30)
                 try console.send("pgrep -a -u tether -x xfce4-session || true; loginctl list-sessions --no-legend; systemctl --user show-environment | grep -E '^(DISPLAY|XAUTHORITY|XDG_SESSION_TYPE)=' || true; ls -l ~/.Xauthority /tmp/.X11-unix/X0 2>&1")
-                try await console.waitFor("tether@tether-ubuntu", timeoutSeconds: 45)
-                let sample = "Ubuntu π 🧪 clipboard roundtrip"
+                try await console.waitFor("tether@debian-tether-vm", timeoutSeconds: 45)
+                let sample = "Debian π 🧪 clipboard roundtrip"
                 try await manager.writeGuestClipboardText(sample)
                 let received = try await manager.readGuestClipboardText()
                 guard received == sample else { throw Failure("Guest clipboard returned different text") }
@@ -155,14 +165,14 @@ struct UbuntuE2E {
                 }
                 if manager.isRunning { await manager.forcePowerOff() }
             }
-            print("Existing isolated Ubuntu VM stopped.")
+            print("Existing isolated Debian VM stopped.")
             return
         }
         var vmID: VirtualMachineID?
         do {
-            print("Downloading checksum-verified Ubuntu ARM64 image into isolated test root…")
-            await manager.downloadUbuntuImage()
-            guard manager.ubuntuImageURL != nil else { throw Failure(manager.status) }
+            print("Downloading checksum-verified Debian ARM64 image into isolated test root…")
+            await manager.downloadDebianImage()
+            guard manager.debianImageURL != nil else { throw Failure(manager.status) }
             guard manager.creationCPURange.contains(2), manager.creationMemoryRange.contains(4),
                   manager.creationDiskRange.contains(24) else {
                 throw Failure("Host does not offer 2 CPU / 4 GiB RAM / 24 GiB disk")
@@ -170,14 +180,14 @@ struct UbuntuE2E {
             manager.creationCPUCount = 2
             manager.creationMemoryGiB = 4
             manager.creationDiskGiB = 24
-            print("Creating and booting isolated Ubuntu VM…")
-            guard let id = await manager.installUbuntu() else { throw Failure(manager.status) }
+            print("Creating and booting isolated Debian VM…")
+            guard let id = await manager.installDebian() else { throw Failure(manager.status) }
             vmID = id
-            guard manager.isRunning, manager.runningGuestOS == .ubuntu,
+            guard manager.isRunning, manager.runningGuestOS == .debian,
                   manager.runningVMID == id else { throw Failure(manager.status) }
             let bundle = vmRoot.appendingPathComponent(id.description, isDirectory: true)
             let serial = bundle.appendingPathComponent("serial.log")
-            let credentials = bundle.appendingPathComponent("ubuntu-credentials.txt")
+            let credentials = bundle.appendingPathComponent("debian-credentials.txt")
             guard FileManager.default.fileExists(atPath: serial.path),
                   FileManager.default.fileExists(atPath: credentials.path) else {
                 throw Failure("Missing serial output or one-time credentials")
@@ -185,37 +195,41 @@ struct UbuntuE2E {
             let password = try readOneTimePassword(credentials)
             let newPassword = UUID().uuidString.replacingOccurrences(of: "-", with: "")
             let console = Console(serial: serial, input: input.fileHandleForWriting)
-            print("Waiting for Ubuntu serial console and cloud-init…")
+            print("Waiting for Debian serial console and cloud-init…")
             let activePassword = try await console.login(password: password, newPassword: newPassword,
                                                          timeoutSeconds: 900)
-            try Data("Ubuntu console user: tether\nCurrent password: \(activePassword)\n".utf8)
+            try Data("Debian console user: tether\nCurrent password: \(activePassword)\n".utf8)
                 .write(to: credentials, options: .atomic)
             try FileManager.default.setAttributes([.posixPermissions: 0o600],
                                                   ofItemAtPath: credentials.path)
-            try await console.check("cloud-init status --wait >/dev/null 2>&1 && echo CLOUD''_OK || echo CLOUD''_FAIL",
+            try await console.check("for i in $(seq 1 900); do test -f /var/lib/cloud/instance/boot-finished && break; sleep 1; done; test -f /var/lib/cloud/instance/boot-finished && echo CLOUD''_OK || echo CLOUD''_FAIL",
                                     pass: "CLOUD_OK", fail: "CLOUD_FAIL", timeoutSeconds: 900)
-            try await console.check("curl -fsSI --max-time 25 https://cloud-images.ubuntu.com/ >/dev/null 2>&1 && echo NET''_OK || echo NET''_FAIL",
-                                    pass: "NET_OK", fail: "NET_FAIL", timeoutSeconds: 90)
+            try await checkDebianNetwork(console: console, prefix: "")
             try await console.check("test -f /opt/tether-guest/setup.sh && systemctl is-active --quiet tether-vsock.service && echo GUEST''_OK || echo GUEST''_FAIL",
                                     pass: "GUEST_OK", fail: "GUEST_FAIL", timeoutSeconds: 45)
-            try await console.check("sh -c 'for i in $(seq 1 30); do if systemctl is-active --quiet lightdm.service && test -S /tmp/.X11-unix/X0 && pgrep -f \"[l]ightdm-gtk-greeter\" >/dev/null; then echo GUI''_OK; exit 0; fi; sleep 2; done; echo GUI''_FAIL'",
+            try await checkGuestHandoff(manager: manager)
+            try await console.check("command -v chromium >/dev/null && dpkg-query -W -f='${Status}' chromium 2>/dev/null | grep -qx 'install ok installed' && echo CHROMIUM''_OK || echo CHROMIUM''_FAIL",
+                                    pass: "CHROMIUM_OK", fail: "CHROMIUM_FAIL", timeoutSeconds: 45)
+            try await console.check("sh -c 'for i in $(seq 1 30); do if test \"$(systemctl get-default)\" = graphical.target && systemctl is-active --quiet lightdm.service && dpkg-query -s xfce4-session | grep -qx \"Status: install ok installed\" && test -x /usr/bin/xfce4-session && test -f /usr/share/xsessions/xfce.desktop && test -S /tmp/.X11-unix/X0 && pgrep -f \"[X]org.*:0\" >/dev/null && pgrep -f \"[l]ightdm-gtk-greeter\" >/dev/null; then echo GUI''_OK; exit 0; fi; sleep 2; done; echo GUI''_FAIL'",
                                     pass: "GUI_OK", fail: "GUI_FAIL", timeoutSeconds: 90)
+            try await checkPackagedTools(console: console, password: activePassword, prefix: "")
             try await console.check("printf persisted > ~/tether-e2e-marker && sync && echo WRITE''_OK",
                                     pass: "WRITE_OK", fail: "WRITE_FAIL", timeoutSeconds: 30)
-            print("First boot, cloud-init, network, and guest handoff service passed. Rebooting…")
-            try console.send("sudo reboot")
+            print("First boot, cloud-init, network, native Chromium, and guest handoff service passed. Rebooting…")
+            try console.send("sudo -k; sudo reboot")
             try await console.waitFor("[sudo] password", timeoutSeconds: 40)
             try console.send(activePassword)
             _ = try await console.login(password: activePassword, newPassword: nil,
                                         timeoutSeconds: 600)
             try await console.check("test \"$(cat ~/tether-e2e-marker)\" = persisted && echo PERSIST''_OK || echo PERSIST''_FAIL",
                                     pass: "PERSIST_OK", fail: "PERSIST_FAIL", timeoutSeconds: 45)
-            try await console.check("curl -fsSI --max-time 25 https://cloud-images.ubuntu.com/ >/dev/null 2>&1 && echo REBOOT_NET''_OK || echo REBOOT_NET''_FAIL",
-                                    pass: "REBOOT_NET_OK", fail: "REBOOT_NET_FAIL", timeoutSeconds: 90)
+            try await checkDebianNetwork(console: console, prefix: "REBOOT_")
             try await console.check("systemctl is-active --quiet tether-vsock.service && echo REBOOT_GUEST''_OK || echo REBOOT_GUEST''_FAIL",
                                     pass: "REBOOT_GUEST_OK", fail: "REBOOT_GUEST_FAIL", timeoutSeconds: 45)
-            try await console.check("sh -c 'for i in $(seq 1 30); do if systemctl is-active --quiet lightdm.service && test -S /tmp/.X11-unix/X0 && pgrep -f \"[l]ightdm-gtk-greeter\" >/dev/null; then echo REBOOT_GUI''_OK; exit 0; fi; sleep 2; done; echo REBOOT_GUI''_FAIL'",
+            try await checkGuestHandoff(manager: manager)
+            try await console.check("sh -c 'for i in $(seq 1 30); do if test \"$(systemctl get-default)\" = graphical.target && systemctl is-active --quiet lightdm.service && dpkg-query -s xfce4-session | grep -qx \"Status: install ok installed\" && test -x /usr/bin/xfce4-session && test -f /usr/share/xsessions/xfce.desktop && test -S /tmp/.X11-unix/X0 && pgrep -f \"[X]org.*:0\" >/dev/null && pgrep -f \"[l]ightdm-gtk-greeter\" >/dev/null; then echo REBOOT_GUI''_OK; exit 0; fi; sleep 2; done; echo REBOOT_GUI''_FAIL'",
                                     pass: "REBOOT_GUI_OK", fail: "REBOOT_GUI_FAIL", timeoutSeconds: 90)
+            try await checkPackagedTools(console: console, password: activePassword, prefix: "REBOOT_")
             print("Reboot persistence passed. Requesting guest shutdown…")
             manager.requestShutdown()
             let stopDeadline = Date().addingTimeInterval(240)
@@ -231,23 +245,52 @@ struct UbuntuE2E {
             let logical = Int64(info.st_size)
             let allocated = Int64(info.st_blocks) * 512
             guard logical == 24 * 1_073_741_824,
-                  allocated > 0, allocated < logical else {
-                throw Failure("Disk is not a 24 GiB sparse image")
+                  allocated > 0, allocated < 12 * 1_073_741_824 else {
+                throw Failure("Disk is not a 24 GiB sparse image using less than 12 GiB physically")
             }
             let report = Report(vmID: id.description, serialLog: serial.path,
                                 logicalDiskBytes: logical, allocatedDiskBytes: allocated,
-                                ubuntuBoot: true, cloudInit: true, network: true,
+                                debianBoot: true, cloudInit: true, dns: true, https: true,
+                                network: true, nativeChromium: true, packagedTools: true,
                                 guestHandoffService: true, rebootPersistence: true,
-                                graphicalLogin: true,
+                                graphicalGreeter: true, xfceSessionInstalled: true,
                                 hermesHealth: "not exercised: guest service requires user Tailscale and Hermes credentials")
             let reportURL = root.appendingPathComponent("report.json")
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             try encoder.encode(report).write(to: reportURL, options: .atomic)
-            print("PASS: Ubuntu E2E; physical disk \(allocated / 1_048_576) MiB / 24 GiB logical; report \(reportURL.path)")
+            print("PASS: Debian E2E; physical disk \(allocated / 1_048_576) MiB / 24 GiB logical; report \(reportURL.path)")
         } catch {
             if vmID != nil && manager.isRunning { await manager.forcePowerOff() }
             throw error
+        }
+    }
+
+    @MainActor
+    private static func checkDebianNetwork(console: Console, prefix: String) async throws {
+        try await console.check("sh -c 'for i in $(seq 1 12); do if timeout 5 getent ahostsv4 deb.debian.org >/dev/null 2>&1; then echo \(prefix)DNS''_OK; exit 0; fi; sleep 2; done; echo \(prefix)DNS''_FAIL'",
+                                pass: "\(prefix)DNS_OK", fail: "\(prefix)DNS_FAIL", timeoutSeconds: 90)
+        try await console.check("curl -4 --proto '=https' -fsS --max-time 25 -o /dev/null https://deb.debian.org/debian/dists/trixie/InRelease && echo \(prefix)HTTPS''_OK || echo \(prefix)HTTPS''_FAIL",
+                                pass: "\(prefix)HTTPS_OK", fail: "\(prefix)HTTPS_FAIL", timeoutSeconds: 90)
+    }
+
+    @MainActor
+    private static func checkPackagedTools(console: Console, password: String, prefix: String) async throws {
+        try console.send("sudo -k; sudo mkdir -p /mnt/tether-tools && test -e /dev/disk/by-label/TETHERTOOLS && sudo mount -o ro /dev/disk/by-label/TETHERTOOLS /mnt/tether-tools && test -x '/mnt/tether-tools/Tether Guest Installer' && '/mnt/tether-tools/Tether Guest Installer' --self-test | grep -qx TETHER_GUEST_INSTALLER_SELF_TEST_OK && sudo umount /mnt/tether-tools && echo \(prefix)TOOLS''_OK || echo \(prefix)TOOLS''_FAIL")
+        try await console.waitFor("[sudo] password", timeoutSeconds: 30)
+        try console.send(password)
+        let marker = try await console.waitForAny(["\(prefix)TOOLS_OK", "\(prefix)TOOLS_FAIL"], timeoutSeconds: 90)
+        if marker == "\(prefix)TOOLS_FAIL" { throw Failure("Packaged Debian tools self-test failed after mount") }
+    }
+
+    @MainActor
+    private static func checkGuestHandoff(manager: NativeVMManager) async throws {
+        do {
+            _ = try await manager.readVerifiedGuestConnectionJSON()
+            throw Failure("Fresh Debian guest unexpectedly supplied an authenticated connection")
+        } catch GuestClipboardError.guestRejected {
+            // A response through the private VM socket proves that the helper is
+            // serving requests, while the fresh guest has no credentials yet.
         }
     }
 
@@ -350,12 +393,17 @@ private struct Report: Encodable {
     let serialLog: String
     let logicalDiskBytes: Int64
     let allocatedDiskBytes: Int64
-    let ubuntuBoot: Bool
+    let debianBoot: Bool
     let cloudInit: Bool
+    let dns: Bool
+    let https: Bool
     let network: Bool
+    let nativeChromium: Bool
+    let packagedTools: Bool
     let guestHandoffService: Bool
     let rebootPersistence: Bool
-    let graphicalLogin: Bool
+    let graphicalGreeter: Bool
+    let xfceSessionInstalled: Bool
     let hermesHealth: String
 }
 
@@ -408,19 +456,19 @@ private final class Console {
         try send(password)
         var state = try await waitForAny(["New password:", "Current password:",
                                          "(current) UNIX password:",
-                                         "tether@tether-ubuntu", "Login incorrect"], timeoutSeconds: 60)
-        if state == "Login incorrect" { throw Failure("Ubuntu console login rejected generated password") }
+            "tether@debian-tether-vm", "Login incorrect"], timeoutSeconds: 60)
+        if state == "Login incorrect" { throw Failure("Debian console login rejected generated password") }
         if state == "Current password:" || state == "(current) UNIX password:" {
             try send(password)
             state = try await waitForAny(["New password:", "Login incorrect"], timeoutSeconds: 30)
-            if state == "Login incorrect" { throw Failure("Ubuntu password change rejected original password") }
+            if state == "Login incorrect" { throw Failure("Debian password change rejected original password") }
         }
         if state == "New password:" {
             guard let newPassword else { throw Failure("Unexpected forced password change") }
             try send(newPassword)
             try await waitFor("Retype new password:", timeoutSeconds: 30)
             try send(newPassword)
-            try await waitFor("tether@tether-ubuntu", timeoutSeconds: 60)
+            try await waitFor("tether@debian-tether-vm", timeoutSeconds: 60)
             return newPassword
         }
         return password

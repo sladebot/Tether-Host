@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 umask 077
-export PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/snap/bin"
+export PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
 CURRENT_STAGE=setup
 ERROR_REPORTED=0
 emit() { printf 'TETHER_STAGE\t%s\t%s\t%s\n' "$CURRENT_STAGE" "$1" "$2"; }
 die() {
-    printf 'Ubuntu guest setup stopped: %s\n' "$1" >&2
+    printf 'Debian guest setup stopped: %s\n' "$1" >&2
     emit error "$1" >&2
     ERROR_REPORTED=1
     exit 1
@@ -15,7 +15,7 @@ die() {
 on_error() {
     local status="$1" line="$2"
     if [[ "$ERROR_REPORTED" != 1 ]]; then
-        printf 'Ubuntu guest setup command failed at line %s (exit %s).\n' "$line" "$status" >&2
+        printf 'Debian guest setup command failed at line %s (exit %s).\n' "$line" "$status" >&2
         emit error "A setup command failed (exit $status). See Details and retry this step." >&2
     fi
     exit "$status"
@@ -28,16 +28,16 @@ case "$ACTION" in
     *) die 'Choose a supported guest setup step.' ;;
 esac
 [[ $# -le 1 ]] || die 'Choose one guest setup step at a time.'
-[[ "$(id -u)" != 0 && "$(id -u)" -ge 1000 ]] || die 'Log in as your normal Ubuntu desktop user and run this without sudo.'
+[[ "$(id -u)" != 0 && "$(id -u)" -ge 1000 ]] || die 'Log in as your normal Debian desktop user and run this without sudo.'
 if [[ -f /etc/tether-guest/user ]]; then
     read -r guest_user < /etc/tether-guest/user || true
-    [[ "$(id -un)" == "$guest_user" ]] || die 'Run setup as the Ubuntu account that installed guest tools.'
+    [[ "$(id -un)" == "$guest_user" ]] || die 'Run setup as the Debian account that installed guest tools.'
 elif [[ "$(id -un)" != tether ]]; then
     die 'Install Tether guest tools for your account before running setup.'
 fi
-[[ "$(. /etc/os-release; printf '%s' "$ID")" == ubuntu ]] || die 'This setup is for the Ubuntu guest only.'
-systemd-detect-virt --quiet || die 'Refusing to configure a physical Ubuntu host.'
-[[ -t 0 ]] || die 'Run this from the Ubuntu installer console so sign-in can be completed.'
+[[ "$(. /etc/os-release; printf '%s' "$ID")" == debian ]] || die 'This setup is for the Debian guest only.'
+systemd-detect-virt --quiet || die 'Refusing to configure a physical Debian host.'
+[[ -t 0 ]] || die 'Run this from the Debian installer console so sign-in can be completed.'
 
 ROOT=/opt/tether-guest
 STATE="$HOME/.local/share/tether-guest"
@@ -81,7 +81,7 @@ check_internet() {
         https://pkgs.tailscale.com/stable/ >/dev/null || die 'The VM resolves package servers but cannot reach them over HTTPS.'
 }
 run_internet() {
-    start_stage internet 'Checking Internet inside this Ubuntu VM'
+    start_stage internet 'Checking Internet inside this Debian VM'
     check_internet
     finish_stage 'Guest DNS and HTTPS are working.'
 }
@@ -92,13 +92,13 @@ run_tailscale() {
     if ! command -v tailscale >/dev/null; then
         local codename key list
         codename="$(. /etc/os-release; printf '%s' "$VERSION_CODENAME")"
-        [[ "$codename" =~ ^[a-z]+$ ]] || die 'Ubuntu release codename is invalid.'
+        [[ "$codename" =~ ^[a-z]+$ ]] || die 'Debian release codename is invalid.'
         key="$STATE/tailscale.noarmor.gpg"
         list="$STATE/tailscale.list"
         curl --proto '=https' --tlsv1.2 -fLsS --retry 2 \
-            "https://pkgs.tailscale.com/stable/ubuntu/${codename}.noarmor.gpg" -o "$key"
+            "https://pkgs.tailscale.com/stable/debian/${codename}.noarmor.gpg" -o "$key"
         curl --proto '=https' --tlsv1.2 -fLsS --retry 2 \
-            "https://pkgs.tailscale.com/stable/ubuntu/${codename}.tailscale-keyring.list" -o "$list"
+            "https://pkgs.tailscale.com/stable/debian/${codename}.tailscale-keyring.list" -o "$list"
         grep -Fq 'signed-by=/usr/share/keyrings/tailscale-archive-keyring.gpg' "$list" || die 'Tailscale package source was unexpected.'
         sudo install -m 0644 "$key" /usr/share/keyrings/tailscale-archive-keyring.gpg
         sudo install -m 0644 "$list" /etc/apt/sources.list.d/tailscale.list
@@ -184,21 +184,21 @@ run_hermes_configure() {
     finish_stage 'Model sign-in and Hermes gateway are configured.'
 }
 run_computer_use() {
-    start_stage computer-use 'Checking Ubuntu desktop computer use'
+    start_stage computer-use 'Checking Debian desktop computer use'
     require_stage hermes-configure
     printf 'Checking Chromium for desktop computer use…\n'
     command -v chromium >/dev/null 2>&1 ||
-        die 'Chromium is missing. Run Prepare guest tools again to install the Ubuntu browser.'
+        die 'Chromium is missing. Run Prepare guest tools again to install the Debian browser.'
     timeout 30 chromium --version ||
         die 'Chromium could not start. Run Prepare guest tools again, then retry Enable computer use.'
     [[ -n "${DISPLAY:-}" || -n "${WAYLAND_DISPLAY:-}" ]] ||
-        die 'A graphical Ubuntu session is needed for computer use. Log into the desktop, then retry.'
+        die 'A graphical Debian session is needed for computer use. Log into the desktop, then retry.'
     if [[ -n "${DISPLAY:-}" ]] && ! systemctl --user show-environment | grep -Fq "DISPLAY=$DISPLAY"; then
         die 'The Hermes user service cannot see the desktop display. Log out, log back in, and retry.'
     fi
     "$hermes" computer-use install
     if [[ "${XDG_SESSION_TYPE:-}" == wayland && -n "${WAYLAND_DISPLAY:-}" ]]; then
-        printf 'Ubuntu may ask to allow screenshots for computer use. Choose Allow in the desktop prompt, then return here.\n'
+        printf 'Debian may ask to allow screenshots for computer use. Choose Allow in the desktop prompt, then return here.\n'
     fi
     "$python" "$ROOT/linux_guest_setup.py" start-computer-use
     "$hermes" computer-use doctor
@@ -215,7 +215,7 @@ run_verify() {
     "$python" "$ROOT/linux_guest_setup.py" verify
     "$python" "$ROOT/linux_guest_setup.py" show-connection
     finish_stage 'The private guest connection is verified.'
-    printf '\nUbuntu guest connection verified. Tether Host still checks HTTPS and Hermes independently.\n'
+    printf '\nDebian guest connection verified. Tether Host still checks HTTPS and Hermes independently.\n'
 }
 
 if [[ "$ACTION" == all ]]; then

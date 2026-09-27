@@ -1,5 +1,5 @@
 // Tether Guest Installer is a single Linux executable carrying its guide and
-// backend. It uses Ubuntu Desktop's system GTK Python bindings, not a shell UI.
+// backend. It uses Debian Desktop's system GTK Python bindings, not a shell UI.
 package main
 
 import (
@@ -34,15 +34,33 @@ func unpack(data []byte, destination string) error {
 
 func failure(message string) {
  fmt.Fprintln(os.Stderr,message)
- // Stock Ubuntu's graphical error fallback; no external terminal is needed.
+ // Stock Debian's graphical error fallback; no external terminal is needed.
  _ = exec.Command("zenity","--error","--title=Tether Guest Installer","--text="+message).Run()
 }
 
+func selfTest() int {
+ directory, err := os.MkdirTemp("", "tether-guest-installer-self-test-")
+ if err != nil { fmt.Fprintln(os.Stderr, err); return 1 }
+ defer os.RemoveAll(directory)
+ if err := unpack(payload, directory); err != nil { fmt.Fprintln(os.Stderr, err); return 1 }
+ required := []string{"guest_installer.py", "setup.sh", "update-guest-tools.sh", "linux_guest_setup.py", "session-start.sh", "components.json"}
+ for _, name := range required {
+  info, err := os.Stat(filepath.Join(directory, name))
+  if err != nil || !info.Mode().IsRegular() || info.Size() == 0 {
+   fmt.Fprintln(os.Stderr, "missing bundled resource:", name)
+   return 1
+  }
+ }
+ fmt.Println("TETHER_GUEST_INSTALLER_SELF_TEST_OK")
+ return 0
+}
+
 func run() int {
- if os.Geteuid() == 0 { failure("Open Tether Guest Installer as your normal Ubuntu desktop account, without sudo."); return 1 }
- if os.Getenv("DISPLAY") == "" && os.Getenv("WAYLAND_DISPLAY") == "" { failure("Open this installer from the Ubuntu desktop."); return 1 }
+ if len(os.Args) == 2 && os.Args[1] == "--self-test" { return selfTest() }
+ if os.Geteuid() == 0 { failure("Open Tether Guest Installer as your normal Debian desktop account, without sudo."); return 1 }
+ if os.Getenv("DISPLAY") == "" && os.Getenv("WAYLAND_DISPLAY") == "" { failure("Open this installer from the Debian desktop."); return 1 }
  check := exec.Command("/usr/bin/python3","-c","import gi; gi.require_version('Gtk', '3.0'); from gi.repository import Gtk")
- if err := check.Run(); err != nil { failure("This installer needs Ubuntu Desktop with Python 3 and GTK 3 bindings. Use the supported Ubuntu Desktop image; the graphical runtime is unavailable."); return 1 }
+ if err := check.Run(); err != nil { failure("This installer needs Debian Desktop with Python 3 and GTK 3 bindings. Use the supported Debian Desktop image; the graphical runtime is unavailable."); return 1 }
  directory,err := os.MkdirTemp("","tether-guest-installer-")
  if err != nil { failure("Could not prepare installer files: "+err.Error()); return 1 }
  defer os.RemoveAll(directory)

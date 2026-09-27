@@ -140,7 +140,7 @@ For built-in VMs, the verified guest sends its private URL and token to Tether H
 
 ## Current status
 
-The current preview is version 1.0.0, build 48. It is ad-hoc signed and is not a notarized production release, so macOS may request confirmation on first launch. The new guest installation flow has not yet completed a clean-VM, physical-phone end-to-end acceptance run.
+The current preview is version 1.0.0, build 84. It is ad-hoc signed and is not a notarized production release, so macOS may request confirmation on first launch. Debian clean creation, networking, native Chromium, Xfce/X11, packaged tools, reboot persistence, and sparse-disk behavior have passed; Tailscale/model sign-in and physical-phone pairing still require interactive acceptance.
 
 Deployment target: macOS 14 or newer. Bundle identifier: `app.tether.host`.
 

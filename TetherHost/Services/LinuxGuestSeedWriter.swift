@@ -8,19 +8,19 @@ public enum LinuxGuestSeedError: LocalizedError {
 
     public var errorDescription: String? {
         switch self {
-        case .missingResources: "The Ubuntu guest installer is missing from this app. Reinstall Tether Host before creating the VM."
-        case .missingDiskUtility: "macOS cannot create the Ubuntu first-boot setup disk because hdiutil is unavailable."
-        case .invalidBundle: "The Ubuntu VM bundle directory is unavailable."
-        case .creationFailed: "Ubuntu first-boot setup disk creation failed. Check free space and try again."
+        case .missingResources: "The Debian guest installer is missing from this app. Reinstall Tether Host before creating the VM."
+        case .missingDiskUtility: "macOS cannot create the Debian first-boot setup disk because hdiutil is unavailable."
+        case .invalidBundle: "The Debian VM bundle directory is unavailable."
+        case .creationFailed: "Debian first-boot setup disk creation failed. Check free space and try again."
         }
     }
 }
 
-/// Creates a NoCloud seed for Ubuntu's first boot. The one-time console
+/// Creates a NoCloud seed for Debian's first boot. The one-time console
 /// password is generated per VM and saved beside the VM with owner-only access.
 public enum LinuxGuestSeedWriter {
     public static func credentialsURL(in bundle: URL) -> URL {
-        bundle.appendingPathComponent("ubuntu-credentials.txt")
+        bundle.appendingPathComponent("debian-credentials.txt")
     }
 
     public static func createSeed(
@@ -42,7 +42,7 @@ public enum LinuxGuestSeedWriter {
             let password = UUID().uuidString.replacingOccurrences(of: "-", with: "")
             try fm.createDirectory(at: stage, withIntermediateDirectories: false)
             defer { try? fm.removeItem(at: stage) }
-            try Data("instance-id: \(vmID.description)\nlocal-hostname: ubuntu-tether-vm\n".utf8)
+            try Data("instance-id: \(vmID.description)\nlocal-hostname: debian-tether-vm\n".utf8)
                 .write(to: stage.appendingPathComponent("meta-data"), options: .atomic)
             try Data("version: 2\nethernets:\n  tether:\n    match:\n      name: \"en*\"\n    dhcp4: true\n    dhcp6: false\n".utf8)
                 .write(to: stage.appendingPathComponent("network-config"), options: .atomic)
@@ -76,7 +76,7 @@ public enum LinuxGuestSeedWriter {
                 try? fm.removeItem(at: destination)
                 throw LinuxGuestSeedError.creationFailed
             }
-            let credentials = "Ubuntu console user: tether\nOne-time password: \(password)\nChange this password when Ubuntu asks at first login.\n"
+            let credentials = "Debian console user: tether\nOne-time password: \(password)\nDebian requires you to choose a private password at first login.\n"
             try Data(credentials.utf8).write(to: credentialsURL(in: bundle), options: .atomic)
             try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: credentialsURL(in: bundle).path)
             try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: destination.path)
@@ -87,7 +87,7 @@ public enum LinuxGuestSeedWriter {
     static func userData(password: String) -> String {
         """
         #cloud-config
-        hostname: ubuntu-tether-vm
+        hostname: debian-tether-vm
         disable_root: true
         ssh_pwauth: false
         users:
@@ -121,8 +121,8 @@ public enum LinuxGuestSeedWriter {
           - [chmod, '0755', /opt/tether-guest/guest_installer.py]
           - [chmod, '0755', /opt/tether-guest/vsock_helper.py]
           - [/opt/tether-guest/dns-fallback.sh]
-          - [sh, -c, "for i in 1 2 3; do apt-get update -o APT::Update::Error-Mode=any -o Acquire::Retries=3 && exit 0; sleep 5; done; echo 'Ubuntu package indexes could not be updated' >&2; exit 1"]
-          - [env, DEBIAN_FRONTEND=noninteractive, NEEDRESTART_MODE=a, apt-get, install, -y, --no-install-recommends, ca-certificates, curl, jq, python3, python3-venv, python3-yaml, python3-gi, gir1.2-gtk-3.0, gir1.2-vte-2.91, xfce4, xfce4-terminal, lightdm, lightdm-gtk-greeter, xorg, dbus-x11, at-spi2-core, chromium-browser, xdg-utils, xclip]
+          - [sh, -c, "for i in 1 2 3; do apt-get update -o APT::Update::Error-Mode=any -o Acquire::Retries=3 && exit 0; sleep 5; done; echo 'Debian package indexes could not be updated' >&2; exit 1"]
+          - [env, DEBIAN_FRONTEND=noninteractive, NEEDRESTART_MODE=a, apt-get, install, -y, --no-install-recommends, ca-certificates, curl, jq, python3, python3-venv, python3-yaml, python3-gi, gir1.2-gtk-3.0, gir1.2-vte-2.91, xfce4, xfce4-terminal, xfce4-power-manager, lightdm, lightdm-gtk-greeter, xorg, dbus-x11, at-spi2-core, chromium, chromium-driver, xdg-utils, xclip, xsel, wmctrl, xdotool, scrot]
           - [apt-get, clean]
           - [sh, -c, "fstrim -av >/dev/null 2>&1 || true"]
           - [systemctl, daemon-reload]
@@ -130,7 +130,7 @@ public enum LinuxGuestSeedWriter {
           - [systemctl, enable, --now, tether-vsock.service]
           - [systemctl, set-default, graphical.target]
           - [systemctl, enable, --now, lightdm.service]
-          - [sh, -c, "if [ -c /dev/hvc0 ]; then echo TETHER_CLOUD_INIT_DONE > /dev/hvc0; fi"]
+          - [sh, -c, "command -v chromium >/dev/null && dpkg-query -W -f='${Status}' chromium 2>/dev/null | grep -qx 'install ok installed' && systemctl is-active --quiet lightdm.service && systemctl is-active --quiet tether-vsock.service && test -S /tmp/.X11-unix/X0 && { [ ! -c /dev/hvc0 ] || echo TETHER_CLOUD_INIT_DONE > /dev/hvc0; }"]
         write_files:
           - path: /usr/share/applications/tether-text-clipboard.desktop
             owner: root:root
@@ -139,7 +139,7 @@ public enum LinuxGuestSeedWriter {
               [Desktop Entry]
               Type=Application
               Name=Tether Text Clipboard
-              Comment=Switch explicit host and Ubuntu text clipboard transfers on or off
+              Comment=Switch explicit host and Debian text clipboard transfers on or off
               Exec=/opt/tether-guest/clipboard-toggle.sh
               Terminal=true
               Categories=System;
@@ -167,7 +167,7 @@ public enum LinuxGuestSeedWriter {
               [Desktop Entry]
               Type=Application
               Name=Tether Guest Installer
-              Comment=Set up and verify this Ubuntu VM
+              Comment=Set up and verify this Debian VM
               Exec=/usr/bin/python3 /opt/tether-guest/guest_installer.py
               Terminal=false
               Categories=System;
@@ -201,7 +201,14 @@ public enum LinuxGuestSeedWriter {
 
               [Install]
               WantedBy=multi-user.target
-        final_message: 'Ubuntu first-boot setup has finished or stopped. Run cloud-init status --long to confirm success before opening Tether Guest Installer.'
+          - path: /etc/lightdm/lightdm.conf.d/50-tether-x11.conf
+            owner: root:root
+            permissions: '0644'
+            content: |
+              [Seat:*]
+              user-session=xfce
+              greeter-session=lightdm-gtk-greeter
+        final_message: 'Debian first-boot setup has finished or stopped. Run cloud-init status --long to confirm success before opening Tether Guest Installer.'
         """
     }
 }

@@ -156,15 +156,15 @@ journal and compatible-image discovery are not changed in this UI increment.
 To rerun app-model checks, first build the macOS Debug app and set
 `TETHER_TEST_BUILD_DIR` to its DerivedData directory, then run the script above.
 
-## Ubuntu creation and storage (in validation)
+## Debian creation and storage (in validation)
 
-The creation sheet now starts with a native macOS / Ubuntu picker. macOS keeps
-its host-aware version selection. Ubuntu offers the official ARM64 24.04 LTS
-cloud image, checks its published SHA-256, and prepares a sparse 24 GiB disk by
+The creation sheet now starts with a native macOS / Debian picker. macOS keeps
+its host-aware version selection. Debian offers the official Debian 13 ARM64
+cloud image, checks its pinned SHA-512, and prepares a sparse 24 GiB disk by
 default. Memory, CPU, disk capacity, and internal/external storage remain visible
-on the configuration step. Ubuntu currently uses the built-in VM provider.
+on the configuration step. Debian currently uses the built-in VM provider.
 
-Ubuntu has its own EFI state and generic Apple Virtualization configuration.
+Debian has its own EFI state and generic Apple Virtualization configuration.
 Legacy manifests decode as macOS; the OS field is persisted for new Linux VMs.
 The local app includes qemu-img and relocated libraries, so a user's first install
 does not depend on Homebrew. The build machine needs QEMU; dependency licenses,
@@ -177,7 +177,7 @@ loopback, verifies desktop access and the private API, and exposes a verified
 receipt only over the host/guest socket. Desktop login refreshes the user service
 environment after reboot.
 
-Ubuntu downloads show transferred bytes, speed, and estimated time remaining.
+Debian downloads show transferred bytes, speed, and estimated time remaining.
 “Show downloaded image in Finder” lets the user manually remove the cached image
 after creation. VM disks do not depend on that cache. The created bundle retains
 the source checksum for provenance.
@@ -204,12 +204,12 @@ identity, EFI variable storage, and NoCloud seed creation on exFAT; its temporar
 files were removed. Full external VM creation has
 not yet been verified. The existing macOS VM remained stopped and unchanged.
 
-### Build 62 Ubuntu runtime verification
+### Build 62 Debian runtime verification
 
-The fresh isolated 24 GiB Ubuntu test passed first boot/cloud-init, HTTPS,
+The fresh isolated 24 GiB Debian test passed first boot/cloud-init, HTTPS,
 guest setup service startup, saved-file persistence after reboot, and HTTPS and
 service health after reboot. The stopped VM used 2,696,167,424 bytes physically.
-Evidence: `/private/tmp/tether-ubuntu-e2e-run5/report.json` and its serial log.
+Evidence: `/private/tmp/tether-debian-e2e-run5/report.json` and its serial log.
 The guest now persists its MAC address and uses explicit DHCP network config.
 When the NAT DNS forwarder refuses queries, a guest-only boot helper tries
 existing DNS first and applies transient public DNS only if needed; it preserves
@@ -239,7 +239,7 @@ Fresh build 63 verification passed on 2026-09-23: cloud-init, HTTPS, guest
 handoff service, LightDM, X0 display socket, and a live GTK greeter process on
 first boot and after reboot; the saved-file persistence check also passed. The
 VM shut down cleanly. Its 24 GiB disk used 2,696,425,472 bytes physically.
-Evidence: `/private/tmp/tether-ubuntu-e2e-run6/report.json` and its serial log.
+Evidence: `/private/tmp/tether-debian-e2e-run6/report.json` and its serial log.
 No user Tailscale/model credentials were used. The full core suite's two existing
 complete-file-protection write tests must be rerun after host unlock; the other
 69 tests passed while locked (all 71 passed before locking on build 62).
@@ -251,17 +251,17 @@ Its manifest records 4 CPUs, 8 GiB RAM, and a 24 GiB disk; first-boot provisioni
 is running. This replaces only the earlier unconfigured external test VM.
 
 Actual build 63 external VM `7286049E-D450-42A6-A33A-98D8C4C59CA1` reached
-the graphical LightDM login screen. Finder selected its `ubuntu-credentials.txt`
+the graphical LightDM login screen. Finder selected its `debian-credentials.txt`
 for the user. The user must complete the first-login password change and guest
 Tailscale/model sign-ins before final host/guest verification can proceed.
 
-### Ubuntu clipboard work (build 64, runtime validation in progress)
+### Debian clipboard work (build 64, runtime validation in progress)
 
 The VM toolbar exposes a labeled Clipboard menu for both guest operating systems.
-Ubuntu instructions use Ctrl-V (Ctrl-Shift-V in Terminal). The Linux helper
+Debian instructions use Ctrl-V (Ctrl-Shift-V in Terminal). The Linux helper
 requires explicit guest opt-in through Tether Text Clipboard, a live tether Xfce
 session, and bounded UTF-8 text of at most 64 KiB. Verified connection handoff
-remains independent. A bundled read-only TETHERUBUNTU tools disk provides an
+remains independent. A bundled read-only TETHERTOOLS tools disk provides an
 explicit updater for existing VMs on their next boot, without recreating them.
 Build 64 compiles, its DMG verifies, and all 71 core tests pass.
 
@@ -274,16 +274,16 @@ their physical keyboard and complete the required password change themselves.
 
 ### Current login blocker and reset handoff (2026-09-23)
 
-Installed build 65 is running external Ubuntu VM
+Installed build 65 is running external Debian VM
 `7286049E-D450-42A6-A33A-98D8C4C59CA1`. A fresh UI inspection still shows the
 LightDM login screen, not an authenticated desktop. The user reports that the
 saved initial password fails and requests a reset for manual setup. The choice
-between erasing Ubuntu for a manual installation and preserving its disk with
+between erasing Debian for a manual installation and preserving its disk with
 login recovery is pending; no reset has been performed. The original macOS VM
 must remain untouched.
 
-The existing Ubuntu creation path converts the verified cloud image and attaches
-mandatory `seed.iso`; it does not boot an interactive Ubuntu installer. Recreating
+The existing Debian creation path converts the verified cloud image and attaches
+mandatory `seed.iso`; it does not boot an interactive Debian installer. Recreating
 that same path would reproduce the generated-account onboarding instead of
 satisfying a manual-install request. A manual path needs a verified ARM64 installer,
 a blank target disk, installer boot media selection/ejection, and guest tools
@@ -318,15 +318,15 @@ rejected, wrong-VM shutdown/force-off ignored, and correct-VM clean shutdown
 completed. Evidence: `/private/tmp/tether-lifecycle67.log`. All 75 core tests pass
 (`/private/tmp/tether-tests67.log`), including four raw-disk verifier tests.
 
-Automatic Ubuntu installer detachment runs only on a stopped VM, after clean
+Automatic Debian installer detachment runs only on a stopped VM, after clean
 shutdown or before boot. It verifies a supported unencrypted GPT/ext4 installation
-with matching root UUID, Ubuntu bootloader and kernel/initrd, and local account.
+with matching root UUID, Debian bootloader and kernel/initrd, and local account.
 Uncertain/unsupported layouts keep their installer, with manual ejection available.
 Force-off and error stops suppress automatic ejection until a later clean shutdown.
 The ISO is renamed, not deleted; guest tools remain attached. See
-`ubuntu-installer-auto-eject.md` for detector criteria and limits.
+`debian-installer-auto-eject.md` for detector criteria and limits.
 
-The current external Ubuntu disk did not pass completion detection, so its
+The current external Debian disk did not pass completion detection, so its
 installer remains attached. Actual completed manual-install auto-ejection and
 user-authenticated Tether end-to-end setup remain unverified. No original macOS
 VM was started, stopped, reset, or deleted during this work.
@@ -338,7 +338,7 @@ leaving build 67 UI stuck On. Build 68 explicitly releases the matching VM's
 state after `stop()` completes. The isolated lifecycle test now includes a real
 host force-off and asserts the manager clears the running VM and busy state;
 `HOST_FORCE_OFF_STATE_OK` and `LIFECYCLE_E2E_OK` passed in
-`/private/tmp/tether-lifecycle68.log`. Manual Ubuntu storage lists the writable
+`/private/tmp/tether-lifecycle68.log`. Manual Debian storage lists the writable
 disk before installer USB media. Build 68 is installed and signature-verified;
 its verified DMG replaces the older local build 67 DMG (moved to Trash).
 
@@ -348,4 +348,4 @@ preserved as `installer.ejected.iso`. A disk-only boot returned to Off; read-onl
 inspection found an empty EFI partition and no kernel/initrd, fstab, or normal
 user account. This is incomplete installation evidence, not a detector false
 negative. The disk was not erased again. The user's answer about the installer
-completion screen is pending; do not claim this Ubuntu VM is ready or bootable.
+completion screen is pending; do not claim this Debian VM is ready or bootable.

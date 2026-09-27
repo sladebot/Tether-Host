@@ -1,4 +1,4 @@
-"""Small, GTK-independent contract for the Ubuntu guest installer guide."""
+"""Small, GTK-independent contract for the Debian guest installer guide."""
 
 from dataclasses import dataclass
 from pathlib import Path
@@ -21,7 +21,7 @@ class Stage:
 
 STAGES = (
     Stage("internet", "Check guest Internet",
-          "Check DNS and reach the Ubuntu package servers from this VM.",
+          "Check DNS and reach the Debian package servers from this VM.",
           "This check repairs the guest NAT DNS only if it is failing.", "Check Internet"),
     Stage("tailscale", "Connect Tailscale",
           "Install Tailscale if needed and connect this VM to your tailnet.",
@@ -36,7 +36,7 @@ STAGES = (
           "Enter provider credentials in the console or the provider's own sign-in page.",
           "Configure Hermes", True),
     Stage("computer-use", "Enable computer use",
-          "Check Chromium and set up control of this Ubuntu desktop.",
+          "Check Chromium and set up control of this Debian desktop.",
           "Keep this graphical session open while Hermes checks screen capture and control.",
           "Enable computer use"),
     Stage("verify", "Verify connection",

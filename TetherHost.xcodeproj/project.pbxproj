@@ -200,7 +200,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/bash;
-			shellScript = "/bin/bash \"${PROJECT_DIR}/scripts/guest/build-guest-installer.sh\" \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/GuestSetup\"\n/usr/bin/python3 \"${PROJECT_DIR}/scripts/bundle-ubuntu-converter.py\" \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/Tools\"\n/bin/bash \"${PROJECT_DIR}/scripts/guest/build-linux-tools.sh\" \"${PROJECT_DIR}/TetherHost/Resources/LinuxGuestSetup\" \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/Tether Ubuntu Guest Tools.iso\"\n";
+			shellScript = "/bin/bash \"${PROJECT_DIR}/scripts/guest/build-guest-installer.sh\" \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/GuestSetup\"\n/usr/bin/python3 \"${PROJECT_DIR}/scripts/bundle-debian-converter.py\" \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/Tools\"\n/bin/bash \"${PROJECT_DIR}/scripts/guest/build-linux-tools.sh\" \"${PROJECT_DIR}/TetherHost/Resources/LinuxGuestSetup\" \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/Tether Debian Guest Tools.img\"\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -231,7 +231,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = Config/TetherHost.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 76;
+				CURRENT_PROJECT_VERSION = 84;
 				DEVELOPMENT_TEAM = 22BH2R3K7H;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -258,7 +258,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = Config/TetherHost.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 76;
+				CURRENT_PROJECT_VERSION = 84;
 				DEVELOPMENT_TEAM = 22BH2R3K7H;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = NO;

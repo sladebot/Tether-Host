@@ -1,4 +1,4 @@
-"""Small, redacted Ubuntu installer log. Never feed it interactive PTY contents."""
+"""Small, redacted Debian installer log. Never feed it interactive PTY contents."""
 
 import os
 from pathlib import Path

@@ -1,4 +1,4 @@
-"""Headless checks for the Ubuntu graphical guide's stage contract."""
+"""Headless checks for the Debian graphical guide's stage contract."""
 
 import importlib.util
 from pathlib import Path

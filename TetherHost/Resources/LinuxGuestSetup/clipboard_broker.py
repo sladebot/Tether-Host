@@ -15,12 +15,12 @@ def socket_path():
     uid = os.getuid()
     runtime = Path(os.environ.get("XDG_RUNTIME_DIR", ""))
     if uid < 1000 or uid >= 65534 or runtime != Path(f"/run/user/{uid}"):
-        raise RuntimeError("Log in to the configured Ubuntu desktop first.")
+        raise RuntimeError("Log in to the configured Debian desktop first.")
     info = runtime.stat()
     if not stat.S_ISDIR(info.st_mode) or info.st_uid != uid or info.st_mode & 0o077:
-        raise RuntimeError("The Ubuntu session directory is not private.")
+        raise RuntimeError("The Debian session directory is not private.")
     if not (os.environ.get("WAYLAND_DISPLAY") or os.environ.get("DISPLAY")):
-        raise RuntimeError("No Ubuntu graphical session is available.")
+        raise RuntimeError("No Debian graphical session is available.")
     return runtime / SOCKET_NAME
 
 
@@ -82,7 +82,7 @@ def run():
 
     path = socket_path()
     if Gdk.Display.get_default() is None:
-        raise RuntimeError("The Ubuntu graphical session is not ready.")
+        raise RuntimeError("The Debian graphical session is not ready.")
     clipboard = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
 
     def clipboard_action(opcode, payload):
@@ -99,7 +99,7 @@ def run():
                         return
                     try:
                         if text is None:
-                            raise RuntimeError("No text is available on the Ubuntu clipboard.")
+                            raise RuntimeError("No text is available on the Debian clipboard.")
                         result["value"] = text.encode("utf-8")
                     except Exception as error:
                         result["error"] = error
@@ -125,7 +125,7 @@ def run():
         GLib.idle_add(perform)
         if not completed.wait(4):
             expired.set()
-            raise TimeoutError("The Ubuntu clipboard did not respond in time.")
+            raise TimeoutError("The Debian clipboard did not respond in time.")
         if "error" in result:
             raise RuntimeError(str(result["error"]))
         return result["value"]

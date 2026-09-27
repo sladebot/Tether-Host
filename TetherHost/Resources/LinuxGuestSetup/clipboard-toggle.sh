@@ -9,7 +9,7 @@ message() {
   fi
 }
 if [ "$(id -u)" -lt 1000 ] || [ -z "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
-  message 'Log in to the Ubuntu desktop as your guest user first.'
+  message 'Log in to the Debian desktop as your guest user first.'
   exit 1
 fi
 if [ -f /etc/tether-guest/user ]; then

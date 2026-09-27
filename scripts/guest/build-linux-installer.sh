@@ -4,7 +4,7 @@ SOURCE_DIRECTORY="${1:?Pass guest resources}"
 DESTINATION="${2:?Pass executable output path}"
 SCRIPT_DIRECTORY="$(cd "$(dirname "$0")" && pwd -P)"
 GO_BINARY="${TETHER_GO_BINARY:-$(command -v go || true)}"
-[[ -x "$GO_BINARY" ]] || { echo 'Set TETHER_GO_BINARY to a Go compiler to build the Ubuntu installer.' >&2; exit 1; }
+[[ -x "$GO_BINARY" ]] || { echo 'Set TETHER_GO_BINARY to a Go compiler to build the Debian installer.' >&2; exit 1; }
 STAGE="$(mktemp -d "${TMPDIR:-/tmp}/tether-linux-installer.XXXXXX")"
 trap 'rm -rf "$STAGE"' EXIT
 cp "$SCRIPT_DIRECTORY/linux-launcher/main.go" "$STAGE/main.go"

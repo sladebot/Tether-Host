@@ -1,4 +1,4 @@
-"""Contract tests for the staged Ubuntu guest setup and privileged updater."""
+"""Contract tests for the staged Debian guest setup and privileged updater."""
 
 import os
 from pathlib import Path
@@ -172,7 +172,7 @@ class PrivilegedUpdaterTests(unittest.TestCase):
         source = UPDATER.read_text()
         helper = source[source.index('is_fresh_placeholder_hostname() {'):
                         source.index('if is_fresh_placeholder_hostname "$(hostname -s)"')]
-        self.assertIn('hostnamectl set-hostname ubuntu-tether-vm', source)
+        self.assertIn('hostnamectl set-hostname debian-tether-vm', source)
         with tempfile.TemporaryDirectory() as directory:
             state = Path(directory) / 'tailscaled.state'
             for name, expected in [('localhost', True), ('localhost-0', True),

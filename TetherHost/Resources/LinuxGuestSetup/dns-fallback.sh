@@ -19,7 +19,7 @@ case "$interface" in
 esac
 
 for attempt in 1 2; do
-  if timeout 5 getent ahostsv4 ports.ubuntu.com >/dev/null 2>&1; then exit 0; fi
+  if timeout 5 getent ahostsv4 deb.debian.org >/dev/null 2>&1; then exit 0; fi
   sleep 2
 done
 
@@ -47,14 +47,26 @@ if command -v nmcli >/dev/null 2>&1; then
       ;;
   esac
 fi
-resolvectl dns "$interface" 1.1.1.1 9.9.9.9
-resolvectl flush-caches
+if command -v resolvectl >/dev/null 2>&1 && systemctl is-active --quiet systemd-resolved.service; then
+  resolvectl dns "$interface" 1.1.1.1 9.9.9.9
+  resolvectl flush-caches
+else
+  resolv_conf=/etc/resolv.conf
+  [ ! -L "$resolv_conf" ] || {
+    echo 'Tether guest DNS fallback could not safely update the resolver symlink' >&2
+    exit 1
+  }
+  temp=$(mktemp /etc/resolv.conf.tether.XXXXXX)
+  printf 'nameserver 1.1.1.1\nnameserver 9.9.9.9\noptions timeout:2 attempts:2\n' > "$temp"
+  chmod 0644 "$temp"
+  mv -f "$temp" "$resolv_conf"
+fi
 for attempt in $(seq 1 5); do
-  if timeout 5 getent ahostsv4 ports.ubuntu.com >/dev/null 2>&1; then
+  if timeout 5 getent ahostsv4 deb.debian.org >/dev/null 2>&1; then
     echo 'Tether guest DNS fallback is active for this boot'
     exit 0
   fi
   sleep 2
 done
-echo 'Tether guest DNS could not resolve Ubuntu package servers' >&2
+echo 'Tether guest DNS could not resolve Debian package servers' >&2
 exit 1

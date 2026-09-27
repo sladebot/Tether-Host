@@ -73,7 +73,7 @@ class LinuxVsockHelperTests(unittest.TestCase):
             state = Path(directory)
             state.chmod(0o700)
             receipt = state / 'connection.json'
-            fields = {'endpoint': 'https://ubuntu.example.ts.net', 'token': 'A' * 32,
+            fields = {'endpoint': 'https://debian.example.ts.net', 'token': 'A' * 32,
                       'guest_permissions_verified': True, 'model_verified': True}
             receipt.write_text(json.dumps(fields))
             receipt.chmod(0o600)
@@ -103,7 +103,7 @@ class LinuxVsockHelperTests(unittest.TestCase):
                 self.assertIn(b'Tether Text Clipboard', message)
 
     def test_explicit_clipboard_read_write_and_verified_receipt(self):
-        text = 'Hello \u03c0 from Ubuntu'
+        text = 'Hello \u03c0 from Debian'
         with patch.object(helper, 'clipboard_enabled', return_value=True), \
              patch.object(helper, 'broker_request', side_effect=lambda opcode, payload=b'': text if opcode == 1 else ''), \
              patch.object(helper, 'clipboard_environment', return_value={'DISPLAY': ':0'}), \
@@ -113,11 +113,11 @@ class LinuxVsockHelperTests(unittest.TestCase):
             self.assertEqual(self.exchange(2, text.encode('utf-8')), (0, b''))
             self.assertEqual(self.exchange(4), (0, b''))
             write.assert_not_called()
-        receipt = '{"endpoint":"https://ubuntu.example.ts.net","token":"' + 'A' * 32 + '"}'
+        receipt = '{"endpoint":"https://debian.example.ts.net","token":"' + 'A' * 32 + '"}'
         with patch.object(helper, 'verified_connection', return_value=receipt):
             status, payload = self.exchange(3)
         self.assertEqual(status, 0)
-        self.assertEqual(json.loads(payload)['endpoint'], 'https://ubuntu.example.ts.net')
+        self.assertEqual(json.loads(payload)['endpoint'], 'https://debian.example.ts.net')
 
     def test_clipboard_size_and_utf8_are_enforced_before_access(self):
         with patch.object(helper, 'clipboard_enabled') as enabled:

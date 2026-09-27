@@ -1,4 +1,4 @@
-"""Private Ubuntu installer diagnostics never persist sign-in or terminal input."""
+"""Private Debian installer diagnostics never persist sign-in or terminal input."""
 
 import importlib.util
 import os

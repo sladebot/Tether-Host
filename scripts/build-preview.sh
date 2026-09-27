@@ -24,7 +24,10 @@ find "$APP_PATH/Contents/Resources/LinuxGuestSetup" -type d -name '__pycache__' 
 find "$APP_PATH/Contents/Resources/LinuxGuestSetup" -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
 test -x "$APP_PATH/Contents/Resources/Tools/qemu-img"
 test -f "$APP_PATH/Contents/Resources/LinuxGuestSetup/vsock_helper.py"
-test -f "$APP_PATH/Contents/Resources/Tether Ubuntu Guest Tools.iso"
+test -f "$APP_PATH/Contents/Resources/Tether Debian Guest Tools.img"
+HOST_BUILD="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP_PATH/Contents/Info.plist")"
+GUEST_BUILD="$(/usr/bin/python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["build"])' "$APP_PATH/Contents/Resources/LinuxGuestSetup/installer-version.json")"
+[[ "$HOST_BUILD" == "$GUEST_BUILD" ]] || { printf 'Host build %s does not match Debian guest tools build %s\n' "$HOST_BUILD" "$GUEST_BUILD" >&2; exit 1; }
 codesign --force --deep --sign - --preserve-metadata=identifier,entitlements,flags,runtime "$APP_PATH"
 codesign --verify --deep --strict "$APP_PATH"
 mkdir "$STAGING_DIRECTORY/content"
@@ -75,7 +78,7 @@ cat >> "$STAGING_DIRECTORY/content/Read Me.txt" <<'NOTE'
 
 Drag Tether Host for Mac into Applications and launch it.
 Built-in Apple Virtualization is the default VM provider. Tether Host stores
-and displays its VM directly. A new VM can use macOS or Ubuntu 24.04 LTS. Ubuntu uses a 24 GB disk by default (sparse on supported drives)
+and displays its VM directly. A new VM can use macOS or Debian 13. Debian uses a 24 GB disk by default (sparse on supported drives)
 and includes its own Linux guest installer. UTM remains an optional backup for existing UTM VMs
 or a new VM that appears in UTM. The four checks are:
 1. Create or select the exact VM.
@@ -109,8 +112,10 @@ Existing Hermes installations are preserved: the guest installer refuses
 to overwrite unmanaged data. You can verify an existing connection manually.
 
 This local preview is ad-hoc signed, not Developer ID signed or notarized.
-The built-in VM path has not yet completed a clean-VM, real-phone end-to-end
-test. UTM remains a manual backup path.
+The Debian built-in VM path has passed clean creation, package installation,
+DNS/HTTPS, Xfce/X11, Chromium, packaged-tools, reboot, and sparse-disk checks.
+Tailscale/model sign-in and real-phone pairing still require interactive acceptance.
+UTM remains a manual backup path.
 NOTE
 hdiutil create -srcfolder "$STAGING_DIRECTORY/content" -volname 'Tether Host Guest Setup' \
     -format UDRW -fs HFS+ "$STAGING_DIRECTORY/preview-rw.dmg"

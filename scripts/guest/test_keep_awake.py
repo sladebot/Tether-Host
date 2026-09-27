@@ -27,7 +27,7 @@ class KeepAwakeTests(unittest.TestCase):
             return result, trace.read_text() if trace.exists() else ""
 
     def test_gnome_inhibits_idle_and_suspend_without_logout(self):
-        result, command = self.run_desktop("ubuntu:GNOME")
+        result, command = self.run_desktop("debian:GNOME")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("--inhibit idle:suspend --inhibit-only", command)
         self.assertIn("--app-id app.tether.guest", command)
@@ -39,7 +39,7 @@ class KeepAwakeTests(unittest.TestCase):
         self.assertIn("xfce4-screensaver-command --inhibit", command)
 
     def test_missing_or_unknown_desktop_inhibitor_fails_closed(self):
-        for desktop, available in (("ubuntu:GNOME", ()), ("UNKNOWN", ("gnome-session-inhibit",))):
+        for desktop, available in (("debian:GNOME", ()), ("UNKNOWN", ("gnome-session-inhibit",))):
             with self.subTest(desktop=desktop):
                 result, command = self.run_desktop(desktop, available)
                 self.assertNotEqual(result.returncode, 0)

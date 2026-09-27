@@ -1,11 +1,6 @@
 import SwiftUI
 import TetherHostCore
 
-private enum UbuntuInstallationMethod: String, CaseIterable {
-    case automatic
-    case manual
-}
-
 private struct PendingVMForceOff {
     let id: VirtualMachineID
     let name: String
@@ -18,7 +13,6 @@ struct HostWorkspaceView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var showsVMConfiguration = false
     @State private var creationGuestOS: NativeGuestOS = .macOS
-    @State private var ubuntuInstallationMethod: UbuntuInstallationMethod = .automatic
     @State private var showToken = false
     @State private var showsSetupPanel = true
     @State private var autoCollapsedForCurrentRun = false
@@ -27,19 +21,9 @@ struct HostWorkspaceView: View {
     @State private var fullScreenWindow: NSWindow?
     @State private var pendingForceOff: PendingVMForceOff?
 
-    private var selectedGuestIsUbuntu: Bool {
+    private var selectedGuestIsDebian: Bool {
         guard let id = model.designatedVM?.id, model.providerSetup.provider == .builtIn else { return false }
-        return manager.guestOS(for: id) == .ubuntu
-    }
-
-    private var selectedGuestIsManualUbuntu: Bool {
-        guard let id = model.designatedVM?.id, model.providerSetup.provider == .builtIn else { return false }
-        return manager.isManualUbuntuInstallation(id)
-    }
-
-    private var selectedUbuntuInstallerAttached: Bool {
-        guard let id = model.designatedVM?.id else { return false }
-        return manager.isUbuntuInstallerAttached(id)
+        return manager.guestOS(for: id) == .debian
     }
 
     private var canShowVMMonitor: Bool {
@@ -303,21 +287,17 @@ struct HostWorkspaceView: View {
                     Button("Continue") { model.workspaceSection = .tailscale }
                         .buttonStyle(.borderedProminent)
                 } else if model.designatedVMIsRunning {
-                    Text(selectedGuestIsManualUbuntu && selectedUbuntuInstallerAttached
-                         ? "Complete the Ubuntu installer and choose your own account. Shut down when finished; Tether checks the installed disk and ejects the installer automatically when it can verify the installation."
-                         : selectedGuestIsManualUbuntu
-                         ? "Sign in to Ubuntu with the account you created during installation, then complete guest setup."
-                         : selectedGuestIsUbuntu
-                         ? "Ubuntu prepares guest setup on its first boot. Sign in as tether with the saved VM password, then open Tether Guest Setup."
+                    Text(selectedGuestIsDebian
+                         ? "Debian prepares guest setup on its first boot. Sign in as tether with the saved VM password, then open Tether Guest Setup."
                          : "Finish the macOS welcome screens in the VM. When you can see the desktop, confirm it here.")
                         .foregroundStyle(.secondary)
-                    if selectedGuestIsUbuntu && !selectedGuestIsManualUbuntu {
-                        Button("Show Ubuntu login details") { manager.revealUbuntuCredentials() }
+                    if selectedGuestIsDebian {
+                        Button("Show Debian login details") { manager.revealDebianCredentials() }
                     }
                     if model.providerSetup.provider == .builtIn {
                         Button("Desktop is ready") { manager.confirmDesktopReady() }
                             .buttonStyle(.borderedProminent)
-                            .disabled(manager.isBusy || (selectedGuestIsManualUbuntu && selectedUbuntuInstallerAttached))
+                            .disabled(manager.isBusy)
                     } else {
                         Button("Desktop is ready") { model.confirmUTMDesktopReady() }
                             .buttonStyle(.borderedProminent)
@@ -343,15 +323,9 @@ struct HostWorkspaceView: View {
                     Button("Start VM") { Task { await manager.startOrShow(vm.id) } }
                         .buttonStyle(.borderedProminent)
                         .disabled(manager.isRunning || manager.isBusy || manager.hasOtherHostCopy)
-                    if selectedGuestIsManualUbuntu && selectedUbuntuInstallerAttached {
-                        Text("Tether checks for a completed installation before starting. If it cannot verify the disk, the installer stays attached. Manual ejection is also available after you confirm installation is complete.")
-                            .font(.callout).foregroundStyle(.secondary)
-                        Button("Eject installer manually") { manager.ejectUbuntuInstaller(vm.id) }
-                            .disabled(manager.isRunning || manager.isBusy || manager.hasOtherHostCopy)
-                    }
                 }
             } else {
-                Text("Choose macOS or Ubuntu, then configure memory, disk space, and storage location.")
+                Text("Choose macOS or Debian, then configure memory, disk space, and storage location.")
                     .foregroundStyle(.secondary)
                 if manager.hasOtherHostCopy {
                     Text("Another copy of Tether Host is open. Quit that copy before creating a VM here.")
@@ -367,8 +341,8 @@ struct HostWorkspaceView: View {
             }
 
             providerAvailability
-            if selectedGuestIsUbuntu && !selectedGuestIsManualUbuntu && manager.hasCachedUbuntuImage && !manager.isBusy {
-                ubuntuDownloadCleanup
+            if selectedGuestIsDebian && manager.hasCachedDebianImage && !manager.isBusy {
+                debianDownloadCleanup
             }
             if manager.isBusy {
                 ProgressView(manager.status)
@@ -455,11 +429,8 @@ struct HostWorkspaceView: View {
                         if model.vmBundleURL(for: vm) != nil {
                             Button("Show in Finder") { model.revealVMInFinder(vm) }
                         }
-                        if selectedGuestIsManualUbuntu {
-                            Button("Show Ubuntu installer in Finder") { manager.revealUbuntuInstaller(for: vm.id) }
-                        }
                         if model.providerSetup.provider == .builtIn {
-                            if !manager.isRunning && !selectedGuestIsUbuntu {
+                            if !manager.isRunning && !selectedGuestIsDebian {
                                 Button("Move to UTM") {
                                     Task {
                                         if await manager.moveToUTM(vm.id) {
@@ -523,10 +494,8 @@ struct HostWorkspaceView: View {
                     .font(.title2.bold())
                 Text(showsVMConfiguration ? "Step 2 of 2 · Configure and create" : "Step 1 of 2 · Installation image")
                     .font(.callout).foregroundStyle(.secondary)
-                Text(creationGuestOS == .ubuntu
-                     ? (ubuntuInstallationMethod == .manual
-                        ? "Install Ubuntu 24.04 LTS and choose your own account."
-                        : "Ubuntu 24.04 LTS with Tether guest setup.")
+                Text(creationGuestOS == .debian
+                     ? "Debian 13 with Xfce/X11, Chromium, and Tether guest setup."
                      : "Choose a compatible macOS version for your new VM.")
                     .foregroundStyle(.secondary)
                 if manager.isRunning {
@@ -571,8 +540,8 @@ struct HostWorkspaceView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 12) {
                         if showsVMConfiguration {
-                            Label(creationGuestOS == .ubuntu
-                                  ? (ubuntuInstallationMethod == .manual ? manager.manualUbuntuImageDescription : manager.ubuntuImageDescription)
+                            Label(creationGuestOS == .debian
+                                  ? manager.debianImageDescription
                                   : manager.imageDescription, systemImage: "checkmark.circle.fill")
                                 .font(.callout).foregroundStyle(.secondary)
                                 .fixedSize(horizontal: false, vertical: true)
@@ -590,47 +559,34 @@ struct HostWorkspaceView: View {
                         } else {
                         Picker("Operating system", selection: $creationGuestOS) {
                             Text("macOS").tag(NativeGuestOS.macOS)
-                            Text("Ubuntu").tag(NativeGuestOS.ubuntu)
+                            Text("Debian").tag(NativeGuestOS.debian)
                         }
                         .pickerStyle(.segmented)
                         .onChange(of: creationGuestOS) { _, os in
-                            if os == .ubuntu { manager.configureUbuntuCreationDefaults() }
+                            if os == .debian { manager.configureDebianCreationDefaults() }
                             else { manager.resetCreationResources() }
                         }
-                        if creationGuestOS == .ubuntu {
-                            Text("Ubuntu 24.04 LTS").font(.headline)
-                            Picker("Installation method", selection: $ubuntuInstallationMethod) {
-                                Text("Automatic setup").tag(UbuntuInstallationMethod.automatic)
-                                Text("Install it myself").tag(UbuntuInstallationMethod.manual)
-                            }
-                            .pickerStyle(.segmented)
-                            Text(ubuntuInstallationMethod == .manual
-                                 ? "Download the Ubuntu Desktop installer. The VM starts with a blank 24 GB disk, and you choose the Ubuntu account during installation."
-                                 : "A lightweight Linux VM with a 24 GB disk that grows as you use it. Configure memory and storage in the next step.")
+                        if creationGuestOS == .debian {
+                            Text("Debian 13 · Xfce on X11").font(.headline)
+                            Text("A lightweight ARM64 desktop VM with a sparse 24 GB disk. Chromium, accessibility tools, clipboard support, and the Tether guest guide are installed automatically.")
                                 .font(.callout).foregroundStyle(.secondary)
                             if model.providerSetup.provider == .utm {
-                                Label("Ubuntu uses the built-in VM provider. Select Built-in in VM settings to continue.", systemImage: "info.circle")
+                                Label("Debian uses the built-in VM provider. Select Built-in in VM settings to continue.", systemImage: "info.circle")
                                     .font(.callout).foregroundStyle(.secondary)
                             }
                             if !creationImageReady {
-                                Button(ubuntuInstallationMethod == .manual
-                                       ? (manager.hasCachedManualUbuntuImage ? "Verify downloaded installer" : "Download Ubuntu installer")
-                                       : (manager.hasCachedUbuntuImage ? "Use downloaded image" : "Download Ubuntu")) {
-                                    Task {
-                                        if ubuntuInstallationMethod == .manual { await manager.downloadManualUbuntuImage() }
-                                        else { await manager.downloadUbuntuImage() }
-                                    }
+                                Button(manager.hasCachedDebianImage ? "Verify downloaded image" : "Download Debian") {
+                                    Task { await manager.downloadDebianImage() }
                                 }
                                 .buttonStyle(.borderedProminent)
                             }
-                            if creationImageReady, let message = ubuntuReadinessMessage {
+                            if creationImageReady, let message = debianReadinessMessage {
                                 Text(message).font(.callout).foregroundStyle(.orange)
                             }
-                            Text(ubuntuInstallationMethod == .manual
-                                 ? manager.manualUbuntuImageDescription : manager.ubuntuImageDescription)
+                            Text(manager.debianImageDescription)
                                 .font(.callout).foregroundStyle(.secondary)
-                            if ubuntuInstallationMethod == .manual ? manager.hasCachedManualUbuntuImage : manager.hasCachedUbuntuImage {
-                                ubuntuDownloadCleanup
+                            if manager.hasCachedDebianImage {
+                                debianDownloadCleanup
                             }
                             if managerHasError { Text(manager.status).font(.callout).foregroundStyle(.orange) }
                         } else {
@@ -691,7 +647,7 @@ struct HostWorkspaceView: View {
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .frame(height: showsVMConfiguration ? 440 : (creationGuestOS == .ubuntu ? 300 : 380))
+                .frame(height: showsVMConfiguration ? 440 : (creationGuestOS == .debian ? 300 : 380))
                 HStack {
                     Button("Cancel") { model.showsCreateVM = false }
                     Spacer()
@@ -699,8 +655,8 @@ struct HostWorkspaceView: View {
                     Button("Back") { showsVMConfiguration = false }
                     Button(model.providerSetup.provider == .utm ? "Create in UTM" : "Create VM") {
                         Task {
-                            let createdID = creationGuestOS == .ubuntu
-                                ? await manager.installUbuntu(manual: ubuntuInstallationMethod == .manual)
+                            let createdID = creationGuestOS == .debian
+                                ? await manager.installDebian()
                                 : await manager.install(for: model.providerSetup.provider)
                             if let id = createdID {
                                 await model.refresh()
@@ -715,14 +671,14 @@ struct HostWorkspaceView: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .disabled(!creationImageReady
-                        || (creationGuestOS == .ubuntu && (model.providerSetup.provider != .builtIn || ubuntuReadinessMessage != nil))
+                        || (creationGuestOS == .debian && (model.providerSetup.provider != .builtIn || debianReadinessMessage != nil))
                         || manager.creationResourceError != nil
                         || manager.creationStorageValidationMessage != nil
                         || !model.providerSetup.availability.canContinue || manager.hasOtherHostCopy)
                     } else {
                         Button("Continue to configuration") { showsVMConfiguration = true }
                             .buttonStyle(.borderedProminent)
-                            .disabled(!creationImageReady || (creationGuestOS == .ubuntu && (model.providerSetup.provider != .builtIn || ubuntuReadinessMessage != nil)))
+                            .disabled(!creationImageReady || (creationGuestOS == .debian && (model.providerSetup.provider != .builtIn || debianReadinessMessage != nil)))
                     }
                 }
             }
@@ -732,31 +688,25 @@ struct HostWorkspaceView: View {
         .frame(minHeight: 340)
     }
 
-    private var ubuntuDownloadCleanup: some View {
+    private var debianDownloadCleanup: some View {
         VStack(alignment: .leading, spacing: 6) {
             Button("Show downloaded image in Finder") {
-                manager.revealCachedUbuntuImageInFinder(manual: ubuntuInstallationMethod == .manual)
+                manager.revealCachedDebianImageInFinder()
             }
             .disabled(manager.isBusy)
-            Text(ubuntuInstallationMethod == .manual
-                 ? "After creating the VM, this cached download can be deleted in Finder. A copy of the installer stays with the VM until you remove it."
-                 : "After creating your VM, you can delete this downloaded image in Finder. Your VM keeps working; creating another Ubuntu VM will require a new download.")
+            Text("After creating your VM, you can delete this downloaded image in Finder. Your VM keeps working; creating another Debian VM will require a new download.")
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
 
     private var creationImageReady: Bool {
-        guard creationGuestOS == .ubuntu else { return manager.imageURL != nil }
-        return ubuntuInstallationMethod == .manual
-            ? (manager.manualUbuntuImageURL != nil && manager.hasCachedManualUbuntuImage)
-            : (manager.ubuntuImageURL != nil && manager.hasCachedUbuntuImage)
+        guard creationGuestOS == .debian else { return manager.imageURL != nil }
+        return manager.debianImageURL != nil && manager.hasCachedDebianImage
     }
 
-    private var ubuntuReadinessMessage: String? {
-        ubuntuInstallationMethod == .manual
-            ? manager.manualUbuntuCreationReadinessMessage
-            : manager.ubuntuCreationReadinessMessage
+    private var debianReadinessMessage: String? {
+        manager.debianCreationReadinessMessage
     }
 
     private var creationStoragePicker: some View {
@@ -858,10 +808,8 @@ struct HostWorkspaceView: View {
                 }
                 Text(model.guestSetupDiskStatus).font(.callout).foregroundStyle(.secondary)
             } else {
-                Label(selectedGuestIsManualUbuntu
-                      ? "In Ubuntu, open the attached Tether Ubuntu Guest Tools disk."
-                      : selectedGuestIsUbuntu
-                      ? "In Ubuntu, open Tether Guest Setup."
+                Label(selectedGuestIsDebian
+                      ? "In Debian, open Tether Guest Setup."
                       : "In your VM, open Tether Guest Setup, then Tether Guest Installer.app.",
                       systemImage: "opticaldisc")
                     .fixedSize(horizontal: false, vertical: true)
@@ -885,10 +833,8 @@ struct HostWorkspaceView: View {
             }
             DisclosureGroup("Guest setup help") {
                 VStack(alignment: .leading, spacing: 10) {
-                    Text(selectedGuestIsManualUbuntu
-                         ? "After Ubuntu is installed, open the TETHERUBUNTU disk in Files and launch Tether Guest Installer. Its guide prepares clipboard support before sign-in and shows setup progress."
-                         : selectedGuestIsUbuntu
-                         ? "Open Tether Guest Installer in the Ubuntu applications menu. The guide sets up clipboard support, Tailscale, Hermes, model sign-in, and connection verification."
+                    Text(selectedGuestIsDebian
+                         ? "Open Tether Guest Installer in the Debian applications menu. The guide sets up clipboard support, Tailscale, Hermes, model sign-in, and connection verification."
                          : "In the VM's Finder, open the Tether Guest Setup disk and run Tether Guest Installer.app. Its six-step guide checks Internet, sets up Tailscale and Hermes, requests any needed permissions, and verifies the connection.")
                     if model.providerSetup.provider == .utm {
                         Text("For an existing UTM VM, attach the exported disk as a removable drive in UTM first.")
@@ -1189,8 +1135,8 @@ private struct VMMonitorView: View {
                         Divider()
                         Button("Check clipboard connection") { checkClipboardConnection() }
                             .disabled(clipboardIsBusy)
-                        Text(manager.runningGuestOS == .ubuntu
-                             ? "Clipboard is set up by Tether Guest Installer. Copy in Ubuntu, then choose Copy VM text to Mac."
+                        Text(manager.runningGuestOS == .debian
+                             ? "Clipboard is set up by Tether Guest Installer. Copy in Debian, then choose Copy VM text to Mac."
                              : "Clipboard is set up by Tether Guest Installer. Paste with Command-V.")
                     } label: {
                         Label("Clipboard", systemImage: "doc.on.clipboard")
@@ -1329,8 +1275,8 @@ private struct VMMonitorView: View {
             defer { clipboardIsBusy = false }
             do {
                 try await manager.writeGuestClipboardText(text)
-                clipboardMessage = manager.runningGuestOS == .ubuntu
-                    ? "Text sent to Ubuntu. Press Ctrl-V to paste, or Ctrl-Shift-V in Terminal."
+                clipboardMessage = manager.runningGuestOS == .debian
+                    ? "Text sent to Debian. Press Ctrl-V to paste, or Ctrl-Shift-V in Terminal."
                     : "Text sent to the VM clipboard. Press Command-V inside the VM to paste it."
             } catch {
                 clipboardMessage = error.localizedDescription
@@ -1407,7 +1353,7 @@ struct VMCreationSettingsView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             Button("Use recommended settings") {
-                if guestOS == .ubuntu { manager.configureUbuntuCreationDefaults() }
+                if guestOS == .debian { manager.configureDebianCreationDefaults() }
                 else { manager.resetCreationResources() }
             }
                 .buttonStyle(.borderless).font(.callout)

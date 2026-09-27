@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""Ubuntu guest configuration; no host paths or macOS permissions are used."""
+"""Debian guest configuration; no host paths or macOS permissions are used."""
+import base64
+import binascii
 import json
 import os
 from pathlib import Path
@@ -8,6 +10,7 @@ import secrets
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -56,40 +59,25 @@ def command(*args, timeout=90, label='Guest setup command', recovery='Retry this
     return result.stdout
 
 
+def has_png_capture(value):
+    """Check the driver's PNG bytes, not merely a truthy response field."""
+    if not isinstance(value, dict):
+        return False
+    encoded = value.get('screenshot_png_b64')
+    if not isinstance(encoded, str):
+        return False
+    try:
+        png = base64.b64decode(encoded, validate=True)
+    except (ValueError, binascii.Error):
+        return False
+    return len(png) >= 24 and png[:8] == b'\x89PNG\r\n\x1a\n' and png[12:16] == b'IHDR'
+
+
 def hermes_bin():
     binary = HERMES / 'hermes-agent/venv/bin/hermes'
     if not binary.is_file():
         raise SetupFailure('Hermes is missing. Run /opt/tether-guest/setup.sh first.')
     return str(binary)
-
-
-def gnome_wayland_helper_ready():
-    try:
-        result = subprocess.run(['gnome-extensions', 'info', 'winrects@cua'],
-                                capture_output=True, text=True, timeout=10, check=False)
-    except (OSError, subprocess.TimeoutExpired):
-        return False
-    return result.returncode == 0 and bool(re.search(r'^\s*State:\s*ACTIVE\s*$', result.stdout,
-                                                    re.IGNORECASE | re.MULTILINE))
-
-
-def ensure_gnome_wayland_helper():
-    marker = STATE / 'computer-use.signout-required'
-    if 'GNOME' not in os.environ.get('XDG_CURRENT_DESKTOP', '').upper():
-        marker.unlink(missing_ok=True)
-        return
-    if gnome_wayland_helper_ready():
-        marker.unlink(missing_ok=True)
-        return
-    marker.unlink(missing_ok=True)
-    helper = HOME / '.cua-driver/packages/current/wayland-helper/install.sh'
-    if not helper.is_file():
-        raise SetupFailure('The CuaDriver GNOME helper is missing from this installation. Retry Enable computer use.')
-    command('/bin/bash', str(helper), timeout=30, label='CuaDriver GNOME helper install',
-            recovery='Retry Enable computer use from the Ubuntu desktop.')
-    if not gnome_wayland_helper_ready():
-        private_write(marker, 'Sign out of Ubuntu and sign back in, then retry Enable computer use.\n')
-        raise SetupFailure('The GNOME computer-use helper is installed. Sign out of Ubuntu and sign back in once, then retry Enable computer use.')
 
 
 def ensure_cua_daemon():
@@ -100,51 +88,45 @@ def ensure_cua_daemon():
     resolved = Path(binary).resolve()
     if not resolved.is_file() or not os.access(resolved, os.X_OK) or not re.fullmatch(r'/[A-Za-z0-9_./-]+', str(resolved)):
         raise SetupFailure('CuaDriver has an unsupported installation path. Retry Enable computer use.')
-    if not (os.environ.get('DISPLAY') or os.environ.get('WAYLAND_DISPLAY')):
-        raise SetupFailure('Log in to the Ubuntu graphical desktop before starting computer use.')
+    if os.environ.get('XDG_SESSION_TYPE', '').lower() != 'x11' or not os.environ.get('DISPLAY'):
+        raise SetupFailure('Log in to the Debian Xfce/X11 desktop before starting computer use.')
     socket_dir = HOME / '.cache/cua-driver'
     socket_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     socket_dir.chmod(0o700)
     unit_dir = HOME / '.config/systemd/user'
     unit = unit_dir / CUA_UNIT
-    native_wayland = False
-    if os.environ.get('WAYLAND_DISPLAY') and os.environ.get('XDG_SESSION_TYPE') == 'wayland':
-        config_path = HERMES / 'config.yaml'
-        config = yaml.safe_load(config_path.read_text()) if config_path.exists() else {}
-        native_wayland = (config or {}).get('computer_use', {}).get('native_wayland') is True
-    if native_wayland:
-        ensure_gnome_wayland_helper()
-    else:
-        (STATE / 'computer-use.signout-required').unlink(missing_ok=True)
+    (STATE / 'computer-use.signout-required').unlink(missing_ok=True)
     content = ('[Unit]\nDescription=Tether Guest Cua Driver\nAfter=graphical-session.target\n\n'
                '[Service]\nType=simple\n'
-               + ('Environment=CUA_DRIVER_RS_ENABLE_WAYLAND=1\n' if native_wayland else '') +
                f'ExecStart={resolved} serve --socket %h/.cache/cua-driver/cua-driver.sock\n'
                'Restart=on-failure\nRestartSec=2\n\n[Install]\nWantedBy=default.target\n')
     changed = not unit.exists() or unit.read_text() != content
     if changed:
         private_write(unit, content)
         command('systemctl', '--user', 'daemon-reload', label='CuaDriver service reload',
-                recovery='Retry Enable computer use from the Ubuntu desktop.')
-    environment = [name for name in ('DISPLAY', 'WAYLAND_DISPLAY', 'XAUTHORITY',
+                recovery='Retry Enable computer use from the Debian desktop.')
+    # A user manager can outlive an X11 login. Remove stale authority/session
+    # values before importing the current desktop's environment.
+    command('systemctl', '--user', 'unset-environment', 'DISPLAY', 'XAUTHORITY',
+            'DBUS_SESSION_BUS_ADDRESS', 'XDG_SESSION_TYPE', 'XDG_CURRENT_DESKTOP',
+            label='Old desktop session cleanup', recovery='Log out of Debian, log back in, then retry Enable computer use.')
+    environment = [name for name in ('DISPLAY', 'XAUTHORITY',
                                      'DBUS_SESSION_BUS_ADDRESS', 'XDG_SESSION_TYPE',
                                      'XDG_CURRENT_DESKTOP') if os.environ.get(name)]
     command('systemctl', '--user', 'import-environment', *environment,
-            label='Desktop session import', recovery='Log out of Ubuntu, log back in, then retry Enable computer use.')
+            label='Desktop session import', recovery='Log out of Debian, log back in, then retry Enable computer use.')
     command('systemctl', '--user', 'enable', '--now', CUA_UNIT,
-            label='CuaDriver service start', recovery='Retry Enable computer use from the Ubuntu desktop.')
-    if changed:
-        command('systemctl', '--user', 'restart', CUA_UNIT,
-                label='CuaDriver service restart', recovery='Retry Enable computer use from the Ubuntu desktop.')
-    # On GNOME Wayland the first capture can open a portal consent dialog.
-    # Give that single request time for a human answer; retrying it can stack
-    # permission dialogs and make the installer appear stuck.
-    attempts = 1 if native_wayland else 15
+            label='CuaDriver service start', recovery='Retry Enable computer use from the Debian desktop.')
+    # enable --now does not refresh an already running daemon. This also makes
+    # a repeated setup pick up the current display after logout/login.
+    command('systemctl', '--user', 'restart', CUA_UNIT,
+            label='CuaDriver service restart', recovery='Retry Enable computer use from the Debian desktop.')
+    attempts = 15
     for attempt in range(attempts):
         try:
             result = subprocess.run([str(resolved), 'call', 'get_desktop_state', '{}'],
                                     capture_output=True, text=True,
-                                    timeout=90 if native_wayland else 10, check=False)
+                                    timeout=10, check=False)
         except (OSError, subprocess.TimeoutExpired):
             result = None
         if result is not None and result.returncode == 0:
@@ -152,13 +134,11 @@ def ensure_cua_daemon():
                 desktop = json.loads(result.stdout)
             except ValueError:
                 desktop = {}
-            if desktop.get('screenshot_mime_type') == 'image/png' and desktop.get('screenshot_png_b64'):
+            if desktop.get('screenshot_mime_type') == 'image/png' and has_png_capture(desktop):
                 return
         if attempt + 1 < attempts:
             time.sleep(1)
-    if native_wayland:
-        raise SetupFailure('CuaDriver could not capture the GNOME desktop. Allow the Ubuntu screenshot permission prompt, then retry Enable computer use.')
-    raise SetupFailure('CuaDriver service started but cannot capture this Ubuntu desktop. Retry Enable computer use after checking the desktop session.')
+    raise SetupFailure('CuaDriver service started but cannot capture this Debian desktop. Retry Enable computer use after checking the desktop session.')
 
 
 def env_values(path):
@@ -185,11 +165,10 @@ def configure():
     config_path = HERMES / 'config.yaml'
     config = yaml.safe_load(config_path.read_text()) if config_path.exists() else {}
     config = config or {}
-    if os.environ.get('WAYLAND_DISPLAY') and os.environ.get('XDG_SESSION_TYPE') == 'wayland':
-        computer_use = config.setdefault('computer_use', {})
-        if not isinstance(computer_use, dict):
-            raise SetupFailure('Existing Hermes computer-use settings must be a mapping.')
-        computer_use.setdefault('native_wayland', True)
+    computer_use = config.setdefault('computer_use', {})
+    if not isinstance(computer_use, dict):
+        raise SetupFailure('Existing Hermes computer-use settings must be a mapping.')
+    computer_use['native_wayland'] = False
     toolsets = config.setdefault('platform_toolsets', {})
     enabled = toolsets.setdefault('api_server', ['hermes-cli'])
     if not isinstance(enabled, list):
@@ -244,40 +223,127 @@ def verify_api(endpoint, token):
 
 
 def verify_computer_use():
-    if not (os.environ.get('DISPLAY') or os.environ.get('WAYLAND_DISPLAY')):
-        raise SetupFailure('Log in to the Ubuntu graphical desktop before verifying computer use.')
+    if os.environ.get('XDG_SESSION_TYPE', '').lower() != 'x11' or not os.environ.get('DISPLAY'):
+        raise SetupFailure('Log in to the Debian Xfce/X11 desktop before verifying computer use.')
     ensure_cua_daemon()
     raw = command(hermes_bin(), 'computer-use', 'doctor', '--json', timeout=120,
                   label='Hermes computer-use doctor',
-                  recovery='Retry Enable computer use, then Verify connection. The doctor output is available by running hermes computer-use doctor in Ubuntu.')
+                  recovery='Retry Enable computer use, then Verify connection. The doctor output is available by running hermes computer-use doctor in Debian.')
     try:
         doctor = json.loads(raw)
     except ValueError:
         raise SetupFailure('Hermes computer-use doctor returned unreadable JSON.')
     checks = {item.get('name'): item.get('status') for item in doctor.get('checks', []) if isinstance(item, dict)}
     if checks.get('ax_capability') != 'pass':
-        raise SetupFailure('CuaDriver cannot access the Ubuntu desktop. Check DISPLAY and AT-SPI.')
+        raise SetupFailure('CuaDriver cannot access the Debian desktop. Check DISPLAY and AT-SPI.')
     binary = shutil.which('cua-driver')
     if not binary:
         raise SetupFailure('CuaDriver is missing. Run hermes computer-use install.')
     try:
         desktop = json.loads(command(binary, 'call', 'get_desktop_state', '{}', timeout=90,
                                      label='CuaDriver desktop capture',
-                                     recovery='Retry Enable computer use from the Ubuntu desktop.'))
+                                     recovery='Retry Enable computer use from the Debian desktop.'))
     except ValueError:
         raise SetupFailure('CuaDriver did not return a desktop capture.')
-    if desktop.get('screenshot_mime_type') != 'image/png' or not desktop.get('screenshot_png_b64'):
-        raise SetupFailure('CuaDriver could not capture the Ubuntu desktop.')
+    if desktop.get('screenshot_mime_type') != 'image/png' or not has_png_capture(desktop):
+        raise SetupFailure('CuaDriver could not capture the Debian desktop.')
+    verify_chromium_control(binary)
+
+
+def _json_dicts(value):
+    if isinstance(value, dict):
+        yield value
+        for child in value.values():
+            yield from _json_dicts(child)
+    elif isinstance(value, list):
+        for child in value:
+            yield from _json_dicts(child)
+
+
+def verify_chromium_control(binary):
+    """Prove that Cua can discover and read a real native Chromium page."""
+    chromium = shutil.which('chromium')
+    if not chromium:
+        raise SetupFailure('Chromium is missing. Retry Prepare guest tools.')
+    STATE.mkdir(parents=True, exist_ok=True, mode=0o700)
+    with tempfile.TemporaryDirectory(prefix='chromium-cua-', dir=STATE) as workspace:
+        workspace = Path(workspace)
+        marker = 'TETHER_CHROMIUM_CONTROL_OK_' + uuid.uuid4().hex
+        title = 'Tether Computer Use Probe ' + marker
+        probe = workspace / 'probe.html'
+        private_write(probe, ('<!doctype html><meta charset="utf-8"><title>' + title + '</title>'
+                              '<h1>' + marker + '</h1><label>Agent input '
+                              '<input id="agent-input" aria-label="Agent input"></label>'))
+        profile = workspace / 'profile'
+        try:
+            browser = subprocess.Popen([
+                chromium, '--no-first-run', '--no-default-browser-check', '--disable-default-apps',
+                '--disable-background-mode', '--user-data-dir=' + str(profile),
+                '--new-window', probe.as_uri()
+            ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        except OSError:
+            raise SetupFailure('Chromium could not start for the computer-use check.')
+        try:
+            window = None
+            deadline = time.monotonic() + 45
+            while time.monotonic() < deadline:
+                if browser.poll() is not None:
+                    raise SetupFailure('Chromium closed before its computer-use test window appeared. Retry Enable computer use from the Debian desktop.')
+                raw = command(binary, 'call', 'list_windows', '{"on_screen_only":true}', timeout=15,
+                              label='CuaDriver Chromium window discovery',
+                              recovery='Close Chromium, reopen it, then retry Enable computer use.')
+                try:
+                    windows = json.loads(raw)
+                except ValueError:
+                    windows = {}
+                for candidate in _json_dicts(windows):
+                    name = ' '.join(str(candidate.get(key, '')) for key in ('name', 'title', 'window_title'))
+                    if title in name and all(isinstance(candidate.get(key), int) and candidate[key] > 0
+                                             for key in ('pid', 'window_id')):
+                        window = candidate
+                        break
+                if window:
+                    break
+                time.sleep(1)
+            if not window:
+                raise SetupFailure('CuaDriver could not discover the Chromium test window.')
+            arguments = json.dumps({'pid': window['pid'], 'window_id': window['window_id']})
+            raw = command(binary, 'call', 'get_window_state', arguments, timeout=90,
+                          label='CuaDriver Chromium capture',
+                          recovery='Close Chromium, reopen it, then retry Enable computer use.')
+            try:
+                state = json.loads(raw)
+            except ValueError:
+                raise SetupFailure('CuaDriver returned unreadable Chromium window data.')
+            if not any(has_png_capture(item) for item in _json_dicts(state)):
+                raise SetupFailure('CuaDriver did not capture the Chromium test window.')
+            page = command(binary, 'call', 'page',
+                           json.dumps({'action': 'get_text', 'pid': window['pid'],
+                                       'window_id': window['window_id']}), timeout=90,
+                           label='CuaDriver Chromium page read',
+                           recovery='Close Chromium, reopen it, then retry Enable computer use.')
+            if marker not in page:
+                raise SetupFailure('CuaDriver could not read the Chromium test page.')
+        finally:
+            try:
+                browser.terminate()
+            except ProcessLookupError:
+                pass
+            try:
+                browser.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                browser.kill()
+                browser.wait(timeout=5)
 
 
 def tailnet_endpoint():
     status = json.loads(command('tailscale', 'status', '--json', label='Tailscale status',
-                                recovery='Reconnect Tailscale in Ubuntu, then retry Verify connection.'))
+                                recovery='Reconnect Tailscale in Debian, then retry Verify connection.'))
     if status.get('BackendState') != 'Running':
-        raise SetupFailure('Connect Tailscale inside Ubuntu before verification.')
+        raise SetupFailure('Connect Tailscale inside Debian before verification.')
     hostname = status.get('Self', {}).get('DNSName', '').rstrip('.').lower()
     if not re.fullmatch(r'[a-z0-9-]+(?:\.[a-z0-9-]+)+\.ts\.net', hostname):
-        raise SetupFailure('Ubuntu has no valid private Tailscale DNS name.')
+        raise SetupFailure('Debian has no valid private Tailscale DNS name.')
     return 'https://' + hostname
 
 
@@ -386,11 +452,11 @@ def verify():
 
 def main(action):
     os_release = Path('/etc/os-release').read_text()
-    if not re.search(r'^ID=ubuntu$', os_release, re.MULTILINE) or subprocess.run(
+    if not re.search(r'^ID=debian$', os_release, re.MULTILINE) or subprocess.run(
             ['systemd-detect-virt', '--quiet'], check=False).returncode != 0:
-        raise SetupFailure('Run this only inside the Ubuntu virtual machine.')
+        raise SetupFailure('Run this only inside the Debian virtual machine.')
     if os.geteuid() == 0:
-        raise SetupFailure('Run guest setup as your normal Ubuntu desktop user, not root.')
+        raise SetupFailure('Run guest setup as your normal Debian desktop user, not root.')
     if action == 'configure':
         configure()
     elif action == 'start-computer-use':
@@ -415,5 +481,5 @@ if __name__ == '__main__':
         print(str(error), file=sys.stderr)
         sys.exit(1)
     except Exception:
-        print('Ubuntu guest verification failed. Check Tailscale, Hermes, and computer use; no connection was marked ready.', file=sys.stderr)
+        print('Debian guest verification failed. Check Tailscale, Hermes, and computer use; no connection was marked ready.', file=sys.stderr)
         sys.exit(1)

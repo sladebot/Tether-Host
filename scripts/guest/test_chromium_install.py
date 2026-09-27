@@ -1,4 +1,4 @@
-"""Command-stub checks for the updater's actual Chromium install function."""
+"""Checks for Debian's native Chromium package verification."""
 from pathlib import Path
 import os
 import subprocess
@@ -12,75 +12,40 @@ FUNCTION = SOURCE.split("# BEGIN_CHROMIUM_INSTALL\n", 1)[1].split("# END_CHROMIU
 
 
 class ChromiumInstallTests(unittest.TestCase):
-    def run_installer(self, *, installed=False, failure=""):
+    def run_check(self, *, chromium=True, package=True):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            bin_dir = root / "bin"
+            bin_dir = Path(directory) / "bin"
             bin_dir.mkdir()
-            for name, script in {
-                "systemctl": '''#!/bin/sh
-printf 'systemctl %s\\n' "$*" >> "$STUB_LOG"
-[ "$STUB_FAIL" != socket ]
-''',
-                "timeout": '''#!/bin/sh
-printf 'timeout %s\\n' "$*" >> "$STUB_LOG"
-[ "$1" = --foreground ] && shift
-shift
-"$@"
-''',
-                "snap": '''#!/bin/sh
-printf 'snap %s\\n' "$*" >> "$STUB_LOG"
-case "$1" in
-  wait) [ "$STUB_FAIL" != seed ] ;;
-  list) [ -f "$STUB_INSTALLED" ] ;;
-  install)
-    [ "$STUB_FAIL" != install ] || exit 1
-    : > "$STUB_INSTALLED" ;;
-  *) exit 2 ;;
-esac
-''',
-            }.items():
-                executable = bin_dir / name
-                executable.write_text(script)
+            if chromium:
+                executable = bin_dir / "chromium"
+                executable.write_text("#!/bin/sh\nexit 0\n")
                 executable.chmod(0o755)
-            state = root / "installed"
-            if installed:
-                state.touch()
-            trace = root / "trace"
+            dpkg = bin_dir / "dpkg-query"
+            dpkg.write_text("#!/bin/sh\n" +
+                            ("printf 'install ok installed\\n'\n" if package else "exit 1\n"))
+            dpkg.chmod(0o755)
             env = os.environ.copy()
-            env.update(PATH=str(bin_dir) + os.pathsep + env.get("PATH", ""),
-                       STUB_LOG=str(trace), STUB_INSTALLED=str(state), STUB_FAIL=failure)
+            env["PATH"] = str(bin_dir) + os.pathsep + env.get("PATH", "")
             script = "fail() { printf '%s\\n' \"$1\" >&2; exit 1; }\n" + FUNCTION + "\ninstall_chromium\n"
-            result = subprocess.run(["/bin/sh", "-eu", "-c", script], env=env,
-                                    text=True, capture_output=True, timeout=5)
-            return result, trace.read_text().splitlines(), state.exists()
+            return subprocess.run(["/bin/sh", "-eu", "-c", script], env=env,
+                                  text=True, capture_output=True, timeout=5)
 
-    def test_installs_official_stable_snap_after_bounded_seed_wait(self):
-        result, trace, installed = self.run_installer()
+    def test_accepts_native_debian_chromium_package(self):
+        result = self.run_check()
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertTrue(installed)
-        self.assertIn("systemctl enable --now snapd.socket", trace)
-        self.assertIn("timeout --foreground 300s snap wait system seed.loaded", trace)
-        self.assertIn("timeout --foreground 1200s snap install chromium --channel=stable", trace)
-        self.assertEqual(trace.count("snap list chromium"), 2)
+        self.assertIn("Chromium is ready", result.stdout)
+        self.assertNotIn("snap", FUNCTION.lower())
 
-    def test_existing_chromium_is_not_reinstalled(self):
-        result, trace, installed = self.run_installer(installed=True)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertTrue(installed)
-        self.assertNotIn("snap install chromium --channel=stable", "\n".join(trace))
-        self.assertIn("already installed", result.stdout)
+    def test_missing_executable_is_actionable(self):
+        result = self.run_check(chromium=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Chromium is not available", result.stderr)
+        self.assertIn("retry Prepare guest tools", result.stderr)
 
-    def test_install_and_seed_failures_are_actionable(self):
-        for failure, expected in (("install", "Chromium installation failed"),
-                                  ("seed", "Ubuntu snap setup did not finish"),
-                                  ("socket", "Could not start snapd")):
-            with self.subTest(failure=failure):
-                result, _trace, installed = self.run_installer(failure=failure)
-                self.assertNotEqual(result.returncode, 0)
-                self.assertFalse(installed)
-                self.assertIn(expected, result.stderr)
-                self.assertIn("retry Prepare guest tools", result.stderr)
+    def test_incomplete_package_is_actionable(self):
+        result = self.run_check(package=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("not fully installed", result.stderr)
 
 
 if __name__ == "__main__":

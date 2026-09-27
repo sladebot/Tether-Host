@@ -5,14 +5,14 @@ import XCTest
 final class NativeVMStorageCapacityTests: XCTestCase {
     func testNonsparseVolumeRequiresFullVirtualDiskPlusHeadroom() {
         XCTAssertEqual(NativeVMStorageCapacity.requiredFreeGiB(
-            diskGiB: 24, guestOS: .ubuntu, supportsSparseFiles: false), 28)
+            diskGiB: 24, guestOS: .debian, supportsSparseFiles: false), 28)
         XCTAssertEqual(NativeVMStorageCapacity.requiredFreeGiB(
             diskGiB: 128, guestOS: .macOS, supportsSparseFiles: false), 132)
     }
 
     func testSparseVolumeUsesInstallationBudget() {
         XCTAssertEqual(NativeVMStorageCapacity.requiredFreeGiB(
-            diskGiB: 24, guestOS: .ubuntu, supportsSparseFiles: true), 12)
+            diskGiB: 24, guestOS: .debian, supportsSparseFiles: true), 12)
         XCTAssertEqual(NativeVMStorageCapacity.requiredFreeGiB(
             diskGiB: 128, guestOS: .macOS, supportsSparseFiles: true), 45)
     }

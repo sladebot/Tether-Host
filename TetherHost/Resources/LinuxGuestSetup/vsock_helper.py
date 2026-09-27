@@ -33,7 +33,7 @@ def configured_guest_uid():
     """Bind the socket helper to its installer-selected, unprivileged account."""
     uid = os.geteuid()
     if uid < 1000 or uid >= 65534:
-        raise RuntimeError('Guest helper requires a normal Ubuntu account.')
+        raise RuntimeError('Guest helper requires a normal Debian account.')
     account = pwd.getpwuid(uid)
     if Path.home().resolve() != Path(account.pw_dir).resolve():
         raise RuntimeError('Guest helper home does not match its account.')
@@ -130,11 +130,11 @@ def clipboard_environment():
     try:
         uid = configured_guest_uid()
     except (OSError, KeyError, RuntimeError):
-        raise ClipboardUnavailable('Log in as the configured Ubuntu guest user before transferring text.')
+        raise ClipboardUnavailable('Log in as the configured Debian guest user before transferring text.')
     runtime = Path(f'/run/user/{uid}')
     bus = runtime / 'bus'
     if not runtime.is_dir() or runtime.stat().st_uid != uid or not stat.S_ISSOCK(bus.stat().st_mode):
-        raise ClipboardUnavailable('Log in to the Ubuntu desktop before transferring text.')
+        raise ClipboardUnavailable('Log in to the Debian desktop before transferring text.')
     probe_environment = {
         'HOME': str(Path.home()), 'PATH': '/usr/bin:/bin',
         'XDG_RUNTIME_DIR': str(runtime),
@@ -144,11 +144,11 @@ def clipboard_environment():
                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                               timeout=3, check=False).returncode == 0
                for process in ('xfce4-session', 'gnome-session-b')):
-        raise ClipboardUnavailable('Log in to the Ubuntu X11 desktop before transferring text.')
+        raise ClipboardUnavailable('Log in to the Debian X11 desktop before transferring text.')
     result = subprocess.run(['systemctl', '--user', 'show-environment'],
                             env=probe_environment, capture_output=True, timeout=3, check=False)
     if result.returncode != 0 or len(result.stdout) > 65_536:
-        raise ClipboardUnavailable('The Ubuntu desktop session is not ready for clipboard text.')
+        raise ClipboardUnavailable('The Debian desktop session is not ready for clipboard text.')
     variables = {}
     for line in result.stdout.decode('utf-8', errors='strict').splitlines():
         if '=' in line:
@@ -158,15 +158,15 @@ def clipboard_environment():
     display = variables.get('DISPLAY', '')
     if not re.fullmatch(r':[0-9]{1,2}(?:\.[0-9]{1,2})?', display) or \
        variables.get('XDG_SESSION_TYPE', 'x11') != 'x11':
-        raise ClipboardUnavailable('Log in to the Ubuntu X11 desktop before transferring text.')
+        raise ClipboardUnavailable('Log in to the Debian X11 desktop before transferring text.')
     number = display[1:].split('.', 1)[0]
     if not stat.S_ISSOCK(Path('/tmp/.X11-unix', f'X{number}').stat().st_mode):
-        raise ClipboardUnavailable('The Ubuntu desktop display is unavailable.')
+        raise ClipboardUnavailable('The Debian desktop display is unavailable.')
     home = Path.home().resolve()
     authority = Path(variables.get('XAUTHORITY') or (home / '.Xauthority')).resolve(strict=True)
     if not (authority.is_relative_to(home) or authority.is_relative_to(runtime)) or \
        not owned_private(authority):
-        raise ClipboardUnavailable('The Ubuntu desktop authorization is unavailable.')
+        raise ClipboardUnavailable('The Debian desktop authorization is unavailable.')
     return {'HOME': str(home), 'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8',
             'DISPLAY': display, 'XAUTHORITY': str(authority),
             'XDG_RUNTIME_DIR': str(runtime)}
@@ -183,7 +183,7 @@ def read_bounded_command(command, environment):
             while True:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0 or not selector.select(remaining):
-                    raise ClipboardUnavailable('The Ubuntu clipboard did not respond in time.')
+                    raise ClipboardUnavailable('The Debian clipboard did not respond in time.')
                 chunk = os.read(process.stdout.fileno(), min(4096, MAX_TEXT_BYTES + 1 - len(output)))
                 if not chunk:
                     break
@@ -191,7 +191,7 @@ def read_bounded_command(command, environment):
                 if len(output) > MAX_TEXT_BYTES:
                     raise ClipboardTooLarge('Clipboard text must be 64 KB or smaller.')
         if process.wait(timeout=max(0.1, deadline - time.monotonic())) != 0:
-            raise ClipboardUnavailable('No UTF-8 text is available on the Ubuntu clipboard.')
+            raise ClipboardUnavailable('No UTF-8 text is available on the Debian clipboard.')
         return output.decode('utf-8', errors='strict')
     finally:
         if process.poll() is None:
@@ -211,7 +211,7 @@ def write_clipboard(environment, payload):
                             env=environment, stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL, timeout=5, check=False)
     if result.returncode != 0:
-        raise ClipboardUnavailable('Could not set the Ubuntu desktop clipboard.')
+        raise ClipboardUnavailable('Could not set the Debian desktop clipboard.')
 
 
 def broker_request(opcode, payload=b''):
@@ -220,11 +220,11 @@ def broker_request(opcode, payload=b''):
     runtime = Path(f'/run/user/{uid}')
     info = runtime.stat()
     if not stat.S_ISDIR(info.st_mode) or info.st_uid != uid or info.st_mode & 0o077:
-        raise ClipboardUnavailable('Log in to the Ubuntu desktop before transferring text.')
+        raise ClipboardUnavailable('Log in to the Debian desktop before transferring text.')
     path = runtime / BROKER_NAME
     info = path.lstat()
     if not stat.S_ISSOCK(info.st_mode) or info.st_uid != uid or info.st_mode & 0o077:
-        raise ClipboardUnavailable('The Ubuntu clipboard session is unavailable.')
+        raise ClipboardUnavailable('The Debian clipboard session is unavailable.')
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
         connection.settimeout(5)
         connection.connect(str(path))
@@ -232,12 +232,12 @@ def broker_request(opcode, payload=b''):
         header = read_exact(connection, 5)
         count = struct.unpack('>I', header[1:])[0]
         if count > MAX_TEXT_BYTES:
-            raise ClipboardUnavailable('The Ubuntu clipboard response was too large.')
+            raise ClipboardUnavailable('The Debian clipboard response was too large.')
         answer = read_exact(connection, count)
     if header[0] != 0:
         raise ClipboardUnavailable(answer.decode('utf-8', errors='replace')[:512])
     if opcode in (2, 4) and answer:
-        raise ClipboardUnavailable('The Ubuntu clipboard response was invalid.')
+        raise ClipboardUnavailable('The Debian clipboard response was invalid.')
     return answer.decode('utf-8', errors='strict') if opcode == 1 else ''
 
 
@@ -257,7 +257,7 @@ def serve_once(connection):
         except (OSError, ValueError, KeyError, subprocess.TimeoutExpired):
             receipt = None
         if receipt is None:
-            respond(connection, 1, 'No verified private connection is available in this Ubuntu VM.')
+            respond(connection, 1, 'No verified private connection is available in this Debian VM.')
         else:
             respond(connection, 0, receipt)
         return
@@ -267,11 +267,11 @@ def serve_once(connection):
             return
         try:
             if not clipboard_enabled():
-                raise ClipboardUnavailable('Tether text clipboard is disabled in Ubuntu.')
+                raise ClipboardUnavailable('Tether text clipboard is disabled in Debian.')
             broker_request(4)
             respond(connection, 0, '')
         except (ClipboardUnavailable, OSError, ConnectionError, UnicodeError, ValueError, socket.timeout) as error:
-            respond(connection, 1, str(error) or 'The Ubuntu clipboard session is unavailable.')
+            respond(connection, 1, str(error) or 'The Debian clipboard session is unavailable.')
         return
     if count > MAX_TEXT_BYTES or (opcode == 1 and count != 0):
         respond(connection, 1, 'Clipboard text must be 64 KB or smaller.')
@@ -281,7 +281,7 @@ def serve_once(connection):
         if opcode == 2:
             payload.decode('utf-8', errors='strict')
         if not clipboard_enabled():
-            raise ClipboardUnavailable('Open Tether Text Clipboard in Ubuntu to enable transfers.')
+            raise ClipboardUnavailable('Open Tether Text Clipboard in Debian to enable transfers.')
         try:
             result = broker_request(opcode, payload)
             respond(connection, 0, result, limit=MAX_TEXT_BYTES)
@@ -298,7 +298,7 @@ def serve_once(connection):
     except ClipboardUnavailable as error:
         respond(connection, 1, str(error))
     except (UnicodeError, OSError, subprocess.TimeoutExpired, ValueError):
-        respond(connection, 1, 'Log in to the Ubuntu X11 desktop and try the text clipboard again.')
+        respond(connection, 1, 'Log in to the Debian X11 desktop and try the text clipboard again.')
 
 
 def main():

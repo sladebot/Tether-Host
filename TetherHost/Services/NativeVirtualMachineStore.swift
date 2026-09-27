@@ -5,7 +5,7 @@ import Virtualization
 
 public enum NativeGuestOS: String, Codable, Sendable {
     case macOS
-    case ubuntu
+    case debian
 }
 
 /// Free space needed on the volume that will hold a new VM. Filesystems without
@@ -16,7 +16,7 @@ public enum NativeVMStorageCapacity {
     public static func requiredFreeGiB(diskGiB: Int, guestOS: NativeGuestOS,
                                        supportsSparseFiles: Bool) -> Int {
         if !supportsSparseFiles { return diskGiB + 4 }
-        return guestOS == .ubuntu ? 12 : min(diskGiB + 4, 45)
+        return guestOS == .debian ? 12 : min(diskGiB + 4, 45)
     }
 
     public static func availableBytes(at folder: URL) throws -> Int64 {

@@ -65,7 +65,7 @@ private struct VMInventoryContent: View {
                 EmptyEvidenceView(
                     title: "No virtual machines",
                     message: model.providerSetup.provider == .builtIn
-                        ? "Create a macOS or Ubuntu VM."
+                        ? "Create a macOS or Debian VM."
                         : "Create a UTM VM or choose Apple Virtualization to see VMs created here.",
                     symbol: "macpro.gen3"
                 )

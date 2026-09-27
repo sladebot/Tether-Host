@@ -11,7 +11,7 @@ enum NativeVMError: LocalizedError {
     case newerGuestRequiresHostUpdate(guest: Int, host: Int)
     case insufficientSpace(Int)
     case insufficientDownloadSpace
-    case insufficientUbuntuDownloadSpace
+    case insufficientDebianDownloadSpace
     case utmCleanupIncomplete(String)
     case invalidResources(String)
     case noCompatibleDownload(host: String)
@@ -34,7 +34,7 @@ enum NativeVMError: LocalizedError {
         case .insufficientSpace(let gib): "At least \(gib) GB of free space is needed on the selected VM drive to create this VM."
         case .utmCleanupIncomplete(let detail): "UTM registered the new VM, but cleanup did not finish. Both copies may remain; run only one copy. \(detail)"
         case .insufficientDownloadSpace: "At least 25 GB of free space is needed in Application Support to cache the macOS download."
-        case .insufficientUbuntuDownloadSpace: "At least 2 GB of free space is needed in Application Support to cache Ubuntu."
+        case .insufficientDebianDownloadSpace: "At least 2 GB of free space is needed in Application Support to cache Debian."
         case .invalidResources(let message): message
         case .noCompatibleDownload(let host): "No downloadable macOS IPSW was found for macOS \(host). Update this Mac or choose a compatible IPSW manually."
         case .imageCatalogUnavailable: "Could not check available macOS images. Check your internet connection, try again, or choose a compatible IPSW manually."
@@ -186,10 +186,8 @@ final class NativeVMManager: ObservableObject {
 
     @Published private(set) var imageURL: URL?
     @Published private(set) var imageDescription = "Choose a macOS IPSW to create a fresh VM."
-    @Published private(set) var ubuntuImageURL: URL?
-    @Published private(set) var ubuntuImageDescription = "Download Ubuntu Server 24.04 LTS for ARM64."
-    @Published private(set) var manualUbuntuImageURL: URL?
-    @Published private(set) var manualUbuntuImageDescription = "Download Ubuntu Desktop 24.04 LTS for ARM64 to install it yourself."
+    @Published private(set) var debianImageURL: URL?
+    @Published private(set) var debianImageDescription = "Download Debian 13 ARM64 with automatic Xfce/X11 setup."
     @Published private(set) var status = "No VM installation has started."
     @Published private(set) var isBusy = false
     @Published private(set) var startingVMID: VirtualMachineID?
@@ -257,13 +255,9 @@ final class NativeVMManager: ObservableObject {
         }
         Task { [weak self] in
             guard let self else { return }
-            if let cached = try? await UbuntuVMImageService.verifiedCachedImage(in: self.ubuntuCacheDirectory) {
-                self.ubuntuImageURL = cached
-                self.ubuntuImageDescription = "Verified Ubuntu Server 24.04 LTS ARM64 image is ready."
-            }
-            if let cached = try? await UbuntuVMImageService.verifiedManualCachedImage(in: self.ubuntuCacheDirectory) {
-                self.manualUbuntuImageURL = cached
-                self.manualUbuntuImageDescription = "Verified Ubuntu Desktop 24.04 LTS ARM64 installer is ready."
+            if let cached = try? await DebianVMImageService.verifiedCachedImage(in: self.debianCacheDirectory) {
+                self.debianImageURL = cached
+                self.debianImageDescription = "Verified Debian 13 ARM64 image is ready."
             }
         }
     }
@@ -281,9 +275,9 @@ final class NativeVMManager: ObservableObject {
         NativeVMResourceLimits(
             hostCPUCount: ProcessInfo.processInfo.activeProcessorCount,
             hostMemoryBytes: ProcessInfo.processInfo.physicalMemory,
-            minimumCPUCount: creationGuestOS == .ubuntu ? 2 :
+            minimumCPUCount: creationGuestOS == .debian ? 2 :
                 (restoreImage?.mostFeaturefulSupportedConfiguration?.minimumSupportedCPUCount ?? 2),
-            minimumMemoryBytes: creationGuestOS == .ubuntu ? 4 * 1_073_741_824 :
+            minimumMemoryBytes: creationGuestOS == .debian ? 4 * 1_073_741_824 :
                 (restoreImage?.mostFeaturefulSupportedConfiguration?.minimumSupportedMemorySize ?? 4 * 1_073_741_824),
             maximumCPUCount: VZVirtualMachineConfiguration.maximumAllowedCPUCount,
             maximumMemoryBytes: VZVirtualMachineConfiguration.maximumAllowedMemorySize
@@ -390,9 +384,9 @@ final class NativeVMManager: ObservableObject {
         creationDiskGiB = defaults.diskGiB
     }
 
-    func configureUbuntuCreationDefaults() {
+    func configureDebianCreationDefaults() {
         guard !isBusy else { return }
-        creationGuestOS = .ubuntu
+        creationGuestOS = .debian
         creationCPUCount = min(creationCPURange.upperBound, max(creationCPURange.lowerBound, 4))
         creationMemoryGiB = min(creationMemoryRange.upperBound, max(creationMemoryRange.lowerBound, 8))
         creationDiskGiB = 24
@@ -408,78 +402,63 @@ final class NativeVMManager: ObservableObject {
             .appendingPathComponent("Restore Images", isDirectory: true)
     }
 
-    private var ubuntuCacheDirectory: URL {
-        rootURL.deletingLastPathComponent().appendingPathComponent("Ubuntu Images", isDirectory: true)
+    private var debianCacheDirectory: URL {
+        rootURL.deletingLastPathComponent().appendingPathComponent("Debian Images", isDirectory: true)
     }
 
-    private var bundledUbuntuConverter: URL? {
+    private var bundledDebianConverter: URL? {
         Bundle.main.url(forResource: "qemu-img", withExtension: nil, subdirectory: "Tools")
     }
 
-    var ubuntuConverterAvailable: Bool {
-        UbuntuVMImageService.converterURL(bundledUbuntuConverter) != nil
+    var debianConverterAvailable: Bool {
+        DebianVMImageService.converterURL(bundledDebianConverter) != nil
     }
 
-    var ubuntuCreationReadinessMessage: String? {
-        if !ubuntuConverterAvailable { return UbuntuVMImageError.converterUnavailable.localizedDescription }
-        guard let ubuntuImageURL,
-              FileManager.default.fileExists(atPath: ubuntuImageURL.path) else {
-            return "The downloaded Ubuntu image is missing. Download and verify it again."
+    var debianCreationReadinessMessage: String? {
+        if !debianConverterAvailable { return DebianVMImageError.converterUnavailable.localizedDescription }
+        guard let debianImageURL,
+              FileManager.default.fileExists(atPath: debianImageURL.path) else {
+            return "The downloaded Debian image is missing. Download and verify it again."
         }
         return creationResourceError ?? creationStorageValidationMessage
     }
 
-    var manualUbuntuCreationReadinessMessage: String? {
-        guard let manualUbuntuImageURL,
-              FileManager.default.fileExists(atPath: manualUbuntuImageURL.path) else {
-            return "The Ubuntu installer is missing. Download and verify it again."
-        }
-        return creationResourceError ?? creationStorageValidationMessage
+    var hasCachedDebianImage: Bool {
+        FileManager.default.fileExists(atPath: DebianVMImageService.cachedImageURL(in: debianCacheDirectory).path)
     }
 
-    var hasCachedManualUbuntuImage: Bool {
-        FileManager.default.fileExists(atPath: UbuntuVMImageService.manualCachedImageURL(in: ubuntuCacheDirectory).path)
-    }
-
-    var hasCachedUbuntuImage: Bool {
-        FileManager.default.fileExists(atPath: UbuntuVMImageService.cachedImageURL(in: ubuntuCacheDirectory).path)
-    }
-
-    var ubuntuCachedImageSizeDescription: String {
-        let image = UbuntuVMImageService.cachedImageURL(in: ubuntuCacheDirectory)
+    var debianCachedImageSizeDescription: String {
+        let image = DebianVMImageService.cachedImageURL(in: debianCacheDirectory)
         guard let bytes = try? image.resourceValues(forKeys: [.fileSizeKey]).fileSize else { return "" }
         return ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
     }
 
-    func revealCachedUbuntuImageInFinder(manual: Bool = false) {
-        guard (manual ? hasCachedManualUbuntuImage : hasCachedUbuntuImage) else { return }
-        NSWorkspace.shared.activateFileViewerSelecting([
-            manual ? UbuntuVMImageService.manualCachedImageURL(in: ubuntuCacheDirectory)
-                   : UbuntuVMImageService.cachedImageURL(in: ubuntuCacheDirectory)
-        ])
+    func revealCachedDebianImageInFinder() {
+        guard hasCachedDebianImage else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([DebianVMImageService.cachedImageURL(in: debianCacheDirectory)])
     }
 
-    func downloadUbuntuImage() async {
+    func downloadDebianImage() async {
         guard !isBusy else { return }
         isBusy = true
         downloadProgress = nil
         let downloadID = UUID()
         activeDownloadID = downloadID
-        status = "Downloading and checking Ubuntu Server 24.04 LTS for ARM64…"
+        status = "Downloading and checking Debian 13 for ARM64…"
         defer {
             isBusy = false
             activeDownloadID = nil
             downloadProgress = nil
         }
         do {
-            try FileManager.default.createDirectory(at: ubuntuCacheDirectory, withIntermediateDirectories: true)
-            if try await UbuntuVMImageService.verifiedCachedImage(in: ubuntuCacheDirectory) == nil {
-                let capacity = try ubuntuCacheDirectory
+            try FileManager.default.createDirectory(at: debianCacheDirectory, withIntermediateDirectories: true)
+            if try await DebianVMImageService.verifiedCachedImage(in: debianCacheDirectory) == nil {
+                let capacity = try debianCacheDirectory
                     .resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
                     .volumeAvailableCapacityForImportantUsage ?? 0
-                guard capacity >= 2 * 1_073_741_824 else { throw NativeVMError.insufficientUbuntuDownloadSpace }
+                guard capacity >= 2 * 1_073_741_824 else { throw NativeVMError.insufficientDebianDownloadSpace }
             }
-            let image = try await UbuntuVMImageService.downloadVerifiedImage(into: ubuntuCacheDirectory) {
+            let image = try await DebianVMImageService.downloadVerifiedImage(into: debianCacheDirectory) {
                 [weak self] received, total, elapsed in
                 Task { @MainActor [weak self] in
                     guard self?.activeDownloadID == downloadID else { return }
@@ -488,50 +467,13 @@ final class NativeVMManager: ObservableObject {
                     )
                 }
             }
-            ubuntuImageURL = image
-            ubuntuImageDescription = "Verified Ubuntu Server 24.04 LTS ARM64 image is ready."
-            status = "Ubuntu image is ready. Configure the VM, then choose Create VM."
+            debianImageURL = image
+            debianImageDescription = "Verified Debian 13 ARM64 image is ready."
+            status = "Debian image is ready. Configure the VM, then choose Create VM."
         } catch {
-            ubuntuImageURL = nil
-            ubuntuImageDescription = "Ubuntu image could not be verified. Download it again."
-            status = "Ubuntu download failed: \(error.localizedDescription)"
-        }
-    }
-
-    func downloadManualUbuntuImage() async {
-        guard !isBusy else { return }
-        isBusy = true
-        downloadProgress = nil
-        let downloadID = UUID()
-        activeDownloadID = downloadID
-        status = "Downloading and checking Ubuntu Desktop 24.04 LTS for ARM64…"
-        defer {
-            isBusy = false
-            activeDownloadID = nil
-            downloadProgress = nil
-        }
-        do {
-            try FileManager.default.createDirectory(at: ubuntuCacheDirectory, withIntermediateDirectories: true)
-            if try await UbuntuVMImageService.verifiedManualCachedImage(in: ubuntuCacheDirectory) == nil {
-                let capacity = try NativeVMStorageCapacity.availableBytes(at: ubuntuCacheDirectory)
-                guard capacity >= 4 * 1_073_741_824 else { throw NativeVMError.insufficientSpace(4) }
-            }
-            let image = try await UbuntuVMImageService.downloadVerifiedManualImage(into: ubuntuCacheDirectory) {
-                [weak self] received, total, elapsed in
-                Task { @MainActor [weak self] in
-                    guard self?.activeDownloadID == downloadID else { return }
-                    self?.downloadProgress = DownloadProgressEstimate(
-                        receivedBytes: received, expectedBytes: total, elapsedSeconds: elapsed
-                    )
-                }
-            }
-            manualUbuntuImageURL = image
-            manualUbuntuImageDescription = "Verified Ubuntu Desktop 24.04 LTS ARM64 installer is ready."
-            status = "Ubuntu installer is ready. Configure the VM, then choose Create VM."
-        } catch {
-            manualUbuntuImageURL = nil
-            manualUbuntuImageDescription = "Ubuntu installer could not be verified. Download it again."
-            status = "Ubuntu installer download failed: \(error.localizedDescription)"
+            debianImageURL = nil
+            debianImageDescription = "Debian image could not be verified. Download it again."
+            status = "Debian download failed: \(error.localizedDescription)"
         }
     }
 
@@ -542,57 +484,8 @@ final class NativeVMManager: ObservableObject {
         return manifest.guestOS
     }
 
-    /// A manual Ubuntu bundle contains `manual-install` and a blank `disk.img`.
-    /// `installer.iso` is attached at boot; ejection renames it to
-    /// `installer.ejected.iso` so the installed system boots from disk.
-    func isManualUbuntuInstallation(_ id: VirtualMachineID) -> Bool {
-        guard guestOS(for: id) == .ubuntu,
-              let bundle = VirtualMachineBundleLocator(nativeRoot: rootURL, utmRoots: [])
-                .locate(id, provider: .builtIn) else { return false }
-        return FileManager.default.fileExists(atPath: bundle.appendingPathComponent("manual-install").path)
-    }
-
-    func isUbuntuInstallerAttached(_ id: VirtualMachineID) -> Bool {
-        guard isManualUbuntuInstallation(id),
-              let bundle = VirtualMachineBundleLocator(nativeRoot: rootURL, utmRoots: [])
-                .locate(id, provider: .builtIn) else { return false }
-        return FileManager.default.fileExists(atPath: bundle.appendingPathComponent("installer.iso").path)
-    }
-
-    func revealUbuntuInstaller(for id: VirtualMachineID) {
-        guard isManualUbuntuInstallation(id),
-              let bundle = VirtualMachineBundleLocator(nativeRoot: rootURL, utmRoots: [])
-                .locate(id, provider: .builtIn) else { return }
-        let attached = bundle.appendingPathComponent("installer.iso")
-        let ejected = bundle.appendingPathComponent("installer.ejected.iso")
-        if FileManager.default.fileExists(atPath: attached.path) {
-            NSWorkspace.shared.activateFileViewerSelecting([attached])
-        } else if FileManager.default.fileExists(atPath: ejected.path) {
-            NSWorkspace.shared.activateFileViewerSelecting([ejected])
-        }
-    }
-
-    func ejectUbuntuInstaller(_ id: VirtualMachineID) {
-        guard !isRunning, !isBusy, !hasOtherHostCopy,
-              isManualUbuntuInstallation(id),
-              let bundle = VirtualMachineBundleLocator(nativeRoot: rootURL, utmRoots: [])
-                .locate(id, provider: .builtIn) else { return }
-        let attached = bundle.appendingPathComponent("installer.iso")
-        let ejected = bundle.appendingPathComponent("installer.ejected.iso")
-        do {
-            guard FileManager.default.fileExists(atPath: attached.path),
-                  !FileManager.default.fileExists(atPath: ejected.path) else {
-                throw NativeVMError.invalidVM
-            }
-            try FileManager.default.moveItem(at: attached, to: ejected)
-            status = "Ubuntu installer ejected. Start the VM to boot the installed disk."
-        } catch {
-            status = "Could not eject the Ubuntu installer: \(error.localizedDescription)"
-        }
-    }
-
-    func revealUbuntuCredentials(for id: VirtualMachineID? = nil) {
-        guard let id = id ?? runningID, guestOS(for: id) == .ubuntu,
+    func revealDebianCredentials(for id: VirtualMachineID? = nil) {
+        guard let id = id ?? runningID, guestOS(for: id) == .debian,
               let bundle = VirtualMachineBundleLocator(nativeRoot: rootURL, utmRoots: [])
                 .locate(id, provider: .builtIn) else { return }
         let credentials = LinuxGuestSeedWriter.credentialsURL(in: bundle)
@@ -667,8 +560,8 @@ final class NativeVMManager: ObservableObject {
         guard isRunning, let runningID else { return }
         desktopReadyVMID = runningID
         preferences.set(runningID.description, forKey: "setup.nativeDesktopReadyVMID")
-        status = runningGuestOS == .ubuntu
-            ? "Ubuntu desktop confirmed by you. Continue with guest setup in the VM."
+        status = runningGuestOS == .debian
+            ? "Debian desktop confirmed by you. Continue with guest setup in the VM."
             : "macOS desktop confirmed by you. Continue with the guest setup disk in the VM."
     }
 
@@ -676,8 +569,8 @@ final class NativeVMManager: ObservableObject {
         guard isRunning, let runningID else { return }
         desktopReadyVMID = runningID
         preferences.set(runningID.description, forKey: "setup.nativeDesktopReadyVMID")
-        status = runningGuestOS == .ubuntu
-            ? "The verified guest installer is running in Ubuntu."
+        status = runningGuestOS == .debian
+            ? "The verified guest installer is running in Debian."
             : "The verified guest installer is running in the macOS desktop session."
     }
 
@@ -685,8 +578,8 @@ final class NativeVMManager: ObservableObject {
         guard desktopReadyVMID == id else { return }
         desktopReadyVMID = nil
         preferences.removeObject(forKey: "setup.nativeDesktopReadyVMID")
-        status = guestOS(for: id) == .ubuntu
-            ? "Sign in to Ubuntu, then confirm when its desktop appears."
+        status = guestOS(for: id) == .debian
+            ? "Sign in to Debian, then confirm when its desktop appears."
             : "Finish the macOS welcome screens, then confirm when the desktop appears."
     }
 
@@ -929,10 +822,9 @@ final class NativeVMManager: ObservableObject {
         }.value
     }
 
-    func installUbuntu(manual: Bool = false) async -> VirtualMachineID? {
-        guard !isBusy,
-              let imageURL = manual ? manualUbuntuImageURL : ubuntuImageURL else { return nil }
-        if let readinessMessage = manual ? manualUbuntuCreationReadinessMessage : ubuntuCreationReadinessMessage {
+    func installDebian() async -> VirtualMachineID? {
+        guard !isBusy, let imageURL = debianImageURL else { return nil }
+        if let readinessMessage = debianCreationReadinessMessage {
             status = readinessMessage
             return nil
         }
@@ -954,14 +846,9 @@ final class NativeVMManager: ObservableObject {
         let stage = creationRoot.appendingPathComponent(".creating-\(id.description)", isDirectory: true)
         let destination = creationRoot.appendingPathComponent(id.description, isDirectory: true)
         do {
-            let verifiedImage: URL?
-            if manual {
-                verifiedImage = try await UbuntuVMImageService.verifiedManualCachedImage(in: ubuntuCacheDirectory)
-            } else {
-                verifiedImage = try await UbuntuVMImageService.verifiedCachedImage(in: ubuntuCacheDirectory)
-            }
+            let verifiedImage = try await DebianVMImageService.verifiedCachedImage(in: debianCacheDirectory)
             guard verifiedImage == imageURL else {
-                throw UbuntuVMImageError.checksumMismatch
+                throw DebianVMImageError.checksumMismatch
             }
             if let creationStorageValidationMessage {
                 status = creationStorageValidationMessage
@@ -973,54 +860,40 @@ final class NativeVMManager: ObservableObject {
             let sparse = (try? creationRoot.resourceValues(forKeys: [.volumeSupportsSparseFilesKey]))?
                 .volumeSupportsSparseFiles == true
             let requiredGiB = NativeVMStorageCapacity.requiredFreeGiB(
-                diskGiB: resources.diskGiB, guestOS: .ubuntu, supportsSparseFiles: sparse
-            ) + (manual ? 4 : 0)
+                diskGiB: resources.diskGiB, guestOS: .debian, supportsSparseFiles: sparse
+            )
             let capacity = try NativeVMStorageCapacity.availableBytes(at: creationRoot)
             guard capacity >= Int64(requiredGiB) * NativeVMStorageCapacity.bytesPerGiB else {
                 throw NativeVMError.insufficientSpace(requiredGiB)
             }
             try FileManager.default.createDirectory(at: stage, withIntermediateDirectories: false)
-            status = manual ? "Preparing a blank Ubuntu disk and installer…" : "Preparing the Ubuntu disk…"
-            if manual {
-                let diskURL = stage.appendingPathComponent("disk.img")
-                try await UbuntuVMImageService.createBlankDisk(at: diskURL, diskGiB: resources.diskGiB)
-                try FileManager.default.copyItem(at: imageURL, to: stage.appendingPathComponent("installer.iso"))
-                try Data().write(to: stage.appendingPathComponent("manual-install"), options: .atomic)
-                _ = try await ManualUbuntuDNSSeedWriter.ensureSeed(
-                    in: stage, vmID: id,
-                    guestResourcesURL: Bundle.main.bundleURL.appendingPathComponent(
-                        "Contents/Resources/LinuxGuestSetup", isDirectory: true)
-                )
-            } else {
-                try await UbuntuVMImageService.createRawDisk(
-                    from: imageURL, at: stage.appendingPathComponent("disk.img"),
-                    diskGiB: resources.diskGiB,
-                    bundledConverter: bundledUbuntuConverter
-                )
-                let sourceDigest = try Data(contentsOf: imageURL.appendingPathExtension("sha256"))
-                try sourceDigest.write(to: stage.appendingPathComponent("ubuntu-image.sha256"), options: .atomic)
-            }
+            status = "Preparing the Debian disk…"
+            try await DebianVMImageService.createRawDisk(
+                from: imageURL, at: stage.appendingPathComponent("disk.img"),
+                diskGiB: resources.diskGiB,
+                bundledConverter: bundledDebianConverter
+            )
+            let sourceDigest = try Data(contentsOf: DebianVMImageService.cachedDigestURL(in: debianCacheDirectory))
+            try sourceDigest.write(to: stage.appendingPathComponent("debian-image.sha512"), options: .atomic)
             let machineID = VZGenericMachineIdentifier()
             try machineID.dataRepresentation.write(to: stage.appendingPathComponent("machine.bin"), options: .atomic)
             _ = try VZEFIVariableStore(creatingVariableStoreAt: stage.appendingPathComponent("efi-vars.bin"))
-            if !manual {
-                status = "Preparing Ubuntu first-boot setup…"
-                _ = try await LinuxGuestSeedWriter.createSeed(
-                    in: stage, vmID: id,
-                    guestResourcesURL: Bundle.main.bundleURL.appendingPathComponent(
-                        "Contents/Resources/LinuxGuestSetup", isDirectory: true)
-                )
-            }
-            let configuration = try makeUbuntuConfiguration(
+            status = "Preparing Debian first-boot setup…"
+            _ = try await LinuxGuestSeedWriter.createSeed(
+                in: stage, vmID: id,
+                guestResourcesURL: Bundle.main.bundleURL.appendingPathComponent(
+                    "Contents/Resources/LinuxGuestSetup", isDirectory: true)
+            )
+            let configuration = try makeDebianConfiguration(
                 bundle: stage, machineID: machineID, cpuCount: resources.cpuCount,
                 memorySize: UInt64(resources.memoryGiB) * 1_073_741_824,
                 serialLogHandle: nil
             )
             _ = configuration // Validation happens before the bundle is published.
             let manifest = NativeVirtualMachineManifest(
-                id: id, name: "Ubuntu 24.04 · \(id.description.prefix(8))",
-                guestImageVersion: manual ? "Ubuntu Desktop 24.04 LTS ARM64 (manual install)" : "Ubuntu Server 24.04 LTS ARM64",
-                resources: resources, guestOS: .ubuntu
+                id: id, name: "Debian 13 · \(id.description.prefix(8))",
+                guestImageVersion: "Debian 13 ARM64 · Xfce/X11",
+                resources: resources, guestOS: .debian
             )
             let encoder = JSONEncoder()
             encoder.dateEncodingStrategy = .iso8601
@@ -1031,21 +904,19 @@ final class NativeVMManager: ObservableObject {
             try FileManager.default.moveItem(at: stage, to: destination)
             try NativeVMStorageRegistry(defaultRootURL: rootURL).register(manifest, at: destination)
             if isRunning {
-                status = manual
-                    ? "Ubuntu installer VM saved. Shut down the running VM, then start this VM to choose your own account."
-                    : "Ubuntu VM saved. Shut down the running VM, then start Ubuntu. Its console login is in ubuntu-credentials.txt."
+                status = "Debian VM saved. Shut down the running VM, then start Debian. Its console login is in debian-credentials.txt."
                 return id
             }
-            status = manual ? "Starting the Ubuntu installer…" : "Starting the fresh Ubuntu VM…"
+            status = "Starting the fresh Debian VM…"
             try await boot(id, allowWhileInstalling: true)
             return id
         } catch {
             try? FileManager.default.removeItem(at: stage)
             if FileManager.default.fileExists(atPath: destination.appendingPathComponent(NativeVirtualMachineStore.manifestFilename).path) {
-                status = "Ubuntu VM was saved, but could not start: \(error.localizedDescription)"
+                status = "Debian VM was saved, but could not start: \(error.localizedDescription)"
                 return id
             }
-            status = "Ubuntu VM creation failed: \(error.localizedDescription)"
+            status = "Debian VM creation failed: \(error.localizedDescription)"
             return nil
         }
     }
@@ -1187,7 +1058,7 @@ final class NativeVMManager: ObservableObject {
 
     func moveToUTM(_ id: VirtualMachineID) async -> Bool {
         guard guestOS(for: id) == .macOS else {
-            status = "Ubuntu VMs can run only with Tether Host's built-in virtualization."
+            status = "Debian VMs can run only with Tether Host's built-in virtualization."
             return false
         }
         guard !isBusy, !isRunning, !hasOtherHostCopy else {
@@ -1296,18 +1167,8 @@ final class NativeVMManager: ObservableObject {
               manifest.schemaVersion == NativeVirtualMachineManifest.currentSchemaVersion else {
             throw NativeVMError.invalidVM
         }
-        if manifest.guestOS == .ubuntu {
-            await detachCompletedUbuntuInstaller(in: bundle)
-            if FileManager.default.fileExists(atPath: bundle.appendingPathComponent("manual-install").path),
-               FileManager.default.fileExists(atPath: bundle.appendingPathComponent("installer.iso").path) {
-                // Also upgrades manual bundles created before the DNS seed existed.
-                _ = try await ManualUbuntuDNSSeedWriter.ensureSeed(
-                    in: bundle, vmID: id,
-                    guestResourcesURL: Bundle.main.bundleURL.appendingPathComponent(
-                        "Contents/Resources/LinuxGuestSetup", isDirectory: true)
-                )
-            }
-            try await bootUbuntu(id, bundle: bundle, manifest: manifest)
+        if manifest.guestOS == .debian {
+            try await bootDebian(id, bundle: bundle, manifest: manifest)
             return
         }
         guard await prepareGuestDisk() else { throw NativeVMError.guestDiskUnavailable }
@@ -1350,7 +1211,7 @@ final class NativeVMManager: ObservableObject {
         }
     }
 
-    private func bootUbuntu(_ id: VirtualMachineID, bundle: URL,
+    private func bootDebian(_ id: VirtualMachineID, bundle: URL,
                             manifest: NativeVirtualMachineManifest) async throws {
         let machineData = try Data(contentsOf: bundle.appendingPathComponent("machine.bin"))
         guard let machineID = VZGenericMachineIdentifier(dataRepresentation: machineData) else {
@@ -1373,7 +1234,7 @@ final class NativeVMManager: ObservableObject {
         let logHandle = try FileHandle(forWritingTo: serialURL)
         try logHandle.seekToEnd()
         do {
-            let configuration = try makeUbuntuConfiguration(
+            let configuration = try makeDebianConfiguration(
                 bundle: bundle, machineID: machineID, cpuCount: cpuCount,
                 memorySize: UInt64(memoryGiB) * 1_073_741_824,
                 serialLogHandle: logHandle
@@ -1386,20 +1247,16 @@ final class NativeVMManager: ObservableObject {
             serialLogHandle = logHandle
             runningID = id
             isRunning = true
-            runningGuestOS = .ubuntu
+            runningGuestOS = .debian
             shutdownRequested = false
             showsDisplay = true
             markBundleUsed(id)
-            status = isManualUbuntuInstallation(id)
-                ? (isUbuntuInstallerAttached(id)
-                    ? "Ubuntu installer is starting. Complete installation with your own account, then shut down so Tether can verify the disk and eject the installer automatically."
-                    : "Ubuntu is starting from its installed disk.")
-                : "Ubuntu is starting. On first boot, wait while the desktop and guest setup tools are prepared."
+            status = "Debian is starting. On first boot, wait while Xfce, Chromium, and guest setup tools are prepared."
         } catch {
             try? logHandle.close()
             virtualMachine = nil
             showsDisplay = false
-            status = "Could not boot Ubuntu: \(error.localizedDescription)"
+            status = "Could not boot Debian: \(error.localizedDescription)"
             throw error
         }
     }
@@ -1470,7 +1327,6 @@ final class NativeVMManager: ObservableObject {
               let virtualMachine else { return }
         isBusy = true
         forcePowerOffRequested = true
-        if let runningID { markUbuntuStopSafety(runningID, clean: false) }
         status = "Powering off the VM…"
         defer { isBusy = false }
         do {
@@ -1523,10 +1379,10 @@ final class NativeVMManager: ObservableObject {
         #if TETHER_E2E
         let normalizedRoot = rootURL.standardizedFileURL.path
         if rootURLWasOverridden,
-           Bundle.main.bundleIdentifier == "app.tether.ubuntu.e2e",
-           (normalizedRoot == "/tmp/tether-ubuntu-e2e" ||
-            normalizedRoot.hasPrefix("/tmp/tether-ubuntu-e2e/") ||
-            normalizedRoot.hasPrefix("/tmp/tether-ubuntu-e2e-")) {
+           Bundle.main.bundleIdentifier == "app.tether.debian.e2e",
+           (normalizedRoot == "/tmp/tether-debian-e2e" ||
+            normalizedRoot.hasPrefix("/tmp/tether-debian-e2e/") ||
+            normalizedRoot.hasPrefix("/tmp/tether-debian-e2e-")) {
             return false
         }
         #endif
@@ -1570,7 +1426,7 @@ final class NativeVMManager: ObservableObject {
         return configuration
     }
 
-    private func makeUbuntuConfiguration(
+    private func makeDebianConfiguration(
         bundle: URL, machineID: VZGenericMachineIdentifier,
         cpuCount: Int, memorySize: UInt64, serialLogHandle: FileHandle?
     ) throws -> VZVirtualMachineConfiguration {
@@ -1592,36 +1448,21 @@ final class NativeVMManager: ObservableObject {
                                                                   heightInPixels: 1000)]
         configuration.graphicsDevices = [graphics]
         let network = VZVirtioNetworkDeviceConfiguration()
-        network.macAddress = try ubuntuMACAddress(in: bundle)
+        network.macAddress = try debianMACAddress(in: bundle)
         network.attachment = VZNATNetworkDeviceAttachment()
         configuration.networkDevices = [network]
         let disk = try VZDiskImageStorageDeviceAttachment(
             url: bundle.appendingPathComponent("disk.img"), readOnly: false)
-        if FileManager.default.fileExists(atPath: bundle.appendingPathComponent("manual-install").path) {
-            // Prefer the VM disk. A blank disk falls back to USB installation;
-            // after installation the disk must not sit behind its install media.
-            if FileManager.default.fileExists(atPath: bundle.appendingPathComponent("installer.iso").path) {
-                let installer = try VZDiskImageStorageDeviceAttachment(
-                    url: bundle.appendingPathComponent("installer.iso"), readOnly: true)
-                configuration.storageDevices = [VZVirtioBlockDeviceConfiguration(attachment: disk),
-                                                VZUSBMassStorageDeviceConfiguration(attachment: installer)]
-                let dnsSeed = try VZDiskImageStorageDeviceAttachment(
-                    url: ManualUbuntuDNSSeedWriter.seedURL(in: bundle), readOnly: true)
-                configuration.storageDevices.append(VZVirtioBlockDeviceConfiguration(attachment: dnsSeed))
-            } else {
-                configuration.storageDevices = [VZVirtioBlockDeviceConfiguration(attachment: disk)]
-            }
-        } else {
-            let seed = try VZDiskImageStorageDeviceAttachment(
-                url: bundle.appendingPathComponent("seed.iso"), readOnly: true)
-            configuration.storageDevices = [VZVirtioBlockDeviceConfiguration(attachment: disk),
-                                            VZVirtioBlockDeviceConfiguration(attachment: seed)]
+        let seed = try VZDiskImageStorageDeviceAttachment(
+            url: bundle.appendingPathComponent("seed.iso"), readOnly: true)
+        configuration.storageDevices = [VZVirtioBlockDeviceConfiguration(attachment: disk),
+                                        VZVirtioBlockDeviceConfiguration(attachment: seed)]
+        let toolsDisk = Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/Tether Debian Guest Tools.img")
+        guard FileManager.default.fileExists(atPath: toolsDisk.path) else {
+            throw NativeVMError.guestDiskUnavailable
         }
-        let toolsDisk = Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/Tether Ubuntu Guest Tools.iso")
-        if FileManager.default.fileExists(atPath: toolsDisk.path) {
-            let attachment = try VZDiskImageStorageDeviceAttachment(url: toolsDisk, readOnly: true)
-            configuration.storageDevices.append(VZVirtioBlockDeviceConfiguration(attachment: attachment))
-        }
+        let attachment = try VZDiskImageStorageDeviceAttachment(url: toolsDisk, readOnly: true)
+        configuration.storageDevices.append(VZVirtioBlockDeviceConfiguration(attachment: attachment))
         if let serialLogHandle {
             let serial = VZVirtioConsoleDeviceSerialPortConfiguration()
             serial.attachment = VZFileHandleSerialPortAttachment(
@@ -1633,7 +1474,7 @@ final class NativeVMManager: ObservableObject {
         return configuration
     }
 
-    private func ubuntuMACAddress(in bundle: URL) throws -> VZMACAddress {
+    private func debianMACAddress(in bundle: URL) throws -> VZMACAddress {
         let file = bundle.appendingPathComponent("network.mac")
         if FileManager.default.fileExists(atPath: file.path) {
             let stored = try String(contentsOf: file, encoding: .utf8)
@@ -1643,7 +1484,7 @@ final class NativeVMManager: ObservableObject {
                   address.isUnicastAddress else { throw NativeVMError.invalidVM }
             return address
         }
-        // VZ otherwise creates a different MAC on every launch. Ubuntu's
+        // VZ otherwise creates a different MAC on every launch. Debian's
         // persistent network configuration and DHCP identity need one address.
         let address = VZMACAddress.randomLocallyAdministered()
         try Data("\(address.string)\n".utf8).write(to: file, options: .atomic)
@@ -1667,11 +1508,8 @@ final class NativeVMManager: ObservableObject {
 
     fileprivate func guestStopped(_ identity: ObjectIdentifier, error: Error?) {
         guard virtualMachine.map(ObjectIdentifier.init) == identity else { return }
-        let stoppedID = runningID
-        let cleanStop = error == nil && !forcePowerOffRequested
         if let runningID {
             markBundleUsed(runningID)
-            markUbuntuStopSafety(runningID, clean: cleanStop)
         }
         forcePowerOffRequested = false
         isRunning = false
@@ -1683,48 +1521,6 @@ final class NativeVMManager: ObservableObject {
         virtualMachine = nil
         showsDisplay = false
         status = error.map { "The VM stopped: \($0.localizedDescription)" } ?? "The VM is off. Choose Start VM to resume."
-        if cleanStop, let stoppedID {
-            Task { @MainActor [weak self] in
-                guard let self, !self.isRunning, !self.isBusy, !self.hasOtherHostCopy,
-                      let bundle = VirtualMachineBundleLocator(nativeRoot: self.rootURL, utmRoots: [])
-                        .locate(stoppedID, provider: .builtIn) else { return }
-                self.isBusy = true
-                defer { self.isBusy = false }
-                await self.detachCompletedUbuntuInstaller(in: bundle)
-            }
-        }
-    }
-
-    private func markUbuntuStopSafety(_ id: VirtualMachineID, clean: Bool) {
-        guard isManualUbuntuInstallation(id),
-              let bundle = VirtualMachineBundleLocator(nativeRoot: rootURL, utmRoots: [])
-                .locate(id, provider: .builtIn) else { return }
-        let marker = bundle.appendingPathComponent("installer-unclean-stop")
-        if clean { try? FileManager.default.removeItem(at: marker) }
-        else { try? Data().write(to: marker, options: .atomic) }
-    }
-
-    /// Called only while lifecycle operations are reserved and the VM is stopped.
-    /// No guest filesystem is mounted and uncertain completion keeps the ISO.
-    private func detachCompletedUbuntuInstaller(in bundle: URL) async {
-        let fm = FileManager.default
-        let installer = bundle.appendingPathComponent("installer.iso")
-        let ejected = bundle.appendingPathComponent("installer.ejected.iso")
-        guard !isRunning, !hasOtherHostCopy,
-              fm.fileExists(atPath: bundle.appendingPathComponent("manual-install").path),
-              fm.fileExists(atPath: installer.path),
-              !fm.fileExists(atPath: ejected.path),
-              !fm.fileExists(atPath: bundle.appendingPathComponent("installer-unclean-stop").path) else { return }
-        let complete = await Task.detached(priority: .utility) {
-            (try? UbuntuInstallationVerifier.isComplete(diskURL: bundle.appendingPathComponent("disk.img"))) == true
-        }.value
-        guard complete, !isRunning, !hasOtherHostCopy else { return }
-        do {
-            try fm.moveItem(at: installer, to: ejected)
-            status = "Ubuntu installation verified. Its installer was ejected automatically; guest tools remain attached."
-        } catch {
-            status = "Ubuntu is installed, but its installer could not be ejected: \(error.localizedDescription)"
-        }
     }
 
     private func markBundleUsed(_ id: VirtualMachineID) {

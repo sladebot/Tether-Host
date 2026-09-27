@@ -16,7 +16,7 @@ Read these sources before changing the guest setup flow:
 - `scripts/guest/terminal.html` and `scripts/guest/vendor/xterm/`: embedded console used for interactive tools.
 - `TetherHost/Resources/GuestSetup/Set up Tether Guest.command`: stage execution, guest identity checks, dependency setup, and verification.
 - `scripts/guest/build-guest-installer.sh`: packages the guide with its backend resources.
-- `scripts/guest/build-linux-tools.sh` and `TetherHost/Resources/LinuxGuestSetup/`: current Ubuntu tools media and backend.
+- `scripts/guest/build-linux-tools.sh` and `TetherHost/Resources/LinuxGuestSetup/`: current Debian tools media and backend.
 
 Reuse the macOS workflow and separation between presentation and execution. Do not copy its platform-specific commands into Linux. An embedded console is useful for tools that require a TTY; users should not have to launch Terminal or assemble commands themselves.
 
@@ -45,7 +45,7 @@ Keep OS-specific execution behind the same conceptual stages:
 
 Give each backend stage a stable identifier, prerequisite checks, a repeatable action, and a verification result. Use structured progress events separately from arbitrary command output. Exit status plus verification determines success; parsing a reassuring log line is insufficient. Prevent overlapping executions and invalidate downstream verification after changes.
 
-### 2. Refactor the Ubuntu backend
+### 2. Refactor the Debian backend
 
 Split `LinuxGuestSetup/setup.sh` into individually runnable stages while preserving its existing full-run entry point for diagnostics. Keep interactive tools on a real PTY. Install a usable `hermes` command in the guest user's PATH and verify it in a fresh shell; finding a private virtualenv binary alone does not resolve “command not found.”
 
@@ -57,11 +57,11 @@ Implement a native GTK guide with an embedded VTE console for interactive comman
 
 Add retry, resume, cancellation, process-exit handling, and an explicit return from browser sign-in. Cancellation must not kill unrelated guest processes or interrupt a package database transaction blindly. Explain when a current package operation must finish before stopping.
 
-Do not assume GTK Python bindings, VTE, polkit, FUSE, or desktop executable-launch behavior are available. Validate the chosen runtime and launcher on a clean supported Ubuntu Desktop image before committing to packaging. Prefer a single ARM64 executable/AppImage containing the guide and backend resources. If external runtime dependencies prevent a true one-file launch, resolve them in packaging or show a graphical bootstrap; do not label a shell script as a standalone binary.
+Do not assume GTK Python bindings, VTE, polkit, FUSE, or desktop executable-launch behavior are available. Validate the chosen runtime and launcher on a clean supported Debian Desktop image before committing to packaging. Prefer a single ARM64 executable/AppImage containing the guide and backend resources. If external runtime dependencies prevent a true one-file launch, resolve them in packaging or show a graphical bootstrap; do not label a shell script as a standalone binary.
 
 ### 4. Package and expose the installer
 
-Put one clearly named launchable installer on `TETHERUBUNTU`, with version information and only necessary supporting documentation. Keep the macOS `.app` on its guest-tools disk. Test opening from read-only mounted media in the stock desktop file manager, including executable permissions, no-exec mounts, and any desktop trust prompts. No manual chmod, sudo command, or terminal launch should be required by the normal flow.
+Put one clearly named launchable installer on `TETHERTOOLS`, with version information and only necessary supporting documentation. Keep the macOS `.app` on its guest-tools disk. Test opening from read-only mounted media in the stock desktop file manager, including executable permissions, no-exec mounts, and any desktop trust prompts. No manual chmod, sudo command, or terminal launch should be required by the normal flow.
 
 Install a persistent application-launcher entry so users can reopen the guide without the tools disk. Embed backend resources from the same build. Display the installer version and record it in diagnostics. Update host onboarding copy to point to the graphical entry point.
 
@@ -69,16 +69,16 @@ Install a persistent application-launcher entry so users can reopen the guide wi
 
 - Check DNS and repository/HTTPS access before downloads. Distinguish missing connectivity, broken DNS, and repository/package failures.
 - Preserve working DHCP DNS and active VPN/Tailscale split DNS. Scope recovery to the guest; do not silently change the physical host's network settings.
-- Ubuntu live installation must retain recovery across DHCP renewals and installer network reconfiguration. A one-time `resolvectl` override is insufficient. Maintain the versioned manual DNS seed, NetworkManager recovery, and reconnection checks.
+- Debian live installation must retain recovery across DHCP renewals and installer network reconfiguration. A one-time `resolvectl` override is insufficient. Maintain the versioned manual DNS seed, NetworkManager recovery, and reconnection checks.
 - macOS guest setup occurs after Apple's restore process. Do not claim guest DNS repair covers host IPSW downloads or `VZMacOSInstaller` networking.
 - Keep power controls per VM. Never stop, reset, or replace another VM as part of setup.
-- Treat Ubuntu OS installation media and Tether guest-tools media separately. Automatically detach OS installation media only after reliable completion checks, preserve the image for manual cleanup, and keep guest tools available for onboarding.
-- Fix and regression-test the known completion-detector false negative: a successfully installed Ubuntu VM reached the Jarvis login screen but retained `installer.iso`. Do not weaken checks to disk size, VM boot, or existence of a single file.
+- Treat Debian OS installation media and Tether guest-tools media separately. Automatically detach OS installation media only after reliable completion checks, preserve the image for manual cleanup, and keep guest tools available for onboarding.
+- Fix and regression-test the known completion-detector false negative: a successfully installed Debian VM reached the Jarvis login screen but retained `installer.iso`. Do not weaken checks to disk size, VM boot, or existence of a single file.
 - Host status must reflect installed OS/guest setup readiness rather than claiming “installer starting” solely because an ISO remains attached.
 
 ### 6. Validate and deliver
 
-Test the guide on a clean Ubuntu VM and the macOS reference flow, not only mocked commands. Cover fresh launch, missing dependencies, working/broken DNS, network reconnection, cancelled authentication, failed download, retry, restart/resume, existing Hermes data, and a fresh-shell `hermes` command.
+Test the guide on a clean Debian VM and the macOS reference flow, not only mocked commands. Cover fresh launch, missing dependencies, working/broken DNS, network reconnection, cancelled authentication, failed download, retry, restart/resume, existing Hermes data, and a fresh-shell `hermes` command.
 
 Verify actual guest service health, authenticated host connectivity, computer-use capability, optional clipboard transfers, and persistence across guest restart. Hand off sign-in and new passwords to the user, then continue verification. Report untested steps explicitly; DNS readiness or a compiled app is not full end-to-end completion.
 
@@ -88,10 +88,10 @@ Keep user disks intact during upgrades. For an authorized fresh reset, preserve 
 
 ## Current implementation status
 
-Build 70 implements the Ubuntu GTK/VTE guide, staged backend, and single ARM64 ELF launcher with embedded resources. The tools disk now presents that executable instead of loose scripts. Unit tests, packaging, and signature checks pass. Validate graphical launch, polkit, interactive stages, and authenticated end-to-end connection in the actual Ubuntu guest before claiming the full workflow is verified. The macOS guide remains the reference implementation.
+Build 70 implements the Debian GTK/VTE guide, staged backend, and single ARM64 ELF launcher with embedded resources. The tools disk now presents that executable instead of loose scripts. Unit tests, packaging, and signature checks pass. Validate graphical launch, polkit, interactive stages, and authenticated end-to-end connection in the actual Debian guest before claiming the full workflow is verified. The macOS guide remains the reference implementation.
 
 Build 71 lesson: test the guest guide at the actual short VM viewport, including approximately 1024×494 usable pixels. Put primary actions in a fixed footer outside scrolling step/detail panes; size the window to the monitor work area. Each stage needs an explicit action and a clear prerequisite message. Do not treat a successful launch as evidence that its controls are reachable.
 
-Clipboard is a core setup requirement (user correction after build 71). Enable the guest clipboard bridge during normal guest-tool preparation, before Tailscale/model sign-in. Show its readiness and retry controls. Support the default Ubuntu desktop session without asking users to switch to X11 or find a separate hidden launcher. Preserve explicit per-transfer host actions; do not continuously synchronize or persist clipboard contents. Verify Mac-to-VM and VM-to-Mac text, embedded-terminal copy shortcuts, and persistence after a guest restart.
+Clipboard is a core setup requirement (user correction after build 71). Enable the guest clipboard bridge during normal guest-tool preparation, before Tailscale/model sign-in. Show its readiness and retry controls. Support the default Debian desktop session without asking users to switch to X11 or find a separate hidden launcher. Preserve explicit per-transfer host actions; do not continuously synchronize or persist clipboard contents. Verify Mac-to-VM and VM-to-Mac text, embedded-terminal copy shortcuts, and persistence after a guest restart.
 
 Administrator debugging requirement: normal VM configuration must not include a host directory share. A future debug share must be off by default and require explicit administrator authorization, expose only a dedicated log directory, redact credentials, and detach when disabled. Outbound DNS/internet access is separate from host filesystem access. Keep installer logs inside the guest unless an explicitly authorized debug share is present.

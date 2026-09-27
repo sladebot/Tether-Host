@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Graphical Ubuntu guest setup. Runs as the desktop user, never as root."""
+"""Graphical Debian guest setup. Runs as the desktop user, never as root."""
 
 import codecs
 import json
@@ -21,7 +21,7 @@ RESOURCE_DIR = Path(__file__).resolve().parent
 HOME = Path.home()
 COMPUTER_USE_SIGNOUT_MARKER = HOME / ".local/share/tether-guest/computer-use.signout-required"
 COMPUTER_USE_SIGNOUT_GUIDANCE = (
-    "Ubuntu installed the desktop control helper. Sign out of Ubuntu and sign back in to activate it. "
+    "Debian installed the desktop control helper. Sign out of Debian and sign back in to activate it. "
     "Then reopen Tether Guest Installer and retry Enable computer use."
 )
 
@@ -47,7 +47,7 @@ def runtime_error(message):
 
 def main():
     if os.geteuid() == 0 or os.getuid() < 1000:
-        runtime_error("Sign in to Ubuntu with your normal desktop account, then open Tether Guest Installer again.")
+        runtime_error("Sign in to Debian with your normal desktop account, then open Tether Guest Installer again.")
         return 1
     if not (RESOURCE_DIR / "update-guest-tools.sh").is_file():
         runtime_error("Installer resources are missing. Open the original Tether Guest Installer again.")
@@ -57,7 +57,7 @@ def main():
         gi.require_version("Gtk", "3.0")
         from gi.repository import Gtk, GLib, Gdk
     except (ImportError, ValueError) as error:
-        runtime_error("Ubuntu's GTK 3 Python runtime is missing. Install python3-gi and gir1.2-gtk-3.0, then reopen this installer. "
+        runtime_error("Debian's GTK 3 Python runtime is missing. Install python3-gi and gir1.2-gtk-3.0, then reopen this installer. "
                       + str(error))
         return 1
 
@@ -185,7 +185,7 @@ def main():
             self.add(outer)
             hero = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
             hero.get_style_context().add_class("hero")
-            heading = Gtk.Label(label="Set up Tether in this Ubuntu VM", xalign=0)
+            heading = Gtk.Label(label="Set up Tether in this Debian VM", xalign=0)
             heading.get_style_context().add_class("hero-title")
             hero.pack_start(heading, False, False, 0)
             sub = Gtk.Label(label=f"One guide for the guest connection  ·  Version {installer_version()}", xalign=0)
@@ -271,19 +271,19 @@ def main():
             console_tools.set_max_children_per_line(2)
             content.pack_start(console_tools, False, False, 0)
             self.copy_button = Gtk.Button(label="Copy selected text")
-            self.copy_button.set_tooltip_text("Copy a selection to this Ubuntu VM's clipboard (Ctrl+Shift+C).")
+            self.copy_button.set_tooltip_text("Copy a selection to this Debian VM's clipboard (Ctrl+Shift+C).")
             self.copy_button.connect("clicked", self.copy_terminal_selection)
             console_tools.add(self.copy_button)
             self.paste_button = Gtk.Button(label="Paste")
-            self.paste_button.set_tooltip_text("Paste from this Ubuntu VM's clipboard into the console (Ctrl+Shift+V).")
+            self.paste_button.set_tooltip_text("Paste from this Debian VM's clipboard into the console (Ctrl+Shift+V).")
             self.paste_button.connect("clicked", self.paste_terminal_clipboard)
             console_tools.add(self.paste_button)
             self.open_login_button = Gtk.Button(label="Open Tailscale sign-in")
-            self.open_login_button.set_tooltip_text("Open the sign-in link shown by Tailscale in this Ubuntu VM.")
+            self.open_login_button.set_tooltip_text("Open the sign-in link shown by Tailscale in this Debian VM.")
             self.open_login_button.connect("clicked", self.open_tailscale_login)
             console_tools.add(self.open_login_button)
             self.copy_login_button = Gtk.Button(label="Copy sign-in link")
-            self.copy_login_button.set_tooltip_text("Copy the sign-in link to Ubuntu's clipboard, then use Tether Host to copy VM text to Mac.")
+            self.copy_login_button.set_tooltip_text("Copy the sign-in link to Debian's clipboard, then use Tether Host to copy VM text to Mac.")
             self.copy_login_button.connect("clicked", self.copy_tailscale_login)
             console_tools.add(self.copy_login_button)
 
@@ -363,9 +363,9 @@ def main():
                     self.activity_label.set_text(COMPUTER_USE_SIGNOUT_GUIDANCE if signout_needed else
                                                  "Ready to run this step. Completed steps are checked again when run.")
                 else:
-                    self.activity_label.set_text("Prepare guest tools first. Ubuntu will ask for administrator approval.")
+                    self.activity_label.set_text("Prepare guest tools first. Debian will ask for administrator approval.")
             elif self.phase == "bootstrap":
-                self.activity_label.set_text("Preparing guest tools. Approve the Ubuntu administrator prompt when it appears.")
+                self.activity_label.set_text("Preparing guest tools. Approve the Debian administrator prompt when it appears.")
             elif self.phase == "stage":
                 self.activity_label.set_text("Waiting for you in the console…" if stage.interactive else
                                              "Working on this step…")
@@ -419,7 +419,7 @@ def main():
                 buffer.delete(buffer.get_start_iter(), buffer.get_iter_at_offset(buffer.get_char_count() - 100_000))
             self.bootstrap_text.scroll_to_iter(buffer.get_end_iter(), 0, False, 0, 0)
             if "Get:" in chunk or "Fetched " in chunk:
-                self.activity_label.set_text("Downloading Ubuntu packages…")
+                self.activity_label.set_text("Downloading Debian packages…")
             elif "Setting up " in chunk or "Unpacking " in chunk:
                 self.activity_label.set_text("Installing guest tools…")
             return False
@@ -442,7 +442,7 @@ def main():
                     close_fds=True)
             except OSError as error:
                 self.process = None
-                self.fail(f"Could not open Ubuntu authentication: {error}", "bootstrap")
+                self.fail(f"Could not open Debian authentication: {error}", "bootstrap")
                 return
 
             def read_output(process):
@@ -640,7 +640,7 @@ def main():
                 copy_item.set_sensitive(terminal.get_has_selection())
                 copy_item.connect("activate", self.copy_terminal_selection)
                 menu.append(copy_item)
-                paste_item = self.Gtk.MenuItem.new_with_label("Paste from Ubuntu clipboard")
+                paste_item = self.Gtk.MenuItem.new_with_label("Paste from Debian clipboard")
                 paste_item.set_sensitive(self.phase in {"stage", "stopping"})
                 paste_item.connect("activate", self.paste_terminal_clipboard)
                 menu.append(paste_item)
@@ -695,7 +695,7 @@ def main():
                 return
             clipboard = self.Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
             clipboard.set_text(self.login_url, -1)
-            self.activity_label.set_text("Sign-in link copied in Ubuntu. In Tether Host, choose Clipboard → Copy VM text to Mac.")
+            self.activity_label.set_text("Sign-in link copied in Debian. In Tether Host, choose Clipboard → Copy VM text to Mac.")
 
         def cancel(self, _button):
             if self.phase == "bootstrap":
