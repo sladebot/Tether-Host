@@ -16,19 +16,22 @@ public enum LinuxGuestSeedError: LocalizedError {
     }
 }
 
-/// Creates a NoCloud seed for Debian's first boot. The one-time console
-/// password is generated per VM and saved beside the VM with owner-only access.
+/// Creates a NoCloud seed for Debian's first boot. The seed contains only a
+/// salted password hash; the plaintext password is never written to disk.
 public enum LinuxGuestSeedWriter {
-    public static func credentialsURL(in bundle: URL) -> URL {
-        bundle.appendingPathComponent("debian-credentials.txt")
-    }
-
     public static func createSeed(
         in bundle: URL,
         vmID: VirtualMachineID,
+        username: String,
+        password: String,
         guestResourcesURL: URL?
     ) async throws -> URL {
-        try await Task.detached(priority: .utility) {
+        guard DebianAccountSetup.usernameError(username) == nil,
+              DebianAccountSetup.passwordError(password, confirmation: password) == nil else {
+            throw LinuxGuestSeedError.creationFailed
+        }
+        let passwordHash = DebianPasswordHash.make(password)
+        return try await Task.detached(priority: .utility) {
             let fm = FileManager.default
             guard bundle.isFileURL,
                   (try? bundle.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey]))?.isDirectory == true,
@@ -39,15 +42,16 @@ public enum LinuxGuestSeedWriter {
             guard fm.isExecutableFile(atPath: utility.path) else { throw LinuxGuestSeedError.missingDiskUtility }
             let stage = bundle.appendingPathComponent(".seed-\(UUID().uuidString)", isDirectory: true)
             let destination = bundle.appendingPathComponent("seed.iso")
-            let password = UUID().uuidString.replacingOccurrences(of: "-", with: "")
             try fm.createDirectory(at: stage, withIntermediateDirectories: false)
             defer { try? fm.removeItem(at: stage) }
+            try fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: stage.path)
             try Data("instance-id: \(vmID.description)\nlocal-hostname: debian-tether-vm\n".utf8)
                 .write(to: stage.appendingPathComponent("meta-data"), options: .atomic)
             try Data("version: 2\nethernets:\n  tether:\n    match:\n      name: \"en*\"\n    dhcp4: true\n    dhcp6: false\n".utf8)
                 .write(to: stage.appendingPathComponent("network-config"), options: .atomic)
-            try Data(userData(password: password).utf8)
+            try Data(userData(username: username, passwordHash: passwordHash).utf8)
                 .write(to: stage.appendingPathComponent("user-data"), options: .atomic)
+            try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: stage.appendingPathComponent("user-data").path)
             if let guestResourcesURL,
                (try? guestResourcesURL.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true {
                 for filename in ["update-guest-tools.sh", "setup.sh", "session-start.sh", "keep-awake.sh", "clipboard-toggle.sh", "dns-fallback.sh", "linux_guest_setup.py", "guest_installer.py", "installer_flow.py", "installer_logging.py", "vsock_helper.py", "clipboard_broker.py", "components.json", "README.txt"] {
@@ -76,33 +80,30 @@ public enum LinuxGuestSeedWriter {
                 try? fm.removeItem(at: destination)
                 throw LinuxGuestSeedError.creationFailed
             }
-            let credentials = "Debian console user: tether\nOne-time password: \(password)\nDebian requires you to choose a private password at first login.\n"
-            try Data(credentials.utf8).write(to: credentialsURL(in: bundle), options: .atomic)
-            try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: credentialsURL(in: bundle).path)
             try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: destination.path)
             return destination
         }.value
     }
 
-    static func userData(password: String) -> String {
+    static func userData(username: String, passwordHash: String) -> String {
         """
         #cloud-config
         hostname: debian-tether-vm
         disable_root: true
         ssh_pwauth: false
         users:
-          - name: tether
+          - name: \(username)
             gecos: Tether VM User
             groups: [adm, sudo, video, plugdev]
             shell: /bin/bash
             lock_passwd: false
             sudo: "ALL=(ALL) ALL"
         chpasswd:
-          expire: true
+          expire: false
           users:
-            - name: tether
-              password: \(password)
-              type: text
+            - name: \(username)
+              password: '\(passwordHash)'
+              type: hash
         # Xfce and LightDM give CuaDriver an X11 desktop within a 24 GiB VM.
         runcmd:
           - 'set -e'
@@ -132,6 +133,11 @@ public enum LinuxGuestSeedWriter {
           - [systemctl, enable, --now, lightdm.service]
           - [sh, -c, "command -v chromium >/dev/null && dpkg-query -W -f='${Status}' chromium 2>/dev/null | grep -qx 'install ok installed' && systemctl is-active --quiet lightdm.service && systemctl is-active --quiet tether-vsock.service && test -S /tmp/.X11-unix/X0 && { [ ! -c /dev/hvc0 ] || echo TETHER_CLOUD_INIT_DONE > /dev/hvc0; }"]
         write_files:
+          - path: /etc/tether-guest/user
+            owner: root:root
+            permissions: '0644'
+            content: |
+              \(username)
           - path: /usr/share/applications/tether-text-clipboard.desktop
             owner: root:root
             permissions: '0644'
@@ -190,8 +196,8 @@ public enum LinuxGuestSeedWriter {
 
               [Service]
               Type=simple
-              User=tether
-              Group=tether
+              User=\(username)
+              Group=\(username)
               ExecStart=/usr/bin/python3 /opt/tether-guest/vsock_helper.py
               Restart=on-failure
               RestartSec=3

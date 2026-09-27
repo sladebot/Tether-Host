@@ -484,15 +484,6 @@ final class NativeVMManager: ObservableObject {
         return manifest.guestOS
     }
 
-    func revealDebianCredentials(for id: VirtualMachineID? = nil) {
-        guard let id = id ?? runningID, guestOS(for: id) == .debian,
-              let bundle = VirtualMachineBundleLocator(nativeRoot: rootURL, utmRoots: [])
-                .locate(id, provider: .builtIn) else { return }
-        let credentials = LinuxGuestSeedWriter.credentialsURL(in: bundle)
-        guard FileManager.default.fileExists(atPath: credentials.path) else { return }
-        NSWorkspace.shared.activateFileViewerSelecting([credentials])
-    }
-
     private var pinnedHostImageURL: URL {
         restoreCacheDirectory.appendingPathComponent("UniversalMac_26.2_25C56_Restore.ipsw")
     }
@@ -822,8 +813,13 @@ final class NativeVMManager: ObservableObject {
         }.value
     }
 
-    func installDebian() async -> VirtualMachineID? {
+    func installDebian(username: String, password: String) async -> VirtualMachineID? {
         guard !isBusy, let imageURL = debianImageURL else { return nil }
+        guard DebianAccountSetup.usernameError(username) == nil,
+              DebianAccountSetup.passwordError(password, confirmation: password) == nil else {
+            status = "Enter a valid Debian username and password before creating the VM."
+            return nil
+        }
         if let readinessMessage = debianCreationReadinessMessage {
             status = readinessMessage
             return nil
@@ -880,7 +876,7 @@ final class NativeVMManager: ObservableObject {
             _ = try VZEFIVariableStore(creatingVariableStoreAt: stage.appendingPathComponent("efi-vars.bin"))
             status = "Preparing Debian first-boot setup…"
             _ = try await LinuxGuestSeedWriter.createSeed(
-                in: stage, vmID: id,
+                in: stage, vmID: id, username: username, password: password,
                 guestResourcesURL: Bundle.main.bundleURL.appendingPathComponent(
                     "Contents/Resources/LinuxGuestSetup", isDirectory: true)
             )
@@ -904,7 +900,7 @@ final class NativeVMManager: ObservableObject {
             try FileManager.default.moveItem(at: stage, to: destination)
             try NativeVMStorageRegistry(defaultRootURL: rootURL).register(manifest, at: destination)
             if isRunning {
-                status = "Debian VM saved. Shut down the running VM, then start Debian. Its console login is in debian-credentials.txt."
+                status = "Debian VM saved. Shut down the running VM, then sign in with your chosen Debian account."
                 return id
             }
             status = "Starting the fresh Debian VM…"

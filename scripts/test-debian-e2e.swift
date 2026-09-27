@@ -66,7 +66,7 @@ struct DebianE2E {
             }
             print("Existing isolated Debian VM is displayed; create \(root.appendingPathComponent("shutdown.request").path) to request guest shutdown.")
             if CommandLine.arguments.contains("--diagnose") {
-                let password = try readOneTimePassword(bundle.appendingPathComponent("debian-credentials.txt"))
+                let password = try readConsolePassword()
                 _ = try await console.login(password: password, newPassword: nil, timeoutSeconds: 300)
                 try console.send("cloud-init status --long")
                 try await console.waitFor("tether@debian-tether-vm", timeoutSeconds: 45)
@@ -97,7 +97,7 @@ struct DebianE2E {
                 print("Cloud-init diagnostics captured in isolated serial.log.")
             }
             if CommandLine.arguments.contains("--repair-greeter") {
-                let password = try readOneTimePassword(bundle.appendingPathComponent("debian-credentials.txt"))
+                let password = try readConsolePassword()
                 _ = try await console.login(password: password, newPassword: nil, timeoutSeconds: 300)
                 try console.send("sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends lightdm-gtk-greeter")
                 try await console.waitFor("[sudo] password", timeoutSeconds: 30)
@@ -110,7 +110,7 @@ struct DebianE2E {
                 print("Isolated Debian LightDM/greeter repair passed.")
             }
             if CommandLine.arguments.contains("--clipboard-e2e") {
-                let password = try readOneTimePassword(bundle.appendingPathComponent("debian-credentials.txt"))
+                let password = try readConsolePassword()
                 _ = try await console.login(password: password, newPassword: nil, timeoutSeconds: 300)
                 try await console.check("getent passwd tetherexpiryprobe >/dev/null && echo PROBE_''PRESENT || echo PROBE_''CLEANED",
                                         pass: "PROBE_CLEANED", fail: "PROBE_PRESENT", timeoutSeconds: 30)
@@ -181,27 +181,20 @@ struct DebianE2E {
             manager.creationMemoryGiB = 4
             manager.creationDiskGiB = 24
             print("Creating and booting isolated Debian VM…")
-            guard let id = await manager.installDebian() else { throw Failure(manager.status) }
+            let password = UUID().uuidString.replacingOccurrences(of: "-", with: "")
+            guard let id = await manager.installDebian(username: "tether", password: password) else { throw Failure(manager.status) }
             vmID = id
             guard manager.isRunning, manager.runningGuestOS == .debian,
                   manager.runningVMID == id else { throw Failure(manager.status) }
             let bundle = vmRoot.appendingPathComponent(id.description, isDirectory: true)
             let serial = bundle.appendingPathComponent("serial.log")
-            let credentials = bundle.appendingPathComponent("debian-credentials.txt")
-            guard FileManager.default.fileExists(atPath: serial.path),
-                  FileManager.default.fileExists(atPath: credentials.path) else {
-                throw Failure("Missing serial output or one-time credentials")
+            guard FileManager.default.fileExists(atPath: serial.path) else {
+                throw Failure("Missing serial output")
             }
-            let password = try readOneTimePassword(credentials)
-            let newPassword = UUID().uuidString.replacingOccurrences(of: "-", with: "")
             let console = Console(serial: serial, input: input.fileHandleForWriting)
             print("Waiting for Debian serial console and cloud-init…")
-            let activePassword = try await console.login(password: password, newPassword: newPassword,
+            let activePassword = try await console.login(password: password, newPassword: nil,
                                                          timeoutSeconds: 900)
-            try Data("Debian console user: tether\nCurrent password: \(activePassword)\n".utf8)
-                .write(to: credentials, options: .atomic)
-            try FileManager.default.setAttributes([.posixPermissions: 0o600],
-                                                  ofItemAtPath: credentials.path)
             try await console.check("for i in $(seq 1 900); do test -f /var/lib/cloud/instance/boot-finished && break; sleep 1; done; test -f /var/lib/cloud/instance/boot-finished && echo CLOUD''_OK || echo CLOUD''_FAIL",
                                     pass: "CLOUD_OK", fail: "CLOUD_FAIL", timeoutSeconds: 900)
             try await checkDebianNetwork(console: console, prefix: "")
@@ -236,7 +229,7 @@ struct DebianE2E {
             while manager.isRunning && Date() < stopDeadline { try await Task.sleep(for: .seconds(2)) }
             if manager.isRunning { await manager.forcePowerOff() }
             let log = try String(contentsOf: serial, encoding: .utf8)
-            guard !log.contains(password), !log.contains(newPassword) else {
+            guard !log.contains(password) else {
                 throw Failure("Console log contains a test password; inspect privately")
             }
             let disk = bundle.appendingPathComponent("disk.img")
@@ -375,16 +368,14 @@ struct DebianE2E {
         }
     }
 
-    private static func readOneTimePassword(_ file: URL) throws -> String {
-        let text = try String(contentsOf: file, encoding: .utf8)
-        guard let line = text.split(separator: "\n").first(where: {
-            $0.hasPrefix("One-time password: ") || $0.hasPrefix("Current password: ")
-        }),
-              let value = line.split(separator: ":", maxSplits: 1).last.map(String.init),
-              !value.trimmingCharacters(in: .whitespaces).isEmpty else {
-            throw Failure("Cannot read one-time console password")
+    private static func readConsolePassword() throws -> String {
+        guard let pointer = getpass("Debian password: ") else {
+            throw Failure("Cannot read Debian password from the terminal")
         }
-        return value.trimmingCharacters(in: .whitespaces)
+        let password = String(cString: pointer)
+        memset(pointer, 0, strlen(pointer))
+        guard !password.isEmpty else { throw Failure("Debian password is empty") }
+        return password
     }
 }
 

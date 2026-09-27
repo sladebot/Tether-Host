@@ -24,10 +24,32 @@ final class LinuxGuestSeedTests: XCTestCase {
         XCTAssertEqual(decoded.id, id)
     }
 
-    func testCloudInitProvidesConsoleUserAndDoesNotCopySeedSecretsToGuestSetup() throws {
-        let seed = LinuxGuestSeedWriter.userData(password: "TESTONEUSEPASSWORD")
-        XCTAssertTrue(seed.contains("password: TESTONEUSEPASSWORD"))
-        XCTAssertTrue(seed.contains("expire: true"))
+    func testDebianAccountValidation() {
+        XCTAssertNil(DebianAccountSetup.usernameError("souranil_2"))
+        for invalid in ["", "root", "Uppercase", "bad name", "bad:name", "user\nroot"] {
+            XCTAssertNotNil(DebianAccountSetup.usernameError(invalid), invalid)
+        }
+        XCTAssertNil(DebianAccountSetup.passwordError("long!Password123", confirmation: "long!Password123"))
+        XCTAssertNotNil(DebianAccountSetup.passwordError("short", confirmation: "short"))
+        XCTAssertNotNil(DebianAccountSetup.passwordError("long!Password123", confirmation: "different"))
+        XCTAssertNotNil(DebianAccountSetup.passwordError("long!Password\n123", confirmation: "long!Password\n123"))
+    }
+
+    func testSHA512CryptMatchesOpenSSLVector() {
+        XCTAssertEqual(DebianPasswordHash.make("Hello world!", salt: "saltstring"),
+                       "$6$saltstring$svn8UoSVapNtMuq1ukKS4tPQd8iKwSMHWjl/O817G3uBnIFNjnQJuesI68u4OTLiBFdcbYEdFCoEOfaS35inz1")
+    }
+
+    func testCloudInitUsesChosenUserAndOnlyPasswordHash() throws {
+        let hash = DebianPasswordHash.make("TESTONEUSEPASSWORD", salt: "0123456789abcdef")
+        let seed = LinuxGuestSeedWriter.userData(username: "alice", passwordHash: hash)
+        XCTAssertTrue(seed.contains("name: alice"))
+        XCTAssertTrue(seed.contains("User=alice"))
+        XCTAssertTrue(seed.contains("Group=alice"))
+        XCTAssertTrue(seed.contains("/etc/tether-guest/user"))
+        XCTAssertTrue(seed.contains("password: '\(hash)'"))
+        XCTAssertFalse(seed.contains("TESTONEUSEPASSWORD"))
+        XCTAssertTrue(seed.contains("expire: false"))
         XCTAssertTrue(seed.contains("ssh_pwauth: false"))
         XCTAssertTrue(seed.contains("--no-install-recommends"))
         XCTAssertTrue(seed.contains("tether-vsock.service"))
@@ -67,12 +89,32 @@ final class LinuxGuestSeedTests: XCTestCase {
         try FileManager.default.createDirectory(at: bundle, withIntermediateDirectories: false)
         do {
             _ = try await LinuxGuestSeedWriter.createSeed(
-                in: bundle, vmID: VirtualMachineID(rawValue: UUID()), guestResourcesURL: nil
+                in: bundle, vmID: VirtualMachineID(rawValue: UUID()), username: "alice",
+                password: "long!Password123", guestResourcesURL: nil
             )
             XCTFail("Expected missing guest resources to be rejected")
         } catch LinuxGuestSeedError.missingResources {
             XCTAssertFalse(FileManager.default.fileExists(atPath: bundle.appendingPathComponent("seed.iso").path))
         }
+    }
+
+    func testCreatedSeedKeepsPlaintextOutOfBundle() async throws {
+        let bundle = FileManager.default.temporaryDirectory
+            .appendingPathComponent("tether-private-seed-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: bundle) }
+        try FileManager.default.createDirectory(at: bundle, withIntermediateDirectories: false)
+        let resources = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Resources/LinuxGuestSetup", isDirectory: true)
+        let password = "DoNotPersistThis123!"
+        let seed = try await LinuxGuestSeedWriter.createSeed(
+            in: bundle, vmID: VirtualMachineID(rawValue: UUID()), username: "alice",
+            password: password, guestResourcesURL: resources
+        )
+        let bytes = try Data(contentsOf: seed)
+        XCTAssertNil(bytes.range(of: Data(password.utf8)))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: bundle.appendingPathComponent("debian-credentials.txt").path))
+        XCTAssertEqual(try FileManager.default.attributesOfItem(atPath: seed.path)[.posixPermissions] as? Int, 0o600)
     }
 
 }

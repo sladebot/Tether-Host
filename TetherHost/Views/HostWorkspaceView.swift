@@ -13,6 +13,9 @@ struct HostWorkspaceView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var showsVMConfiguration = false
     @State private var creationGuestOS: NativeGuestOS = .macOS
+    @State private var debianUsername = ""
+    @State private var debianPassword = ""
+    @State private var debianPasswordConfirmation = ""
     @State private var showToken = false
     @State private var showsSetupPanel = true
     @State private var autoCollapsedForCurrentRun = false
@@ -112,6 +115,9 @@ struct HostWorkspaceView: View {
                 showsVMConfiguration = false
                 showsSetupPanel = true
                 if isVMFullScreen { fullScreenWindow?.toggleFullScreen(nil) }
+            } else {
+                debianPassword = ""
+                debianPasswordConfirmation = ""
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didExitFullScreenNotification)) { notification in
@@ -288,12 +294,9 @@ struct HostWorkspaceView: View {
                         .buttonStyle(.borderedProminent)
                 } else if model.designatedVMIsRunning {
                     Text(selectedGuestIsDebian
-                         ? "Debian prepares guest setup on its first boot. Sign in as tether with the saved VM password, then open Tether Guest Setup."
+                         ? "Debian prepares guest setup on its first boot. Sign in with the username and password you chose when creating the VM, then open Tether Guest Installer."
                          : "Finish the macOS welcome screens in the VM. When you can see the desktop, confirm it here.")
                         .foregroundStyle(.secondary)
-                    if selectedGuestIsDebian {
-                        Button("Show Debian login details") { manager.revealDebianCredentials() }
-                    }
                     if model.providerSetup.provider == .builtIn {
                         Button("Desktop is ready") { manager.confirmDesktopReady() }
                             .buttonStyle(.borderedProminent)
@@ -547,6 +550,24 @@ struct HostWorkspaceView: View {
                                 .fixedSize(horizontal: false, vertical: true)
                             Divider().padding(.vertical, 4)
                             VMCreationSettingsView(manager: manager, guestOS: creationGuestOS)
+                            if creationGuestOS == .debian {
+                                VStack(alignment: .leading, spacing: 8) {
+                                    Text("Your Debian account").font(.headline)
+                                    Text("Choose the username and password you will use to sign in to Debian.")
+                                        .font(.callout).foregroundStyle(.secondary)
+                                    TextField("Debian username", text: $debianUsername)
+                                        .textContentType(.username)
+                                    SecureField("Debian password (at least 12 characters)", text: $debianPassword)
+                                        .textContentType(.newPassword)
+                                    SecureField("Confirm Debian password", text: $debianPasswordConfirmation)
+                                        .textContentType(.newPassword)
+                                    if let error = DebianAccountSetup.usernameError(debianUsername) {
+                                        Text(error).font(.caption).foregroundStyle(.orange)
+                                    } else if let error = DebianAccountSetup.passwordError(debianPassword, confirmation: debianPasswordConfirmation) {
+                                        Text(error).font(.caption).foregroundStyle(.orange)
+                                    }
+                                }
+                            }
                             Divider().padding(.vertical, 4)
                             creationStoragePicker
                             if manager.hasOtherHostCopy {
@@ -647,16 +668,20 @@ struct HostWorkspaceView: View {
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .frame(height: showsVMConfiguration ? 440 : (creationGuestOS == .debian ? 300 : 380))
+                .frame(height: showsVMConfiguration ? (creationGuestOS == .debian ? 510 : 440) : (creationGuestOS == .debian ? 300 : 380))
                 HStack {
                     Button("Cancel") { model.showsCreateVM = false }
                     Spacer()
                     if showsVMConfiguration {
                     Button("Back") { showsVMConfiguration = false }
                     Button(model.providerSetup.provider == .utm ? "Create in UTM" : "Create VM") {
+                        let username = debianUsername
+                        let password = debianPassword
+                        debianPassword = ""
+                        debianPasswordConfirmation = ""
                         Task {
                             let createdID = creationGuestOS == .debian
-                                ? await manager.installDebian()
+                                ? await manager.installDebian(username: username, password: password)
                                 : await manager.install(for: model.providerSetup.provider)
                             if let id = createdID {
                                 await model.refresh()
@@ -671,7 +696,7 @@ struct HostWorkspaceView: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .disabled(!creationImageReady
-                        || (creationGuestOS == .debian && (model.providerSetup.provider != .builtIn || debianReadinessMessage != nil))
+                        || (creationGuestOS == .debian && (model.providerSetup.provider != .builtIn || debianReadinessMessage != nil || DebianAccountSetup.usernameError(debianUsername) != nil || DebianAccountSetup.passwordError(debianPassword, confirmation: debianPasswordConfirmation) != nil))
                         || manager.creationResourceError != nil
                         || manager.creationStorageValidationMessage != nil
                         || !model.providerSetup.availability.canContinue || manager.hasOtherHostCopy)
