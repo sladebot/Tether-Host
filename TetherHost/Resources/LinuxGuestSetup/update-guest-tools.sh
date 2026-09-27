@@ -61,7 +61,7 @@ if [ -e /etc/tether-guest/user ] || [ -L /etc/tether-guest/user ]; then
 fi
 
 source_dir=$(CDPATH= cd "$(dirname "$0")" && pwd -P)
-for name in update-guest-tools.sh vsock_helper.py clipboard_broker.py clipboard-toggle.sh session-start.sh keep-awake.sh setup.sh dns-fallback.sh linux_guest_setup.py guest_installer.py installer_flow.py installer_logging.py components.json; do
+for name in update-guest-tools.sh vsock_helper.py clipboard_broker.py clipboard-toggle.sh display-resize.py session-start.sh keep-awake.sh setup.sh dns-fallback.sh linux_guest_setup.py guest_installer.py installer_flow.py installer_logging.py components.json; do
   [ -f "$source_dir/$name" ] && [ ! -L "$source_dir/$name" ] ||
     fail "Missing guest installer file: $name"
 done
@@ -87,7 +87,7 @@ fi
 
 apt-get update -o APT::Update::Error-Mode=any -o Acquire::Retries=3
 env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a \
-  apt-get install -y --no-install-recommends ca-certificates curl jq python3 python3-venv python3-yaml python3-gi gir1.2-gtk-3.0 gir1.2-vte-2.91 dbus-x11 at-spi2-core xdg-utils xclip xsel wmctrl xdotool scrot chromium chromium-driver
+  apt-get install -y --no-install-recommends ca-certificates curl jq python3 python3-venv python3-yaml python3-gi gir1.2-gtk-3.0 gir1.2-vte-2.91 dbus-x11 at-spi2-core xdg-utils x11-xserver-utils xclip xsel wmctrl xdotool scrot chromium chromium-driver
 
 # Debian ships Chromium as a native, signed APT package. Keep the check visible
 # in the installer log and leave the user's default browser unchanged.
@@ -108,6 +108,7 @@ if [ "$source_dir" != /opt/tether-guest ]; then
   install -m 0755 "$source_dir/update-guest-tools.sh" /opt/tether-guest/update-guest-tools.sh
   install -m 0755 "$source_dir/vsock_helper.py" /opt/tether-guest/vsock_helper.py
   install -m 0755 "$source_dir/clipboard_broker.py" /opt/tether-guest/clipboard_broker.py
+  install -m 0755 "$source_dir/display-resize.py" /opt/tether-guest/display-resize.py
   install -m 0755 "$source_dir/clipboard-toggle.sh" /opt/tether-guest/clipboard-toggle.sh
   install -m 0755 "$source_dir/session-start.sh" /opt/tether-guest/session-start.sh
   install -m 0755 "$source_dir/keep-awake.sh" /opt/tether-guest/keep-awake.sh

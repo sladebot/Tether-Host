@@ -54,7 +54,7 @@ public enum LinuxGuestSeedWriter {
             try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: stage.appendingPathComponent("user-data").path)
             if let guestResourcesURL,
                (try? guestResourcesURL.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true {
-                for filename in ["update-guest-tools.sh", "setup.sh", "session-start.sh", "keep-awake.sh", "clipboard-toggle.sh", "dns-fallback.sh", "linux_guest_setup.py", "guest_installer.py", "installer_flow.py", "installer_logging.py", "vsock_helper.py", "clipboard_broker.py", "components.json", "README.txt"] {
+                for filename in ["update-guest-tools.sh", "setup.sh", "session-start.sh", "keep-awake.sh", "clipboard-toggle.sh", "dns-fallback.sh", "display-resize.py", "linux_guest_setup.py", "guest_installer.py", "installer_flow.py", "installer_logging.py", "vsock_helper.py", "clipboard_broker.py", "components.json", "README.txt"] {
                     let source = guestResourcesURL.appendingPathComponent(filename)
                     guard fm.fileExists(atPath: source.path) else { throw LinuxGuestSeedError.missingResources }
                     try fm.copyItem(at: source, to: stage.appendingPathComponent(filename))
@@ -110,7 +110,7 @@ public enum LinuxGuestSeedWriter {
           - [sh, -c, "if [ -c /dev/hvc0 ]; then echo TETHER_CLOUD_INIT_START > /dev/hvc0; fi"]
           - [mkdir, -p, /opt/tether-guest, /mnt/tether-seed]
           - [mount, -o, ro, LABEL=cidata, /mnt/tether-seed]
-          - [cp, /mnt/tether-seed/update-guest-tools.sh, /mnt/tether-seed/setup.sh, /mnt/tether-seed/session-start.sh, /mnt/tether-seed/keep-awake.sh, /mnt/tether-seed/clipboard-toggle.sh, /mnt/tether-seed/dns-fallback.sh, /mnt/tether-seed/linux_guest_setup.py, /mnt/tether-seed/guest_installer.py, /mnt/tether-seed/installer_flow.py, /mnt/tether-seed/installer_logging.py, /mnt/tether-seed/vsock_helper.py, /mnt/tether-seed/clipboard_broker.py, /mnt/tether-seed/components.json, /opt/tether-guest/]
+          - [cp, /mnt/tether-seed/update-guest-tools.sh, /mnt/tether-seed/setup.sh, /mnt/tether-seed/session-start.sh, /mnt/tether-seed/keep-awake.sh, /mnt/tether-seed/clipboard-toggle.sh, /mnt/tether-seed/dns-fallback.sh, /mnt/tether-seed/display-resize.py, /mnt/tether-seed/linux_guest_setup.py, /mnt/tether-seed/guest_installer.py, /mnt/tether-seed/installer_flow.py, /mnt/tether-seed/installer_logging.py, /mnt/tether-seed/vsock_helper.py, /mnt/tether-seed/clipboard_broker.py, /mnt/tether-seed/components.json, /opt/tether-guest/]
           - [sh, -c, "if [ -f /mnt/tether-seed/installer-version.json ]; then cp /mnt/tether-seed/installer-version.json /opt/tether-guest/; fi"]
           - [umount, /mnt/tether-seed]
           - [chmod, '0755', /opt/tether-guest/setup.sh]
@@ -119,11 +119,18 @@ public enum LinuxGuestSeedWriter {
           - [chmod, '0755', /opt/tether-guest/keep-awake.sh]
           - [chmod, '0755', /opt/tether-guest/clipboard-toggle.sh]
           - [chmod, '0755', /opt/tether-guest/dns-fallback.sh]
+          - [chmod, '0755', /opt/tether-guest/display-resize.py]
+          - [chmod, '0755', /opt/tether-guest/linux_guest_setup.py]
           - [chmod, '0755', /opt/tether-guest/guest_installer.py]
           - [chmod, '0755', /opt/tether-guest/vsock_helper.py]
+          - [chmod, '0755', /opt/tether-guest/clipboard_broker.py]
+          - [chmod, '0644', /opt/tether-guest/installer_flow.py]
+          - [chmod, '0644', /opt/tether-guest/installer_logging.py]
+          - [chmod, '0644', /opt/tether-guest/components.json]
+          - [sh, -c, "if [ -f /opt/tether-guest/installer-version.json ]; then chmod 0644 /opt/tether-guest/installer-version.json; fi"]
           - [/opt/tether-guest/dns-fallback.sh]
           - [sh, -c, "for i in 1 2 3; do apt-get update -o APT::Update::Error-Mode=any -o Acquire::Retries=3 && exit 0; sleep 5; done; echo 'Debian package indexes could not be updated' >&2; exit 1"]
-          - [env, DEBIAN_FRONTEND=noninteractive, NEEDRESTART_MODE=a, apt-get, install, -y, --no-install-recommends, ca-certificates, curl, jq, python3, python3-venv, python3-yaml, python3-gi, gir1.2-gtk-3.0, gir1.2-vte-2.91, xfce4, xfce4-terminal, xfce4-power-manager, lightdm, lightdm-gtk-greeter, xorg, dbus-x11, at-spi2-core, chromium, chromium-driver, xdg-utils, xclip, xsel, wmctrl, xdotool, scrot]
+          - [env, DEBIAN_FRONTEND=noninteractive, NEEDRESTART_MODE=a, apt-get, install, -y, --no-install-recommends, ca-certificates, curl, jq, python3, python3-venv, python3-yaml, python3-gi, gir1.2-gtk-3.0, gir1.2-vte-2.91, xfce4, xfce4-terminal, xfce4-power-manager, lightdm, lightdm-gtk-greeter, xorg, dbus-x11, at-spi2-core, chromium, chromium-driver, xdg-utils, x11-xserver-utils, xclip, xsel, wmctrl, xdotool, scrot]
           - [apt-get, clean]
           - [sh, -c, "fstrim -av >/dev/null 2>&1 || true"]
           - [systemctl, daemon-reload]

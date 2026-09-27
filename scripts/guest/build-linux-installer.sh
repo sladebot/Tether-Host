@@ -12,7 +12,7 @@ python3 - "$SOURCE_DIRECTORY" "$STAGE/payload.zip" <<'PY'
 from pathlib import Path
 import sys, zipfile
 source=Path(sys.argv[1])
-required=['guest_installer.py','setup.sh','update-guest-tools.sh','dns-fallback.sh','linux_guest_setup.py','vsock_helper.py','clipboard_broker.py','installer_flow.py','installer_logging.py','session-start.sh','keep-awake.sh','clipboard-toggle.sh','components.json']
+required=['guest_installer.py','setup.sh','update-guest-tools.sh','dns-fallback.sh','linux_guest_setup.py','vsock_helper.py','clipboard_broker.py','display-resize.py','installer_flow.py','installer_logging.py','session-start.sh','keep-awake.sh','clipboard-toggle.sh','components.json']
 for name in required:
     if not (source/name).is_file(): raise SystemExit('Missing guest installer resource: '+name)
 with zipfile.ZipFile(sys.argv[2], 'w', zipfile.ZIP_DEFLATED) as archive:

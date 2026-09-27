@@ -106,8 +106,20 @@ def main():
             self.build_ui(Gtk, GLib)
             self.refresh()
             if self.bootstrapped:
+                self.start_display_resize()
                 self.start_clipboard_broker()
                 self.start_keep_awake()
+
+        def start_display_resize(self):
+            helper = Path("/opt/tether-guest/display-resize.py")
+            if not helper.is_file():
+                return
+            try:
+                subprocess.Popen(["/usr/bin/python3", str(helper)], stdin=subprocess.DEVNULL,
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                 start_new_session=True)
+            except OSError:
+                pass  # Session autostart retries at the next login.
 
         def start_keep_awake(self):
             helper = Path("/opt/tether-guest/keep-awake.sh")
@@ -499,6 +511,7 @@ def main():
             self.phase = "idle"
             self.current = first_incomplete(HOME) or STAGES[-1]
             self.login_url = None
+            self.start_display_resize()
             self.start_clipboard_broker()
             self.start_keep_awake()
             self.refresh()

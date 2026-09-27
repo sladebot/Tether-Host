@@ -9,6 +9,9 @@ if [ -f /etc/tether-guest/user ]; then
 fi
 [ "${XDG_SESSION_TYPE:-}" = x11 ] && [ -n "${DISPLAY:-}" ] || exit 0
 export PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin"
+if [ -f /opt/tether-guest/display-resize.py ]; then
+    /usr/bin/python3 /opt/tether-guest/display-resize.py >/dev/null 2>&1 &
+fi
 if [ -x /opt/tether-guest/keep-awake.sh ]; then
     nohup /opt/tether-guest/keep-awake.sh >/dev/null 2>&1 &
 fi
