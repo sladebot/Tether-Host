@@ -4,7 +4,7 @@ Tether Host is the macOS companion for [Tether Flow on iPhone](https://github.co
 
 ![Tether Host workspace with guided VM setup and an embedded macOS guest](./screenshots/host-workspace.png)
 
-[Download the latest preview](https://github.com/sladebot/Tether-Host/releases/latest)
+[Download the latest preview](https://github.com/sladebot/Tether-Host/releases/tag/v1.0.0-build.77-preview)
 
 ## What it does
 
@@ -60,7 +60,7 @@ This repository was extracted from the Tether iOS repository at source commit `4
 
 ### Install the latest preview
 
-1. Open [GitHub Releases](https://github.com/sladebot/Tether-Host/releases/latest).
+1. Open the [build 77 release](https://github.com/sladebot/Tether-Host/releases/tag/v1.0.0-build.77-preview).
 2. Download `Tether-Host-for-Mac-v1.0.0-build-77-preview.dmg` and its matching `.sha256` file.
 3. Verify the download from the directory containing both files:
 
