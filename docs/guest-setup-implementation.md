@@ -56,7 +56,7 @@ URL clears the token and invalidates verification. Restoration from Keychain doe
 not restore a past verification success. Copying URL/token into an existing
 Tether iOS connection screen is the requested handoff; no new iOS receiver is needed.
 
-For built-in Apple VMs, the guest installer can optionally install a user
+For Apple Virtualization VMs, the guest installer can optionally install a user
 LaunchAgent for text-only clipboard transfers. Tether Host's Clipboard menu
 offers explicit Send to VM and Get from VM actions, each capped at 64 KiB.
 There is no continuous clipboard sync or host folder mount. The VM socket and
@@ -65,8 +65,7 @@ guest helper still need a live guest test before this feature is considered veri
 ## Manual user boundaries and remaining work
 
 - Finish macOS account setup in the VM display. Tether Host attaches the guest
-  ISO automatically for built-in and newly created UTM VMs. Existing UTM VMs
-  need the ISO attached once.
+  ISO automatically whenever the Apple Virtualization VM boots.
 - Complete model login, Tailscale sign-in/system-extension consent, and guest
   Accessibility/Screen Recording approvals. OS approvals cannot be silently granted.
 - Install/connect Tailscale on the iPhone, enter URL/token as a Hermes API Server
@@ -88,7 +87,7 @@ guest helper still need a live guest test before this feature is considered veri
 - 7 isolation Python tests.
 - Shell syntax check and fail-closed refusal when VM identity cannot be established.
 - Xcode macOS build and bundled-resource inspection.
-- Native UI verified: provider continuation, secure token field, HTTP URL rejection,
+- Native UI verified: virtualization availability continuation, secure token field, HTTP URL rejection,
   and automatic token clearing when the URL changes.
 
 ## Files and artifact
