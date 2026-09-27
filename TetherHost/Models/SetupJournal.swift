@@ -2,7 +2,7 @@ import Foundation
 
 public enum SetupStage: String, Codable, CaseIterable, Sendable {
     case systemCompatibility
-    case utmDetection
+    case virtualizationSupport
     case vmPreparation
     case privilegedHelperAuthorization
     case hostIsolationInstallation
@@ -21,7 +21,7 @@ public enum SetupStage: String, Codable, CaseIterable, Sendable {
     public var title: String {
         switch self {
         case .systemCompatibility: "System compatibility"
-        case .utmDetection: "Virtualization support"
+        case .virtualizationSupport: "Virtualization support"
         case .vmPreparation: "VM preparation"
         case .privilegedHelperAuthorization: "Authorize network helper"
         case .hostIsolationInstallation: "Install host isolation"
@@ -42,7 +42,7 @@ public enum SetupStage: String, Codable, CaseIterable, Sendable {
     public var requirement: String {
         switch self {
         case .systemCompatibility: "Requires Apple silicon and macOS 14 or later."
-        case .utmDetection: "Checks the selected provider: built-in Apple virtualization or a compatible UTM installation."
+        case .virtualizationSupport: "Checks that built-in Apple virtualization is available."
         case .vmPreparation: "Create or adopt the exact VM identity and verify its signed guest image."
         case .privilegedHelperAuthorization: "Requires the signed helper and administrator approval."
         case .hostIsolationInstallation: "Requires a reviewed policy and external negative tests."

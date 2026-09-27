@@ -1,8 +1,6 @@
 import Foundation
 
 public enum HostNetworkAttachment: String, Codable, Sendable {
-    /// Legacy UTM attachment retained for migration and recovery only.
-    case utmSharedNetwork
     /// Tether-owned NAT attachment created with Apple's Virtualization.framework.
     case tetherNativeNAT
 }

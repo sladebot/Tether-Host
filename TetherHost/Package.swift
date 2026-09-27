@@ -12,7 +12,7 @@ let package = Package(
         .target(
             name: "TetherHostCore",
             path: ".",
-            exclude: ["Package.swift", "Tests", "App", "Views", "Resources", "Sources"],
+            exclude: ["Package.swift", "Tests", "App", "Views", "Resources"],
             sources: ["Models", "Services"]
         ),
         .testTarget(

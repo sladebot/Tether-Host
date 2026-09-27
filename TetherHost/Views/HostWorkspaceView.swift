@@ -191,21 +191,9 @@ struct HostWorkspaceView: View {
     private var vmSection: some View {
         VStack(alignment: .leading, spacing: 18) {
             sectionHeader("Virtual machine", detail: "Choose a Mac or create a new one.")
-            Picker("Run with", selection: Binding(
-                get: { model.providerSetup.provider },
-                set: { provider in
-                    model.selectProvider(provider)
-                    Task { await model.refresh() }
-                }
-            )) {
-                Text("UTM").tag(VMProvider.utm)
-                Text("Built-in Apple").tag(VMProvider.builtIn)
-            }
-            .pickerStyle(.segmented)
-            .disabled(model.isRefreshing || model.isRemovingVM || manager.isBusy || manager.isRunning)
-            Text(model.providerSetup.provider == .utm
-                 ? "UTM opens and displays your Mac."
-                 : "Tether Host opens and displays your Mac.")
+            Label("Powered by Apple Virtualization", systemImage: "apple.logo")
+                .font(.headline)
+            Text("Tether Host stores, opens, and displays the VM directly.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
             providerAvailability
@@ -219,9 +207,7 @@ struct HostWorkspaceView: View {
                 .disabled(manager.isBusy || manager.isRunning || manager.hasOtherHostCopy)
             }
             if model.candidateVMs.isEmpty {
-                Text(model.providerSetup.provider == .builtIn
-                     ? "No built-in VMs yet. Create one from a macOS image."
-                     : "No UTM VMs found. Create one or refresh the list.")
+                Text("No VMs yet. Create one from a macOS image.")
                     .foregroundStyle(.secondary)
             } else {
                 ForEach(model.candidateVMs) { vm in
@@ -257,65 +243,40 @@ struct HostWorkspaceView: View {
 
             if let vm = model.designatedVM {
                 Divider()
-                Label(model.providerSetup.provider == .builtIn && manager.isRunning
+                Label(manager.isRunning
                       && manager.runningVMID != vm.id
                       ? "Another VM is running. Shut it down before starting this one."
                       : model.setupDependencies.vmReady
                         ? "VM desktop is ready for guest setup."
                         : model.designatedVMIsRunning
                           ? "Finish macOS setup in the display, then confirm the desktop."
-                          : model.providerSetup.provider == .utm
-                            ? "Open UTM to start this VM."
-                            : "Click Start VM to continue.",
+                          : "Click Start VM to continue.",
                       systemImage: model.setupDependencies.vmReady ? "checkmark.circle.fill" : "hourglass")
                     .foregroundStyle(model.setupDependencies.vmReady ? .green : .orange)
                     .fixedSize(horizontal: false, vertical: true)
                 HStack {
-                    if model.providerSetup.provider == .builtIn {
-                        if manager.isRunning && manager.runningVMID == vm.id {
-                            Button("Shut Down VM") { manager.requestShutdown() }
-                                .buttonStyle(.borderedProminent)
-                                .disabled(manager.isBusy || manager.shutdownRequested)
-                        } else {
-                            Button("Start VM") { Task { await manager.startOrShow(vm.id) } }
-                                .buttonStyle(.borderedProminent)
-                                .disabled(manager.isRunning || manager.isBusy || manager.hasOtherHostCopy)
-                        }
+                    if manager.isRunning && manager.runningVMID == vm.id {
+                        Button("Shut Down VM") { manager.requestShutdown() }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(manager.isBusy || manager.shutdownRequested)
+                    } else {
+                        Button("Start VM") { Task { await manager.startOrShow(vm.id) } }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(manager.isRunning || manager.isBusy || manager.hasOtherHostCopy)
                     }
                     if model.vmBundleURL(for: vm) != nil {
                         Button("Show in Finder") { model.revealVMInFinder(vm) }
-                    }
-                    if model.providerSetup.provider == .builtIn, !manager.isRunning {
-                        Button("Move to UTM") {
-                            Task {
-                                if await manager.moveToUTM(vm.id) {
-                                    model.selectProvider(.utm)
-                                    await model.refresh()
-                                    model.selectVM(vm.id)
-                                }
-                            }
-                        }
-                        .disabled(manager.isBusy || manager.hasOtherHostCopy)
-                        .help("Register this Apple VM with UTM after confirming its files")
                     }
                 }
             }
             Divider()
             HStack {
-                if model.providerSetup.provider == .utm {
-                    Button("Open UTM") { model.openUTM() }
-                        .disabled(!model.providerSetup.availability.canContinue)
-                }
                 Button("Refresh") { Task { await model.refresh() } }
                     .disabled(model.isRefreshing)
                 Spacer()
                 Button("Manage VMs") { model.workspaceSection = .library }
             }
             .buttonStyle(.borderless)
-            if model.providerSetup.provider == .utm {
-                Link("UTM setup guide", destination: UTMInstallation.macOSGuideURL)
-                    .font(.caption)
-            }
             if model.isRefreshing { ProgressView("Refreshing VMs…") }
         }
     }
@@ -329,13 +290,8 @@ struct HostWorkspaceView: View {
         case .ready:
             EmptyView()
         case .blocked(let reason):
-            VStack(alignment: .leading, spacing: 6) {
-                Label(reason, systemImage: "exclamationmark.triangle.fill")
-                    .font(.callout).foregroundStyle(.orange)
-                if model.providerSetup.provider == .utm {
-                    Link("Download UTM", destination: UTMInstallation.downloadURL)
-                }
-            }
+            Label(reason, systemImage: "exclamationmark.triangle.fill")
+                .font(.callout).foregroundStyle(.orange)
             .fixedSize(horizontal: false, vertical: true)
         }
     }
@@ -344,9 +300,7 @@ struct HostWorkspaceView: View {
         VStack(alignment: .leading, spacing: 20) {
             VStack(alignment: .leading, spacing: 5) {
                 Text("Create a macOS VM").font(.title2.bold())
-                Text(model.providerSetup.provider == .utm
-                     ? "Tether Host installs macOS, then adds the new VM to UTM."
-                     : "Tether Host installs macOS and opens the new VM here.")
+                Text("Tether Host installs macOS and opens the new VM here.")
                 .foregroundStyle(.secondary)
             }
 
@@ -408,7 +362,7 @@ struct HostWorkspaceView: View {
                         Button("Show selected image in Finder") { manager.revealSelectedImageInFinder() }
                             .font(.caption)
                     }
-                    Link("Find a macOS IPSW", destination: UTMInstallation.macOSImageURL)
+                    Link("Find a macOS IPSW", destination: URL(string: "https://ipsw.me/product/Mac/")!)
                         .font(.caption)
                     if manager.status != "No VM installation has started." {
                         Text(manager.status).font(.callout)
@@ -424,9 +378,9 @@ struct HostWorkspaceView: View {
                 HStack {
                     Button("Cancel") { showsCreateVM = false }
                     Spacer()
-                    Button(model.providerSetup.provider == .utm ? "Create in UTM" : "Create built-in VM") {
+                    Button("Create VM") {
                         Task {
-                            if let id = await manager.install(for: model.providerSetup.provider) {
+                            if let id = await manager.install() {
                                 await model.refresh()
                                 model.selectVM(id)
                                 showsCreateVM = false
@@ -462,24 +416,7 @@ struct HostWorkspaceView: View {
             sectionHeader("Tailscale inside the VM", detail: "The physical Mac’s Tailscale installation does not count.")
             Text("Once the macOS desktop is ready, open Tether Guest Installer.app from the setup disk in the VM. Its six-step guide checks Internet, reuses or installs Tailscale, installs Hermes and computer use, then verifies the connection.")
                 .foregroundStyle(.secondary)
-            if model.providerSetup.provider == .builtIn {
-                Label("Tether Guest Setup disk is attached when the VM boots.", systemImage: "opticaldisc")
-            } else if model.selectedUTMVMHasGuestSetupDisk {
-                Label("The read-only guest installer is included with this UTM VM. Open it in the VM’s Finder after logging in.",
-                      systemImage: "opticaldisc")
-            } else {
-                Text("This existing UTM VM needs the guest setup disk attached once. Create it here, then attach it in UTM as a removable drive.")
-                    .foregroundStyle(.secondary)
-                Button(model.isExportingGuestSetupDisk ? "Creating disk…" : "Create Guest Setup Disk…") {
-                    model.exportGuestSetupDisk()
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(model.isExportingGuestSetupDisk || !model.setupDependencies.vmReady)
-                if model.guestSetupDiskURL != nil {
-                    Button("Show setup disk in Finder") { model.revealGuestSetupDisk() }
-                }
-                Text(model.guestSetupDiskStatus).font(.callout).foregroundStyle(.secondary)
-            }
+            Label("Tether Guest Setup disk is attached when the VM boots.", systemImage: "opticaldisc")
             Divider()
             if model.setupDependencies.tailscaleReady {
                 Label("You confirmed Tailscale sign-in for this VM.", systemImage: "checkmark.circle.fill")
@@ -500,14 +437,10 @@ struct HostWorkspaceView: View {
             sectionHeader("Hermes inside the VM", detail: "Install and configure Hermes once the VM has Internet.")
             Text("In the VM, open Tether Guest Installer.app and choose Install Hermes, then Set up Hermes. The guide keeps existing data, prompts for model sign-in and permissions, and verifies a model response. Tether Host itself is not installed in the VM.")
                 .foregroundStyle(.secondary)
-            Text(model.providerSetup.provider == .builtIn
-                 ? "After the guest completes Verify connection, Tether Host fills these details and tests Hermes automatically. You can enter them manually if needed."
-                 : "When the guest prints its connection details, enter them below or import its private connection.json file. Verification happens from this Mac before the iPhone step unlocks.")
+            Text("After the guest completes Verify connection, Tether Host fills these details and tests Hermes automatically. You can enter them manually if needed.")
                 .foregroundStyle(.secondary)
-            if model.providerSetup.provider == .builtIn {
-                Button("Use detected guest connection") { model.useDetectedGuestConnection() }
-                    .disabled(!model.designatedVMIsRunning || model.isVerifyingConnection)
-            }
+            Button("Use detected guest connection") { model.useDetectedGuestConnection() }
+                .disabled(!model.designatedVMIsRunning || model.isVerifyingConnection)
             Button("Import Guest Connection…") { model.importConnectionFile() }
                 .disabled(model.isVerifyingConnection)
             HStack {
@@ -597,11 +530,11 @@ private struct VMMonitorView: View {
     @State private var clipboardMessage: String?
 
     private var isOn: Bool {
-        model.providerSetup.provider == .builtIn ? manager.isRunning : model.designatedVMIsRunning
+        manager.isRunning
     }
 
     private var displayedVMName: String {
-        if model.providerSetup.provider == .builtIn, let runningID = manager.runningVMID {
+        if let runningID = manager.runningVMID {
             return model.candidateVMs.first(where: { $0.id == runningID })?.name
                 ?? "Tether Host VM · \(runningID.description.prefix(8))"
         }
@@ -617,7 +550,7 @@ private struct VMMonitorView: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
-                if model.providerSetup.provider == .builtIn, manager.isRunning {
+                if manager.isRunning {
                     Menu {
                         Button("Send host text to VM") { sendHostClipboard() }
                         Button("Get VM text on host") { receiveGuestClipboard() }
@@ -643,22 +576,16 @@ private struct VMMonitorView: View {
 
             ZStack {
                 Color.black
-                if model.providerSetup.provider == .builtIn,
-                   manager.isRunning, let vm = manager.virtualMachine {
+                if manager.isRunning, let vm = manager.virtualMachine {
                     NativeVMDisplay(virtualMachine: vm)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     VStack(spacing: 12) {
-                        Image(systemName: model.providerSetup.provider == .utm
-                              ? "macpro.gen3" : "display")
+                        Image(systemName: "display")
                             .font(.system(size: 54, weight: .ultraLight))
-                        Text(model.providerSetup.provider == .utm
-                             ? "UTM displays this VM in its own window"
-                             : "VM is off")
+                        Text("VM is off")
                             .font(.title3.weight(.medium))
-                        Text(model.providerSetup.provider == .utm
-                             ? "Open UTM to see its live desktop."
-                             : "Select a VM on the left, then start it here.")
+                        Text("Select a VM on the left, then start it here.")
                             .font(.callout)
                     }
                     .foregroundStyle(.white.opacity(0.75))
@@ -670,51 +597,34 @@ private struct VMMonitorView: View {
 
             if !isFullScreen {
                 VStack(alignment: .leading, spacing: 10) {
-                if model.providerSetup.provider == .builtIn {
-                    Text(manager.status).font(.callout).foregroundStyle(.secondary)
-                        .lineLimit(3).textSelection(.enabled)
-                    if let clipboardMessage {
-                        Text(clipboardMessage).font(.caption).foregroundStyle(.secondary)
-                            .lineLimit(2).textSelection(.enabled)
+                Text(manager.status).font(.callout).foregroundStyle(.secondary)
+                    .lineLimit(3).textSelection(.enabled)
+                if let clipboardMessage {
+                    Text(clipboardMessage).font(.caption).foregroundStyle(.secondary)
+                        .lineLimit(2).textSelection(.enabled)
+                }
+                HStack {
+                    Button(manager.isRunning ? "VM is running" : "Start VM") {
+                        guard let vm = model.designatedVM else { return }
+                        Task { await manager.startOrShow(vm.id) }
                     }
-                    HStack {
-                        Button(manager.isRunning ? "VM is running" : "Start VM") {
-                            guard let vm = model.designatedVM else { return }
-                            Task { await manager.startOrShow(vm.id) }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(manager.isRunning || manager.isBusy || manager.hasOtherHostCopy
+                        || model.designatedVM == nil)
+                    Button("Shut Down VM") { manager.requestShutdown() }
+                        .buttonStyle(.bordered)
+                        .disabled(!manager.isRunning || manager.isBusy)
+                    if manager.shutdownRequested && manager.isRunning {
+                        Button("Force Power Off", role: .destructive) {
+                            showingForcePowerOff = true
                         }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(manager.isRunning || manager.isBusy || manager.hasOtherHostCopy
-                            || model.designatedVM == nil)
-                        Button("Shut Down VM") { manager.requestShutdown() }
-                            .buttonStyle(.bordered)
-                            .disabled(!manager.isRunning || manager.isBusy)
-                        if manager.shutdownRequested && manager.isRunning {
-                            Button("Force Power Off", role: .destructive) {
-                                showingForcePowerOff = true
-                            }
-                            .disabled(manager.isBusy)
-                        }
-                        Spacer()
-                        if manager.isRunning, let vm = model.designatedVM,
-                           manager.runningVMID == vm.id,
-                           !manager.isDesktopReady(for: vm.id) {
-                            Button("Desktop is ready") { manager.confirmDesktopReady() }
-                        }
+                        .disabled(manager.isBusy)
                     }
-                } else {
-                    Text(model.designatedVMIsRunning
-                         ? "UTM reports this VM as running. Confirm the macOS desktop in UTM."
-                         : "UTM reports this VM as off. Start it in UTM, then refresh.")
-                        .font(.callout).foregroundStyle(.secondary)
-                    HStack {
-                        Button("Open UTM") { model.openUTM() }
-                            .buttonStyle(.borderedProminent)
-                        Button("Refresh status") { Task { await model.refresh() } }
-                            .disabled(model.isRefreshing)
-                        Spacer()
-                        if model.designatedVMIsRunning, !model.setupDependencies.desktopConfirmed {
-                            Button("Desktop is ready") { model.confirmUTMDesktopReady() }
-                        }
+                    Spacer()
+                    if manager.isRunning, let vm = model.designatedVM,
+                       manager.runningVMID == vm.id,
+                       !manager.isDesktopReady(for: vm.id) {
+                        Button("Desktop is ready") { manager.confirmDesktopReady() }
                     }
                 }
                 if model.setupDependencies.vmReady {

@@ -162,10 +162,9 @@ public struct NativeVirtualMachineStore: VirtualMachineReading, Sendable {
             encoder.outputFormatting = [.sortedKeys]
             encoder.dateEncodingStrategy = .iso8601
             let data = try encoder.encode(manifest)
-            try data.write(
-                to: bundleURL.appendingPathComponent(Self.manifestFilename),
-                options: [.atomic, .completeFileProtection]
-            )
+            let manifestURL = bundleURL.appendingPathComponent(Self.manifestFilename)
+            try data.write(to: manifestURL, options: .atomic)
+            try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: manifestURL.path)
             return bundleURL
         } catch {
             try? fileManager.removeItem(at: bundleURL)

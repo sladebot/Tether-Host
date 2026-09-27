@@ -331,13 +331,9 @@ final class NativeVMManager: ObservableObject {
         }.value
     }
 
-    func install(for provider: VMProvider = .builtIn) async -> VirtualMachineID? {
+    func install() async -> VirtualMachineID? {
         guard !isBusy, let imageURL, let restoreImage,
               let requirements = restoreImage.mostFeaturefulSupportedConfiguration else { return nil }
-        if provider == .utm && UTMInstallation.detect() != .installed {
-            status = "Install a compatible UTM in Applications before creating a UTM VM."
-            return nil
-        }
         guard !hasOtherHostCopy else {
             status = NativeVMError.anotherHostCopyRunning.localizedDescription
             return nil
@@ -407,16 +403,6 @@ final class NativeVMManager: ObservableObject {
                 to: stage.appendingPathComponent(NativeVirtualMachineStore.manifestFilename), options: .atomic
             )
             try FileManager.default.moveItem(at: stage, to: destination)
-            if provider == .utm {
-                do {
-                    try await moveInstalledVMToUTM(id, nativeBundle: destination)
-                    status = "Fresh macOS VM registered with UTM. Open it in UTM to finish the welcome screens."
-                    return id
-                } catch {
-                    status = "macOS was installed, but UTM registration was not confirmed: \(error.localizedDescription) The Apple VM remains saved in Tether Host."
-                    return nil
-                }
-            }
             status = "Starting the fresh VM…"
             try await boot(id)
             return id
@@ -431,80 +417,6 @@ final class NativeVMManager: ObservableObject {
             status = "VM installation failed: \(error.localizedDescription)"
             return nil
         }
-    }
-
-    func moveToUTM(_ id: VirtualMachineID) async -> Bool {
-        guard !isBusy, !isRunning, !hasOtherHostCopy else {
-            status = "Shut down the Apple VM and quit any other Tether Host copy before moving it to UTM."
-            return false
-        }
-        guard UTMInstallation.detect() == .installed else {
-            status = "Install a compatible UTM in Applications before moving this VM."
-            return false
-        }
-        let nativeBundle = rootURL.appendingPathComponent(id.description, isDirectory: true)
-        let locator = VirtualMachineBundleLocator(nativeRoot: rootURL, utmRoots: [])
-        guard locator.locate(id, provider: .builtIn) == nativeBundle else {
-            status = "The exact Apple VM bundle could not be found. Refresh the VM list."
-            return false
-        }
-        isBusy = true
-        defer { isBusy = false }
-        do {
-            try await moveInstalledVMToUTM(id, nativeBundle: nativeBundle)
-            status = "VM \(id.description.prefix(8)) now appears in UTM."
-            return true
-        } catch {
-            status = "Could not confirm UTM registration: \(error.localizedDescription) The Apple VM is still saved in Tether Host."
-            return false
-        }
-    }
-
-    private func moveInstalledVMToUTM(_ id: VirtualMachineID, nativeBundle: URL) async throws {
-        let packageRoot = rootURL.deletingLastPathComponent()
-            .appendingPathComponent("UTM Virtual Machines", isDirectory: true)
-        let candidate = packageRoot.appendingPathComponent("\(id.description).utm", isDirectory: true)
-        let locator = VirtualMachineBundleLocator(nativeRoot: rootURL, utmRoots: [packageRoot])
-        let package: URL
-        if FileManager.default.fileExists(atPath: candidate.path) {
-            guard locator.locate(id, provider: .utm) == candidate else {
-                throw UTMApplePackageError.packageAlreadyExists
-            }
-            package = candidate
-        } else {
-            status = "Preparing the guest installer for the UTM VM…"
-            let guestISO = FileManager.default.temporaryDirectory
-                .appendingPathComponent("tether-guest-\(UUID().uuidString).iso")
-            defer { try? FileManager.default.removeItem(at: guestISO) }
-            try await GuestSetupDiskExporter.export(appURL: Bundle.main.bundleURL, to: guestISO)
-            status = "Preparing a UTM package with the guest installer ready…"
-            package = try UTMApplePackageWriter.createPackage(
-                nativeBundle: nativeBundle, guestSetupISO: guestISO, in: packageRoot
-            )
-        }
-        status = "Registering the VM with UTM…"
-        try await registerWithUTM(package, id: id)
-        try FileManager.default.removeItem(at: nativeBundle)
-    }
-
-    private func registerWithUTM(_ package: URL, id: VirtualMachineID) async throws {
-        let configuration = NSWorkspace.OpenConfiguration()
-        configuration.activates = false
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            NSWorkspace.shared.open([package], withApplicationAt: UTMInstallation.applicationURL,
-                                    configuration: configuration) { _, error in
-                if let error { continuation.resume(throwing: error) }
-                else { continuation.resume() }
-            }
-        }
-        let adapter = UTMCTLAdapter(executor: try UTMCTLProcessExecutor())
-        for _ in 0..<20 {
-            if let inventory = try? await adapter.list(), inventory.contains(where: { $0.id == id }) {
-                return
-            }
-            try await Task.sleep(for: .seconds(1))
-        }
-        throw UTMAdapterError.vmNotFound(id)
     }
 
     func boot(_ id: VirtualMachineID) async throws {
@@ -615,8 +527,8 @@ final class NativeVMManager: ObservableObject {
         guard !isBusy else { throw NativeVMError.cannotRemoveDuringInstall }
         guard !isRunning else { throw NativeVMError.cannotRemoveRunningVM }
         guard !hasOtherHostCopy else { throw NativeVMError.cannotRemoveWithOtherHostCopy }
-        let locator = VirtualMachineBundleLocator(nativeRoot: rootURL, utmRoots: [])
-        guard let bundle = locator.locate(id, provider: .builtIn) else { throw NativeVMError.missingVM }
+        let locator = VirtualMachineBundleLocator(nativeRoot: rootURL)
+        guard let bundle = locator.locate(id) else { throw NativeVMError.missingVM }
         try FileManager.default.removeItem(at: bundle)
         clearDesktopReady(for: id)
         status = "Tether Host VM \(id.description) and its files were deleted."
