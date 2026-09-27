@@ -37,7 +37,6 @@ extension EvidenceSource {
         switch self {
         case .notChecked: "Not checked"
         case .appleVirtualization: "Apple Virtualization"
-        case .utm: "UTM"
         case .guest: "Guest report"
         case .hostHelper: "Host helper"
         case .independentProbe: "Independent probe"

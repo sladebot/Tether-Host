@@ -149,8 +149,16 @@ public struct NativeVMStorageRegistry: Sendable {
         let bookmark: Data
         let lastPath: String
         let volumeIdentity: String
-        let provider: VMProvider?
-        var resolvedProvider: VMProvider { provider ?? .builtIn }
+        let legacyProvider: String?
+
+        enum CodingKeys: String, CodingKey {
+            case id, name, bookmark, lastPath, volumeIdentity
+            case legacyProvider = "provider"
+        }
+
+        var belongsToNativeStore: Bool {
+            legacyProvider == nil || legacyProvider == "builtIn"
+        }
     }
 
     public let defaultRootURL: URL
@@ -183,40 +191,26 @@ public struct NativeVMStorageRegistry: Sendable {
         let folder = bundle.deletingLastPathComponent()
         let bookmark = try folder.bookmarkData()
         let volumeIdentity = try Self.volumeIdentity(at: folder)
-        var saved = try entries().filter { $0.id != manifest.id || $0.resolvedProvider != .builtIn }
+        var saved = try entries().filter { $0.id != manifest.id || !$0.belongsToNativeStore }
         saved.append(Entry(id: manifest.id, name: manifest.name, bookmark: bookmark,
-                           lastPath: folder.path, volumeIdentity: volumeIdentity, provider: .builtIn))
+                           lastPath: folder.path, volumeIdentity: volumeIdentity, legacyProvider: nil))
         try save(saved)
     }
 
-    public func registerUTM(id: VirtualMachineID, name: String, at packageURL: URL) throws {
-        let package = packageURL.standardizedFileURL
-        guard package.lastPathComponent == "\(id.description).utm" else {
-            throw NativeVirtualMachineStoreError.identityMismatch
-        }
-        let folder = package.deletingLastPathComponent()
-        let bookmark = try folder.bookmarkData()
-        let volumeIdentity = try Self.volumeIdentity(at: folder)
-        var saved = try entries().filter { $0.id != id || $0.resolvedProvider != .utm }
-        saved.append(Entry(id: id, name: name, bookmark: bookmark, lastPath: folder.path,
-                           volumeIdentity: volumeIdentity, provider: .utm))
-        try save(saved)
-    }
-
-    public func unregister(_ id: VirtualMachineID, provider: VMProvider = .builtIn) throws {
+    public func unregister(_ id: VirtualMachineID) throws {
         let saved = try entries()
-        guard saved.contains(where: { $0.id == id && $0.resolvedProvider == provider }) else { return }
-        try save(saved.filter { $0.id != id || $0.resolvedProvider != provider })
+        guard saved.contains(where: { $0.id == id && $0.belongsToNativeStore }) else { return }
+        try save(saved.filter { $0.id != id || !$0.belongsToNativeStore })
     }
 
     public func knownExternalVMs() throws -> [(id: VirtualMachineID, name: String, bundle: URL?)] {
-        try entries().filter { $0.resolvedProvider == .builtIn }.map { entry in
+        try entries().filter(\.belongsToNativeStore).map { entry in
             (entry.id, entry.name, resolvedBundle(for: entry))
         }
     }
 
-    public func location(of id: VirtualMachineID, provider: VMProvider = .builtIn) -> URL? {
-        guard let entry = try? entries().first(where: { $0.id == id && $0.resolvedProvider == provider }) else { return nil }
+    public func location(of id: VirtualMachineID) -> URL? {
+        guard let entry = try? entries().first(where: { $0.id == id && $0.belongsToNativeStore }) else { return nil }
         return resolvedBundle(for: entry)
     }
 
@@ -225,8 +219,7 @@ public struct NativeVMStorageRegistry: Sendable {
         guard let folder = try? URL(resolvingBookmarkData: entry.bookmark,
                                     options: [.withoutUI, .withoutMounting], bookmarkDataIsStale: &stale),
               (try? Self.volumeIdentity(at: folder)) == entry.volumeIdentity else { return nil }
-        let name = entry.resolvedProvider == .utm ? "\(entry.id.description).utm" : entry.id.description
-        return folder.appendingPathComponent(name, isDirectory: true)
+        return folder.appendingPathComponent(entry.id.description, isDirectory: true)
     }
 
     public static func volumeIdentity(at folder: URL) throws -> String {
@@ -242,8 +235,8 @@ public struct NativeVMStorageRegistry: Sendable {
         return String(describing: identifier)
     }
 
-    public func lastKnownLocation(of id: VirtualMachineID, provider: VMProvider = .builtIn) -> String? {
-        try? entries().first(where: { $0.id == id && $0.resolvedProvider == provider })?.lastPath
+    public func lastKnownLocation(of id: VirtualMachineID) -> String? {
+        try? entries().first(where: { $0.id == id && $0.belongsToNativeStore })?.lastPath
     }
 }
 
@@ -303,12 +296,12 @@ public struct NativeVirtualMachineStore: VirtualMachineReading, Sendable {
             records.append(VirtualMachineRecord(id: manifest.id, name: manifest.name, state: .stopped))
         }
 
-        let locator = VirtualMachineBundleLocator(nativeRoot: rootURL, utmRoots: [])
+        let locator = VirtualMachineBundleLocator(nativeRoot: rootURL)
         for external in try registry.knownExternalVMs() {
             guard !records.contains(where: { $0.id == external.id }) else {
                 throw NativeVirtualMachineStoreError.duplicateID(external.id)
             }
-            let available = locator.locate(external.id, provider: .builtIn) != nil
+            let available = locator.locate(external.id) != nil
             records.append(VirtualMachineRecord(id: external.id, name: external.name,
                                                 state: available ? .stopped : .unavailable))
         }
@@ -350,10 +343,9 @@ public struct NativeVirtualMachineStore: VirtualMachineReading, Sendable {
             encoder.outputFormatting = [.sortedKeys]
             encoder.dateEncodingStrategy = .iso8601
             let data = try encoder.encode(manifest)
-            try data.write(
-                to: bundleURL.appendingPathComponent(Self.manifestFilename),
-                options: [.atomic, .completeFileProtection]
-            )
+            let manifestURL = bundleURL.appendingPathComponent(Self.manifestFilename)
+            try data.write(to: manifestURL, options: .atomic)
+            try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: manifestURL.path)
             return bundleURL
         } catch {
             try? fileManager.removeItem(at: bundleURL)

@@ -18,24 +18,10 @@ struct VMInventoryView: View {
                     if !model.isInsideGuest {
                         Button("Create VM…", systemImage: "plus") { model.startNewVMSetup() }
                             .buttonStyle(.borderedProminent)
-                            .accessibilityHint("Opens VM creation for the selected provider")
+                            .accessibilityHint("Opens Apple Virtualization VM creation")
                     }
                 }
-                Picker("Show VMs from", selection: Binding(
-                    get: { model.providerSetup.provider },
-                    set: { source in
-                        model.selectProvider(source)
-                        Task { await model.refresh() }
-                    }
-                )) {
-                    Text("Apple Virtualization").tag(VMProvider.builtIn)
-                    Text("UTM").tag(VMProvider.utm)
-                }
-                .pickerStyle(.segmented)
-                .disabled(model.isRemovingVM)
-                Text(model.providerSetup.provider == .builtIn
-                     ? "Apple Virtualization VMs are saved by Tether Host and do not appear in UTM."
-                     : "These VMs are registered with UTM. Apple Virtualization VMs appear in the other list.")
+                Text("Apple Virtualization VMs are saved and managed directly by Tether Host.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                 if model.isRemovingVM { ProgressView("Deleting VM files…") }
@@ -47,9 +33,7 @@ struct VMInventoryView: View {
             if model.candidateVMs.isEmpty {
                 EmptyEvidenceView(
                     title: "No virtual machines",
-                    message: model.providerSetup.provider == .builtIn
-                        ? "Create a VM from a macOS restore image."
-                        : "Create a UTM VM or choose Apple Virtualization to see VMs created here.",
+                    message: "Create a VM from a macOS restore image.",
                     symbol: "macpro.gen3"
                 )
             } else {
@@ -60,7 +44,7 @@ struct VMInventoryView: View {
                                 reveal: { model.revealVMInFinder(vm) },
                                 delete: {
                                     confirmationCode = ""
-                                    pendingDeletion = VMDeletionRequest(vm: vm, provider: model.providerSetup.provider)
+                                    pendingDeletion = VMDeletionRequest(vm: vm)
                                 })
                 }
                 .listStyle(.inset)
@@ -87,9 +71,7 @@ struct VMInventoryView: View {
                 Text(request.vm.id.description)
                     .font(.system(.caption, design: .monospaced))
                     .textSelection(.enabled)
-                Text(request.provider == .builtIn
-                     ? "Tether Host will permanently delete this VM bundle, including its macOS disk and data, to free disk space. It will not go to Trash."
-                     : "Tether Host will ask UTM to delete this VM, then permanently remove its exact local bundle if UTM leaves it behind. This cannot be undone.")
+                Text("Tether Host will permanently delete this VM bundle, including its macOS disk and data, to free disk space. It will not go to Trash.")
                     .fixedSize(horizontal: false, vertical: true)
                 Text("Type the last 8 characters of the VM ID to confirm: \(request.confirmationCode)")
                     .font(.callout)
@@ -100,7 +82,7 @@ struct VMInventoryView: View {
                     Button("Cancel") { pendingDeletion = nil }
                     Button("Delete VM and Files", role: .destructive) {
                         pendingDeletion = nil
-                        Task { await model.deleteVM(request.vm, from: request.provider) }
+                        Task { await model.deleteVM(request.vm) }
                     }
                     .disabled(confirmationCode.trimmingCharacters(in: .whitespacesAndNewlines)
                         .uppercased() != request.confirmationCode)
@@ -114,7 +96,6 @@ struct VMInventoryView: View {
 
 private struct VMDeletionRequest: Identifiable {
     let vm: VirtualMachineRecord
-    let provider: VMProvider
 
     var id: UUID { vm.id.rawValue }
     var confirmationCode: String { String(vm.id.description.suffix(8)) }

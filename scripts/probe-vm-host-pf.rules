@@ -1,5 +1,5 @@
 # TEMPORARY diagnostic only. Host "self" addresses are expanded at load time.
-# Guest addresses below were observed in UTM; re-check them before execution.
+# Guest addresses below were observed during VM testing; re-check them before execution.
 # Exact sources avoid affecting the Studio or other guests. Source spoofing,
 # new guest addresses, pre-existing states and encrypted overlay paths are NOT
 # covered by this test. No global rules or states are changed.

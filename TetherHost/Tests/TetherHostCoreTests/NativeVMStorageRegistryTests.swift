@@ -24,39 +24,15 @@ final class NativeVMStorageRegistryTests: XCTestCase {
         let available = try await NativeVirtualMachineStore(rootURL: defaultRoot).list()
         XCTAssertEqual(available,
                        [VirtualMachineRecord(id: id, name: "External Test", state: .stopped)])
-        XCTAssertEqual(VirtualMachineBundleLocator(nativeRoot: defaultRoot, utmRoots: []).locate(id, provider: .builtIn)?.resolvingSymlinksInPath(),
+        XCTAssertEqual(VirtualMachineBundleLocator(nativeRoot: defaultRoot).locate(id)?.resolvingSymlinksInPath(),
                        bundle.resolvingSymlinksInPath())
 
         try FileManager.default.removeItem(at: external)
         let unavailable = try await NativeVirtualMachineStore(rootURL: defaultRoot).list()
         XCTAssertEqual(unavailable,
                        [VirtualMachineRecord(id: id, name: "External Test", state: .unavailable)])
-        XCTAssertNil(VirtualMachineBundleLocator(nativeRoot: defaultRoot, utmRoots: []).locate(id, provider: .builtIn))
+        XCTAssertNil(VirtualMachineBundleLocator(nativeRoot: defaultRoot).locate(id))
         XCTAssertFalse(FileManager.default.fileExists(atPath: external.path))
     }
 
-    func testRegisteredExternalUTMPackageResolvesByExactIdentity() throws {
-        let base = FileManager.default.temporaryDirectory.appendingPathComponent("tether-utm-external-test-\(UUID())")
-        defer { try? FileManager.default.removeItem(at: base) }
-        let defaultRoot = base.appendingPathComponent("support/Virtual Machines")
-        let external = base.appendingPathComponent("external")
-        try FileManager.default.createDirectory(at: external, withIntermediateDirectories: true)
-        let id = VirtualMachineID(rawValue: UUID())
-        let package = external.appendingPathComponent("\(id.description).utm")
-        try FileManager.default.createDirectory(at: package, withIntermediateDirectories: false)
-        let data = try PropertyListSerialization.data(fromPropertyList: ["Information": ["UUID": id.description]],
-                                                      format: .xml, options: 0)
-        try data.write(to: package.appendingPathComponent("config.plist"))
-        try NativeVMStorageRegistry(defaultRootURL: defaultRoot).registerUTM(id: id, name: "UTM External", at: package)
-        XCTAssertEqual(VirtualMachineBundleLocator(nativeRoot: defaultRoot, utmRoots: []).locate(id, provider: .utm)?.resolvingSymlinksInPath(),
-                       package.resolvingSymlinksInPath())
-        let duplicateRoot = base.appendingPathComponent("local-utm")
-        let duplicate = duplicateRoot.appendingPathComponent("duplicate.utm")
-        try FileManager.default.createDirectory(at: duplicate, withIntermediateDirectories: true)
-        try data.write(to: duplicate.appendingPathComponent("config.plist"))
-        try FileManager.default.removeItem(at: package)
-        XCTAssertNil(VirtualMachineBundleLocator(nativeRoot: defaultRoot, utmRoots: [duplicateRoot]).locate(id, provider: .utm))
-        try FileManager.default.removeItem(at: external)
-        XCTAssertNil(VirtualMachineBundleLocator(nativeRoot: defaultRoot, utmRoots: [duplicateRoot]).locate(id, provider: .utm))
-    }
 }

@@ -9,16 +9,16 @@ struct SetupAssistantView: View {
 
     var body: some View {
         Group {
-            if model.isInsideGuest || model.providerSetup.hasContinued {
+            if model.isInsideGuest || model.virtualizationSetup.hasContinued {
                 GuestConnectionSetupView()
             } else {
                 welcome
             }
         }
         .navigationTitle("Setup Assistant")
-        .task { model.checkProviderInstallation() }
+        .task { model.checkVirtualizationSupport() }
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active { model.checkProviderInstallation() }
+            if phase == .active { model.checkVirtualizationSupport() }
         }
     }
 
@@ -32,63 +32,30 @@ struct SetupAssistantView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Welcome to Tether Host")
                         .font(.largeTitle.bold())
-                    Text("Choose where your agent’s virtual machine will run.")
+                    Text("Create a private macOS virtual machine for your agent.")
                         .font(.title3)
                         .foregroundStyle(.secondary)
                 }
-                Picker("Virtual machine provider", selection: Binding(
-                    get: { model.providerSetup.provider },
-                    set: { model.selectProvider($0) }
-                )) {
-                    Text("Apple Virtualization — saved in Tether Host").tag(VMProvider.builtIn)
-                    Text("UTM — VMs registered with UTM").tag(VMProvider.utm)
-                }
-                .pickerStyle(.radioGroup)
-                .disabled(model.isRefreshing)
-
                 VStack(alignment: .leading, spacing: 12) {
-                    Text(model.providerSetup.provider == .utm
-                         ? "Choose an existing UTM VM without an IPSW, or create a new one from an Apple macOS restore image. New VMs created here appear and open in UTM."
-                         : "Tether Host stores and opens built-in Apple VMs itself; they do not appear in UTM. A new macOS VM needs Apple's restore image (IPSW), but an existing VM does not.")
-                    if model.providerSetup.provider == .utm {
-                        Text("This build requires UTM \(UTMInstallation.supportedVersion) in Applications.")
-                            .font(.callout).foregroundStyle(.secondary)
-                        Link("Download UTM", destination: UTMInstallation.downloadURL)
-                            .accessibilityHint("Opens the official UTM website in your browser")
-                    }
+                    Text("Tether Host uses Apple Virtualization to store, run, and display the VM directly. A new VM needs an Apple macOS restore image (IPSW).")
                     availabilityStatus
-                    if model.providerSetup.provider == .utm {
-                        Button("Check Again") { model.checkProviderInstallation() }
-                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(20)
                 .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
 
-                if model.providerSetup.provider == .utm {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("Get macOS for your VM").font(.headline)
-                        Text("In Tether Host, select an existing UTM VM or choose a compatible IPSW and press Create UTM VM. Tether Host installs macOS and registers the new VM in UTM. You can also create one manually in UTM.")
-                            .font(.callout).foregroundStyle(.secondary)
-                        Link("macOS setup guide", destination: UTMInstallation.macOSGuideURL)
-                        Link("Download macOS restore image (IPSW)", destination: UTMInstallation.macOSImageURL)
-                        Text("IPSW.me is a third-party index linking to Apple-hosted images. Apple Virtualization and UTM both use this macOS installer format for new VMs; existing VMs do not need it again.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                }
-
                 HStack {
                     Text("Continue to create or select a VM, then install the guest components and verify the phone connection.")
                         .font(.callout).foregroundStyle(.secondary)
                     Spacer(minLength: 24)
-                    Button(model.providerSetup.provider == .builtIn ? "Create New VM…" : "Continue with UTM") {
-                        model.continueProviderSetup()
+                    Button("Create New VM…") {
+                        model.continueVirtualizationSetup()
                     }
                         .buttonStyle(.borderedProminent)
                         .controlSize(.large)
                         .keyboardShortcut(.defaultAction)
-                        .disabled(!model.providerSetup.availability.canContinue || model.isRefreshing)
-                        .accessibilityHint("Requires the selected VM provider to be available")
+                        .disabled(!model.virtualizationSetup.availability.canContinue || model.isRefreshing)
+                        .accessibilityHint("Requires Apple Virtualization to be available")
                 }
             }
             .frame(maxWidth: 620, alignment: .leading)
@@ -99,12 +66,11 @@ struct SetupAssistantView: View {
 
     @ViewBuilder
     private var availabilityStatus: some View {
-        switch model.providerSetup.availability {
+        switch model.virtualizationSetup.availability {
         case .unchecked:
             Label("Checking availability…", systemImage: "arrow.clockwise")
         case .ready:
-            Label(model.providerSetup.provider == .utm ? "UTM is installed. The guided installer can continue." : "Built-in VM installer is available.",
-                  systemImage: "checkmark.circle.fill")
+            Label("Apple Virtualization is available.", systemImage: "checkmark.circle.fill")
                 .foregroundStyle(.green)
         case .blocked(let reason):
             Label(reason, systemImage: "exclamationmark.triangle.fill")
@@ -295,26 +261,10 @@ private struct GuestConnectionSetupView: View {
                         .font(.title3)
                         .foregroundStyle(.secondary)
                 }
-                if !model.isInsideGuest, model.providerSetup.provider == .utm {
-                    HStack(alignment: .center, spacing: 16) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Want to create a new macOS VM?").font(.headline)
-                            Text("Use Tether Host's built-in Apple VM setup. The UTM steps below are for existing UTM VMs.")
-                                .font(.callout).foregroundStyle(.secondary)
-                        }
-                        Spacer(minLength: 12)
-                        Button("Create New VM") { model.startNewNativeVMSetup() }
-                            .buttonStyle(.borderedProminent)
-                    }
-                    .padding(16)
-                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
-                }
                 if model.isInsideGuest {
                     guestInstallation
-                } else if model.providerSetup.provider == .builtIn {
-                    NativeVMSetupView(manager: model.nativeVM)
                 } else {
-                    hostInstallation
+                    NativeVMSetupView(manager: model.nativeVM)
                 }
                 Divider()
                 connectionSetup
@@ -332,132 +282,6 @@ private struct GuestConnectionSetupView: View {
             }
         }
         .onDisappear { showToken = false }
-    }
-
-    private var hostInstallation: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            SetupPhaseBox(number: 1, title: "Check that the VM exists", symbol: "macpro.gen3") {
-                Text("Choose the exact UTM VM to manage. This check does not inspect dependencies on the physical Mac or change any VM.")
-                    .foregroundStyle(.secondary)
-                if let vm = model.designatedVM {
-                    Label("VM found", systemImage: "checkmark.circle.fill")
-                        .foregroundStyle(.green)
-                    HStack {
-                        Text(vm.id.description)
-                            .font(.system(.caption, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                            .textSelection(.enabled)
-                        Spacer()
-                        if model.vmBundleURL(for: vm) != nil {
-                            Button("Show in Finder") { model.revealVMInFinder(vm) }
-                        }
-                        if model.candidateVMs.count > 1 {
-                            Button("Choose Different VM") { model.clearVMSelection() }
-                        }
-                    }
-                } else {
-                    Label("No UTM VM is selected.", systemImage: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.orange)
-                    if !model.candidateVMs.isEmpty {
-                        Text("Choose the exact VM to manage:")
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                        ForEach(model.candidateVMs) { vm in
-                            HStack {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text("\(vm.name) — \(vm.state.rawValue)").fontWeight(.medium)
-                                    Text(vm.id.description)
-                                        .font(.system(.caption, design: .monospaced))
-                                        .foregroundStyle(.secondary)
-                                }
-                                Spacer()
-                                if model.vmBundleURL(for: vm) != nil {
-                                    Button("Show in Finder") { model.revealVMInFinder(vm) }
-                                }
-                                Button("Use This VM") { model.selectVM(vm.id) }
-                            }
-                        }
-                    }
-                }
-                HStack {
-                    Button("Open UTM") { model.openUTM() }
-                        .buttonStyle(.borderedProminent)
-                    Button("Refresh VM List") { Task { await model.refresh() } }
-                        .disabled(model.isRefreshing)
-                    Button("Change Provider") { model.changeSetupProvider() }
-                }
-                Divider()
-                Text("Need a macOS restore image for a new UTM VM?")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                HStack {
-                    Link("Download macOS IPSW (IPSW.me)", destination: UTMInstallation.macOSImageURL)
-                    Link("UTM macOS setup guide", destination: UTMInstallation.macOSGuideURL)
-                }
-                Text("IPSW.me is a third-party index linking to Apple-hosted restore images. UTM can also download a compatible image automatically when you create a macOS VM.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            SetupPhaseBox(number: 2, title: "Check the UTM VM process", symbol: "power") {
-                if let vm = model.designatedVM {
-                    if model.designatedVMIsRunning {
-                        Label("\(vm.name) process is running. Confirm macOS appears in its display before continuing.", systemImage: "checkmark.circle.fill")
-                            .foregroundStyle(.green)
-                    } else {
-                        Label("\(vm.name) is \(vm.state.rawValue). Start it in UTM, then check again.", systemImage: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.orange)
-                    }
-                } else {
-                    Label("Find the VM in step 1 before checking its boot state.", systemImage: "circle.dashed")
-                        .foregroundStyle(.secondary)
-                }
-                HStack {
-                    Button("Open UTM") { model.openUTM() }
-                    Button("Check Boot State Again") { Task { await model.refresh() } }
-                        .disabled(model.isRefreshing)
-                }
-                Divider()
-                Text(model.selectedUTMVMHasGuestSetupDisk
-                     ? "The read-only Tether guest installer is included with this VM. Open it inside the VM after reaching the macOS desktop."
-                     : "For an existing UTM VM, create a read-only ISO containing the Tether guest helper and attach it as a removable drive. Host folders and shared clipboard can stay disabled.")
-                    .foregroundStyle(.secondary)
-                if !model.selectedUTMVMHasGuestSetupDisk {
-                    HStack {
-                        Button(model.isExportingGuestSetupDisk ? "Creating…" : "Create Guest Setup Disk…") {
-                            model.exportGuestSetupDisk()
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(model.isExportingGuestSetupDisk || !model.designatedVMIsRunning)
-                        if model.isExportingGuestSetupDisk { ProgressView().controlSize(.small) }
-                        if model.guestSetupDiskURL != nil {
-                            Button("Show in Finder") { model.revealGuestSetupDisk() }
-                        }
-                    }
-                    Text(model.guestSetupDiskStatus)
-                        .font(.callout)
-                        .textSelection(.enabled)
-                }
-            }
-
-            SetupPhaseBox(number: 3, title: "Check and configure Tailscale inside the VM", symbol: "network") {
-                VStack(alignment: .leading, spacing: 7) {
-                    if !model.selectedUTMVMHasGuestSetupDisk {
-                        Text("1. In UTM, attach **Tether Guest Setup.iso** to the running VM as a removable drive.")
-                    }
-                    Text("After the macOS desktop appears, open the guest setup disk and launch **Tether Guest Installer.app**. Click Start setup and follow its prompts. It keeps the VM awake, checks guest Internet, then installs or configures Tailscale and Hermes. Do not install a second copy of Tether Host.")
-                }
-                .foregroundStyle(.secondary)
-            }
-
-            SetupPhaseBox(number: 4, title: "Check and configure Hermes inside the VM", symbol: "shippingbox") {
-                Text("Tether checks the guest’s Hermes runtime. It installs Hermes when missing, or configures the existing guest installation for authenticated API access, model login, computer use, and private Tailscale HTTPS.")
-                    .foregroundStyle(.secondary)
-                Text("After verification succeeds, load the guest connection and enter its URL and token in Tether on your iPhone.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-            }
-        }
     }
 
     private var guestInstallation: some View {

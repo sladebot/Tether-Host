@@ -23,7 +23,7 @@ struct HostDashboardSnapshot: Sendable {
 }
 
 protocol HostStatusProviding: Sendable {
-    func snapshot(for vmProvider: VMProvider) async throws -> HostDashboardSnapshot
+    func snapshot() async throws -> HostDashboardSnapshot
 }
 
 struct LiveHostStatusProvider: HostStatusProviding {
@@ -52,29 +52,17 @@ struct LiveHostStatusProvider: HostStatusProviding {
         }
     }
 
-    func snapshot(for vmProvider: VMProvider) async throws -> HostDashboardSnapshot {
-        let inventory: [VirtualMachineRecord]
-        let evidenceSource: EvidenceSource
-        switch vmProvider {
-        case .builtIn:
-            guard let nativeReader else { throw NativeVirtualMachineStoreError.invalidRoot }
-            inventory = try await nativeReader.list()
-            evidenceSource = .appleVirtualization
-        case .utm:
-            // Recreate detection so installing UTM does not require restarting Tether.
-            inventory = try await UTMCTLAdapter(executor: UTMCTLProcessExecutor()).list()
-            evidenceSource = .utm
-        }
+    func snapshot() async throws -> HostDashboardSnapshot {
+        guard let nativeReader else { throw NativeVirtualMachineStoreError.invalidRoot }
+        let inventory = try await nativeReader.list()
         let now = Date()
         let matches = inventory
         let vmState: HealthState = matches.count == 1 ? .healthy : .degraded
         let detail: String
         if matches.count == 1 {
-            detail = evidenceSource == .appleVirtualization
-                ? "Tether's native Apple VM is available by exact UUID."
-                : "A UTM VM is available by exact UUID."
+            detail = "Tether's Apple VM is available by exact UUID."
         } else if inventory.isEmpty {
-            detail = "No VM was found for the selected provider. Choose a provider in Setup Assistant."
+            detail = "No Tether Host VM was found. Create one in the setup workspace."
         } else {
             detail = "Found \(matches.count) matching VMs; exact designation is required."
         }
@@ -84,7 +72,7 @@ struct LiveHostStatusProvider: HostStatusProviding {
                 component: .virtualMachine,
                 state: vmState,
                 summary: detail,
-                source: evidenceSource,
+                source: .appleVirtualization,
                 observedAt: now,
                 validFor: 60
             )
@@ -208,44 +196,29 @@ final class AppViewModel: ObservableObject {
     private var isHydratingSavedConnection = true
     private var pendingPhoneRestoration = true
 
-    @Published private(set) var providerSetup: VMProviderSetup
+    @Published private(set) var virtualizationSetup: VirtualizationSetup
     let nativeVM: NativeVMManager
     @Published private(set) var selectedVMID: VirtualMachineID?
-    @Published private(set) var utmDesktopReadyVMID: VirtualMachineID?
     @Published private(set) var tailscaleConfirmedVMID: VirtualMachineID?
     @Published private(set) var verifiedForVMID: VirtualMachineID?
     @Published private(set) var phoneSetupConfirmation: PhoneSetupConfirmation?
     private let preferences: UserDefaults
-    private let provider: any HostStatusProviding
+    private let statusProvider: any HostStatusProviding
 
     init(provider: any HostStatusProviding = LiveHostStatusProvider(), preferences: UserDefaults = .standard) {
         self.preferences = preferences
         nativeVM = NativeVMManager(preferences: preferences)
         selectedVMID = preferences.string(forKey: "setup.vmID").flatMap(VirtualMachineID.init)
-        utmDesktopReadyVMID = preferences.string(forKey: "setup.utmDesktopReadyVMID").flatMap(VirtualMachineID.init)
         tailscaleConfirmedVMID = preferences.string(forKey: "setup.tailscaleConfirmedVMID").flatMap(VirtualMachineID.init)
         phoneSetupConfirmation = preferences.data(forKey: "setup.phoneConfirmation")
             .flatMap { try? JSONDecoder().decode(PhoneSetupConfirmation.self, from: $0) }
-        let savedProvider = preferences.string(forKey: "setup.vmProvider").flatMap(VMProvider.init(rawValue:))
-        // Apply the built-in default only to installs with no saved provider.
-        // A previously chosen UTM VM must survive the upgrade.
-        let hasBuiltInDefault = preferences.bool(forKey: "setup.builtInDefaultApplied")
-        let initialProvider: VMProvider = savedProvider ?? .builtIn
-        if !hasBuiltInDefault {
-            if savedProvider == nil {
-                preferences.set(VMProvider.builtIn.rawValue, forKey: "setup.vmProvider")
-            }
-            preferences.set(true, forKey: "setup.builtInDefaultApplied")
-        }
-        providerSetup = VMProviderSetup(provider: initialProvider)
-        // Desktop/network confirmations for a UTM process and the built-in
-        // guest handoff are live evidence; a new host process must recheck them.
+        virtualizationSetup = VirtualizationSetup()
+        // Guest handoff and network confirmations are live evidence; a new
+        // host process must recheck them.
         tailscaleConfirmedVMID = nil
         preferences.removeObject(forKey: "setup.tailscaleConfirmedVMID")
-        utmDesktopReadyVMID = nil
-        preferences.removeObject(forKey: "setup.utmDesktopReadyVMID")
         selection = .setup
-        self.provider = provider
+        self.statusProvider = provider
         let initial = HostDashboardSnapshot.unobserved
         observations = initial.observations
         inventory = initial.inventory
@@ -262,43 +235,27 @@ final class AppViewModel: ObservableObject {
         isHydratingSavedConnection = false
     }
 
-    func selectProvider(_ provider: VMProvider) {
-        clearConnectionForVMChange()
-        providerSetup.select(provider)
-        preferences.set(provider.rawValue, forKey: "setup.vmProvider")
-        selectedVMID = nil
-        preferences.removeObject(forKey: "setup.vmID")
-        inventory = []
-        locatedVMBundles = [:]
-        bundleLookupRevision = UUID()
-        vmRemovalMessage = nil
-        observations = HostDashboardSnapshot.unobserved.observations
-        checkProviderInstallation()
-        syncHostSleepAssertion()
-    }
-
-    private static func availability(for provider: VMProvider) -> VMProviderAvailability {
-        if provider == .utm { return UTMInstallation.detect().availability }
+    private static func availability() -> VirtualizationAvailability {
         guard AppleVirtualizationSupport.isAvailable else {
             return .blocked("Built-in VM requires an Apple silicon Mac with macOS 14 or later.")
         }
         return .ready
     }
 
-    func checkProviderInstallation() {
-        providerSetup.refresh(using: Self.availability)
+    func checkVirtualizationSupport() {
+        virtualizationSetup.refresh(using: Self.availability)
     }
 
-    func continueProviderSetup() {
-        guard providerSetup.advance(using: Self.availability) else { return }
+    func continueVirtualizationSetup() {
+        guard virtualizationSetup.advance(using: Self.availability) else { return }
         Task { await refresh() }
     }
 
-    func changeSetupProvider() { providerSetup.back() }
+    func changeVirtualizationSetup() { virtualizationSetup.back() }
 
     func startNewNativeVMSetup() {
-        selectProvider(.builtIn)
-        continueProviderSetup()
+        virtualizationSetup.back()
+        continueVirtualizationSetup()
         selection = .setup
         workspaceSection = .vm
     }
@@ -341,7 +298,7 @@ final class AppViewModel: ObservableObject {
 
     var candidateVMs: [VirtualMachineRecord] {
         inventory.map { record in
-            if providerSetup.provider == .builtIn, record.id == nativeVM.runningVMID {
+            if record.id == nativeVM.runningVMID {
                 return VirtualMachineRecord(id: record.id, name: record.name, state: .started)
             }
             return record
@@ -357,23 +314,13 @@ final class AppViewModel: ObservableObject {
     }
 
     var designatedVMIsRunning: Bool {
-        if providerSetup.provider == .builtIn {
-            guard let id = designatedVM?.id else { return false }
-            return id == nativeVM.runningVMID
-        }
-        return designatedVM?.state == .started
+        guard let id = designatedVM?.id else { return false }
+        return id == nativeVM.runningVMID
     }
 
     var setupDependencies: HostSetupDependencies {
         let vm = designatedVM
-        let desktopConfirmed: Bool
-        if let vm {
-            desktopConfirmed = providerSetup.provider == .builtIn
-                ? nativeVM.isDesktopReady(for: vm.id)
-                : utmDesktopReadyVMID == vm.id
-        } else {
-            desktopConfirmed = false
-        }
+        let desktopConfirmed = vm.map { nativeVM.isDesktopReady(for: $0.id) } ?? false
         return HostSetupDependencies(
             vmSelected: vm != nil,
             vmRunning: designatedVMIsRunning,
@@ -381,20 +328,6 @@ final class AppViewModel: ObservableObject {
             tailscaleConfirmed: vm != nil && tailscaleConfirmedVMID == vm?.id,
             backendVerified: vm != nil && connectionVerifiedAt != nil && verifiedForVMID == vm?.id
         )
-    }
-
-    func confirmUTMDesktopReady() {
-        guard providerSetup.provider == .utm, designatedVMIsRunning,
-              let vm = designatedVM else { return }
-        utmDesktopReadyVMID = vm.id
-        preferences.set(vm.id.description, forKey: "setup.utmDesktopReadyVMID")
-    }
-
-    func clearUTMDesktopReady() {
-        guard providerSetup.provider == .utm, let vm = designatedVM,
-              utmDesktopReadyVMID == vm.id else { return }
-        utmDesktopReadyVMID = nil
-        preferences.removeObject(forKey: "setup.utmDesktopReadyVMID")
     }
 
     func confirmTailscaleSetup() {
@@ -463,8 +396,7 @@ final class AppViewModel: ObservableObject {
     }
 
     func refreshVerifiedGuestConnection() async {
-        guard providerSetup.provider == .builtIn,
-              let vmID = designatedVM?.id,
+        guard let vmID = designatedVM?.id,
               vmID == nativeVM.runningVMID,
               !hasManualConnectionOverride,
               !isReadingVerifiedGuestConnection,
@@ -477,8 +409,7 @@ final class AppViewModel: ObservableObject {
         do {
             let json = try await nativeVM.readVerifiedGuestConnectionJSON()
             let receipt = try GuestConnectionReceipt(json: Data(json.utf8))
-            guard providerSetup.provider == .builtIn,
-                  designatedVM?.id == vmID,
+            guard designatedVM?.id == vmID,
                   nativeVM.runningVMID == vmID,
                   connectionInputRevision == revision,
                   !hasManualConnectionOverride else { return }
@@ -512,7 +443,6 @@ final class AppViewModel: ObservableObject {
     }
 
     func invalidateLiveGuestReadiness() {
-        guard providerSetup.provider == .builtIn else { return }
         invalidateConnectionVerification()
         lastAutomaticVerificationAt = nil
         hasDetectedGuestConnection = false
@@ -545,31 +475,23 @@ final class AppViewModel: ObservableObject {
         return locatedVMBundles[record.id]
     }
 
-    private func locateVMBundles(_ ids: [VirtualMachineID], provider: VMProvider) {
+    private func locateVMBundles(_ ids: [VirtualMachineID]) {
         bundleLookupRevision = UUID()
         let revision = bundleLookupRevision
         locatedVMBundles = [:]
-        let home = FileManager.default.homeDirectoryForCurrentUser
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         let locator = VirtualMachineBundleLocator(
-            nativeRoot: support.appendingPathComponent("Tether Host for Mac/Virtual Machines"),
-            utmRoots: [
-                home.appendingPathComponent("Library/Containers/com.utmapp.UTM/Data/Documents"),
-                home.appendingPathComponent("Documents/UTM"),
-                support.appendingPathComponent("Tether Host for Mac/UTM Virtual Machines"),
-                home.appendingPathComponent("Documents")
-            ]
+            nativeRoot: support.appendingPathComponent("Tether Host for Mac/Virtual Machines")
         )
         Task.detached(priority: .utility) { [weak self] in
             var located: [VirtualMachineID: URL] = [:]
             for id in ids {
-                if let bundle = locator.locate(id, provider: provider) {
+                if let bundle = locator.locate(id) {
                     located[id] = bundle
                 }
             }
             await MainActor.run {
-                guard let self, self.bundleLookupRevision == revision,
-                      self.providerSetup.provider == provider else { return }
+                guard let self, self.bundleLookupRevision == revision else { return }
                 self.locatedVMBundles = located
             }
         }
@@ -585,14 +507,11 @@ final class AppViewModel: ObservableObject {
               record.state == .stopped,
               inventory.contains(where: { $0.id == record.id }),
               vmBundleURL(for: record) != nil else { return false }
-        if providerSetup.provider == .builtIn {
-            return !nativeVM.isBusy && !nativeVM.isRunning && !nativeVM.hasOtherHostCopy
-        }
-        return true
+        return !nativeVM.isBusy && !nativeVM.isRunning && !nativeVM.hasOtherHostCopy
     }
 
-    func deleteVM(_ record: VirtualMachineRecord, from source: VMProvider) async {
-        guard source == providerSetup.provider, canDeleteVM(record),
+    func deleteVM(_ record: VirtualMachineRecord) async {
+        guard canDeleteVM(record),
               let bundle = vmBundleURL(for: record) else {
             vmRemovalMessage = VMRemovalError.unavailable.localizedDescription
             return
@@ -601,24 +520,7 @@ final class AppViewModel: ObservableObject {
         vmRemovalMessage = nil
         defer { isRemovingVM = false }
         do {
-            switch source {
-            case .builtIn:
-                try nativeVM.deleteFiles(record.id)
-            case .utm:
-                try await UTMCTLAdapter(executor: UTMCTLProcessExecutor(timeout: 30)).delete(record.id)
-                // UTM can unregister a shortcut without deleting its local bundle.
-                // Remove only the same path if it still resolves to this UUID.
-                if FileManager.default.fileExists(atPath: bundle.path) {
-                    guard vmBundleURL(for: record) == bundle else {
-                        throw VMRemovalError.filesRemain(bundle)
-                    }
-                    try FileManager.default.removeItem(at: bundle)
-                }
-                let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-                try NativeVMStorageRegistry(defaultRootURL: support.appendingPathComponent(
-                    "Tether Host for Mac/Virtual Machines", isDirectory: true
-                )).unregister(record.id, provider: .utm)
-            }
+            try nativeVM.deleteFiles(record.id)
             guard !FileManager.default.fileExists(atPath: bundle.path) else {
                 throw VMRemovalError.filesRemain(bundle)
             }
@@ -630,14 +532,6 @@ final class AppViewModel: ObservableObject {
                 ?? "Could not delete the VM. Refresh the list and try again."
             await refresh()
         }
-    }
-
-    func openUTM() {
-        guard UTMInstallation.detect() == .installed else {
-            guestSetupDiskStatus = "UTM is not installed in Applications."
-            return
-        }
-        NSWorkspace.shared.open(UTMInstallation.applicationURL)
     }
 
     func exportGuestSetupDisk() {
@@ -655,7 +549,7 @@ final class AppViewModel: ObservableObject {
                 )
                 try await GuestSetupDiskExporter.export(appURL: appURL, to: destination)
                 guestSetupDiskURL = destination
-                guestSetupDiskStatus = "Guest setup disk is ready. Attach it to your VM in UTM."
+                guestSetupDiskStatus = "Guest setup disk is ready."
                 NSWorkspace.shared.activateFileViewerSelecting([destination])
             } catch {
                 guestSetupDiskURL = nil
@@ -668,15 +562,6 @@ final class AppViewModel: ObservableObject {
     func revealGuestSetupDisk() {
         guard let guestSetupDiskURL else { return }
         NSWorkspace.shared.activateFileViewerSelecting([guestSetupDiskURL])
-    }
-
-    var selectedUTMVMHasGuestSetupDisk: Bool {
-        guard providerSetup.provider == .utm,
-              let vm = designatedVM,
-              let bundle = vmBundleURL(for: vm) else { return false }
-        return FileManager.default.fileExists(
-            atPath: bundle.appendingPathComponent("Data/Tether Guest Setup.iso").path
-        )
     }
 
     private func restoreConnectionToken(for id: VirtualMachineID, endpoint: String, revision: Int) async {
@@ -776,7 +661,6 @@ final class AppViewModel: ObservableObject {
         let endpoint = connectionURL
         let token = connectionToken
         let vmID = designatedVM?.id
-        let vmProvider = providerSetup.provider
         let secretID = isInsideGuest ? connectionID : (vmID ?? connectionID)
         let revision = connectionInputRevision
         defer { isVerifyingConnection = false }
@@ -785,13 +669,11 @@ final class AppViewModel: ObservableObject {
             let result = try await ConnectionVerifier().verify(endpoint: endpoint, token: token)
             guard revision == connectionInputRevision,
                   endpoint == connectionURL, token == connectionToken,
-                  isInsideGuest || (vmProvider == providerSetup.provider && vmID == designatedVM?.id
-                      && setupDependencies.tailscaleReady) else { return }
+                  isInsideGuest || (vmID == designatedVM?.id && setupDependencies.tailscaleReady) else { return }
             try await connectionVault.store(SecretValue(data: Data(token.utf8)), for: .activeHermes(secretID))
             guard revision == connectionInputRevision,
                   endpoint == connectionURL, token == connectionToken,
-                  isInsideGuest || (vmProvider == providerSetup.provider && vmID == designatedVM?.id
-                      && setupDependencies.tailscaleReady) else { return }
+                  isInsideGuest || (vmID == designatedVM?.id && setupDependencies.tailscaleReady) else { return }
             connectionID = secretID
             preferences.set(secretID.description, forKey: "connection.id")
             preferences.set(result.endpoint.url.absoluteString, forKey: "connection.endpoint")
@@ -859,17 +741,15 @@ final class AppViewModel: ObservableObject {
 
     func refresh() async {
         guard !isRefreshing else { return }
-        checkProviderInstallation()
-        let selectedProvider = providerSetup.provider
+        checkVirtualizationSupport()
         let wasDesignatedVMRunning = designatedVMIsRunning
         isRefreshing = true
         defer { isRefreshing = false }
         do {
-            let next = try await provider.snapshot(for: selectedProvider)
-            guard selectedProvider == providerSetup.provider else { return }
+            let next = try await statusProvider.snapshot()
             observations = normalized(next.observations)
             inventory = next.inventory.map { record in
-                if selectedProvider == .builtIn, record.id == nativeVM.runningVMID {
+                if record.id == nativeVM.runningVMID {
                     return VirtualMachineRecord(id: record.id, name: record.name, state: .started)
                 }
                 return record
@@ -880,18 +760,15 @@ final class AppViewModel: ObservableObject {
                     : order == .orderedAscending
             }
             if wasDesignatedVMRunning && !designatedVMIsRunning {
-                // UTM is observed through inventory polling rather than the
-                // native VM's isRunning notification. Never reuse a prior
-                // network/backend check after that VM has stopped.
+                // Never reuse a prior network/backend check after the VM stops.
                 invalidateConnectionVerification()
-                if selectedProvider == .utm {
-                    tailscaleConfirmedVMID = nil
-                    preferences.removeObject(forKey: "setup.tailscaleConfirmedVMID")
-                    utmDesktopReadyVMID = nil
-                    preferences.removeObject(forKey: "setup.utmDesktopReadyVMID")
-                }
+                tailscaleConfirmedVMID = nil
+                preferences.removeObject(forKey: "setup.tailscaleConfirmedVMID")
             }
-            locateVMBundles(inventory.map(\.id), provider: selectedProvider)
+            if let selectedVMID, !inventory.contains(where: { $0.id == selectedVMID }) {
+                clearVMSelection()
+            }
+            locateVMBundles(inventory.map(\.id))
             setup = next.setup
             diagnostics = next.diagnostics
             lastRefresh = Date()
@@ -899,7 +776,6 @@ final class AppViewModel: ObservableObject {
             syncHostSleepAssertion()
             restorePhoneSectionIfReady()
         } catch {
-            guard selectedProvider == providerSetup.provider else { return }
             observations = HostDashboardSnapshot.unobserved.observations
             inventory = []
             locatedVMBundles = [:]

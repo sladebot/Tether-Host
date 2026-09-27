@@ -69,10 +69,8 @@ printf 'Tether Host local development preview\nVersion %s (%s)\n\n' \
 cat >> "$STAGING_DIRECTORY/content/Read Me.txt" <<'NOTE'
 
 Drag Tether Host for Mac into Applications and launch it.
-Built-in Apple Virtualization is the default VM provider. Tether Host stores
-and displays its VM directly. A new VM needs a compatible macOS IPSW; an
-existing one does not. UTM remains an optional backup for existing UTM VMs
-or a new VM that appears in UTM. The four checks are:
+Tether Host uses Apple Virtualization and displays its VM directly. A new VM
+needs a compatible macOS IPSW; an existing one does not. The four checks are:
 1. Create or select the exact VM.
 2. Install and boot macOS.
 3. Check/install/configure Tailscale inside the VM.
@@ -82,10 +80,8 @@ The included Tether Guest Setup.iso carries a small guest helper without
 enabling host folder sharing. Built-in Apple VMs can optionally enable explicit,
 text-only clipboard transfer from the guest installer. Each clipboard transfer
 requires a button click in Tether Host; clipboard contents are never synced continuously.
-Tether-created built-in and UTM VMs
-include a read-only copy. In the guest, open Tether Guest Installer.app and
+Tether-created VMs include a read-only copy. In the guest, open Tether Guest Installer.app and
 follow its six checks. Updating this installer does not reinstall the VM.
-For a pre-existing UTM VM, attach the included ISO manually once.
 
 Dependency detection for Tailscale and Hermes runs inside the VM. Software on
 the physical Mac never satisfies those checks. The installer guides Tailscale
@@ -93,9 +89,9 @@ sign-in, model login, guest permissions, service configuration, and verification
 When macOS asks whether CuaDriver may bypass the private window picker and
 directly access the guest screen and audio, choose Allow. The computer-use step
 does not complete until it verifies a real guest desktop capture.
-After guest Verify connection succeeds, a built-in VM sends its private URL and
+After guest Verify connection succeeds, the VM sends its private URL and
 token directly to Tether Host. Tether Host fills them and tests Hermes from this
-Mac before enabling the iPhone step. UTM retains manual entry and file import.
+Mac before enabling the iPhone step. Manual entry and file import remain available.
 If the helper fails to start, use Retry host handoff in the guest Verify step;
 this does not reinstall macOS, Tailscale, or Hermes.
 Enter those connection details in Tether iOS with the phone on the same tailnet.
@@ -104,8 +100,7 @@ Existing Hermes installations are preserved: the guest installer refuses
 to overwrite unmanaged data. You can verify an existing connection manually.
 
 This local preview is ad-hoc signed, not Developer ID signed or notarized.
-The built-in VM path has not yet completed a clean-VM, real-phone end-to-end
-test. UTM remains a manual backup path.
+The VM path has not yet completed a clean-VM, real-phone end-to-end test.
 NOTE
 hdiutil create -srcfolder "$STAGING_DIRECTORY/content" -volname 'Tether Host Guest Setup' \
     -format UDRW -fs HFS+ "$STAGING_DIRECTORY/preview-rw.dmg"

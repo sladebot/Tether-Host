@@ -3,7 +3,7 @@ import TetherHostCore
 
 private struct FixtureProvider: HostStatusProviding {
     let vmID: VirtualMachineID
-    func snapshot(for vmProvider: VMProvider) async throws -> HostDashboardSnapshot {
+    func snapshot() async throws -> HostDashboardSnapshot {
         var snapshot = HostDashboardSnapshot.unobserved
         snapshot.inventory = [VirtualMachineRecord(id: vmID, name: "Onboarding test VM", state: .stopped)]
         return snapshot
@@ -22,9 +22,7 @@ struct OnboardingStateSmoke {
         let vmID = VirtualMachineID(rawValue: UUID())
         let endpoint = "https://onboarding-test.example.ts.net"
         let confirmation = PhoneSetupConfirmation(vmID: vmID, endpoint: endpoint)!
-        preferences.set(VMProvider.utm.rawValue, forKey: "setup.vmProvider")
         preferences.set(vmID.description, forKey: "setup.vmID")
-        preferences.set(vmID.description, forKey: "setup.utmDesktopReadyVMID")
         preferences.set(vmID.description, forKey: "setup.tailscaleConfirmedVMID")
         preferences.set(try JSONEncoder().encode(confirmation), forKey: "setup.phoneConfirmation")
         preferences.set(endpoint, forKey: "connection.endpoint")
@@ -32,9 +30,8 @@ struct OnboardingStateSmoke {
         preferences.set(UUID().uuidString, forKey: "connection.id")
 
         let model = AppViewModel(provider: FixtureProvider(vmID: vmID), preferences: preferences)
-        precondition(model.providerSetup.provider == .utm, "Upgrade lost saved UTM provider")
         precondition(model.selectedVMID == vmID, "Upgrade lost selected VM")
-        precondition(model.utmDesktopReadyVMID == nil && model.tailscaleConfirmedVMID == nil,
+        precondition(model.tailscaleConfirmedVMID == nil,
                      "Launch reused stale guest readiness")
         precondition(model.phoneSetupConfirmation == confirmation, "Hydration erased phone confirmation")
         await model.refresh()
@@ -67,8 +64,8 @@ struct OnboardingStateSmoke {
         preferences.set(try JSONEncoder().encode(confirmation), forKey: "setup.phoneConfirmation")
         let changedVM = AppViewModel(provider: FixtureProvider(vmID: vmID), preferences: preferences)
         await changedVM.refresh()
-        changedVM.selectProvider(.builtIn)
-        precondition(!changedVM.isPhoneSetupComplete, "Changed VM provider retained phone confirmation")
-        print("PASS: onboarding migration, stale readiness, hydration, completion gating, direct creation, navigation, credential/endpoint/provider invalidation")
+        changedVM.clearVMSelection()
+        precondition(!changedVM.isPhoneSetupComplete, "Changed VM selection retained phone confirmation")
+        print("PASS: onboarding migration, stale readiness, hydration, completion gating, direct creation, navigation, and credential/endpoint/VM invalidation")
     }
 }
