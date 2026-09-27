@@ -13,20 +13,9 @@ entitlement.
 
 ## Host application
 
-The primary host path manages its application-owned VM through
-`Virtualization.framework`; users do not install UTM. The compatibility adapter
-may inspect an existing UTM installation through `utmctl`, using absolute
-executable resolution, fixed argument arrays, exact VM identity matching,
-bounded output, and no shell interpolation. That path needs no Apple Events
-entitlement. If a future migration release requires UTM AppleScript, add
-`com.apple.security.automation.apple-events` only after the implementation and
-usage description are reviewed. It creates a visible Automation consent prompt
-and must be scoped to UTM. Do not add temporary Apple Events exception
-entitlements as a shortcut.
+The host manages its application-owned VM through `Virtualization.framework`. It does not automate or depend on another virtualization application, and it needs no Apple Events entitlement.
 
-The Developer ID build is currently outside the Mac App Store. Enabling App
-Sandbox without a complete design for UTM automation, XPC, file selection, and
-updates can break the product; disabling it also means entitlements are not the
+The Developer ID build is currently outside the Mac App Store. Enabling App Sandbox without a complete design for virtualization, XPC, file selection, and updates can break the product; disabling it also means entitlements are not the
 primary containment boundary. The host app still runs as the logged-in user and
 must keep secrets in Keychain, validate all untrusted VM output, and talk to the
 root helper only through a narrow authenticated XPC protocol.
@@ -85,7 +74,6 @@ production requirement.
 | Accessibility | Guest macOS | Allows CUA to drive the guest UI | CUA can control the guest desktop session. It must have no path to the host desktop. |
 | Screen Recording | Guest macOS | Allows CUA to observe the guest display | CUA can capture guest display contents, which may contain user data. |
 | Provider login | Guest or user-owned browser flow | Authorizes model/provider access | Grants provider-specific account and data access. Store resulting credentials only in the intended guest store. |
-| Automation, only if AppleScript migration is adopted | Host macOS | Lets Tether Host for Mac send Apple Events to UTM | Applies only to optional migration; avoid by preferring `utmctl`. |
 
 Tailscale account ACLs/grants are account-side controls. The app may generate and
 validate a proposed scoped policy, but it cannot silently approve or broaden the

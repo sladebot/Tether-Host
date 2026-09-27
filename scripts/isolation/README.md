@@ -33,4 +33,4 @@ Source-address matching does not cover source spoofing, new addresses, an unobse
 
 The host transport allowance also permits any guest process to reach those IPs. The selected design therefore requires separately tested guest PF ownership rules for the trusted Tailscale daemon, a non-admin GUI runtime, locked Tailscale administration, a mature TLS/HTTP proxy enforcing approved provider methods/paths and vetted DNS dialing, a restricted resolver, and validated tailnet grants. The exact provider endpoint inventory is still required. Do not sign in the model or launch networked Hermes based on these candidate files.
 
-The generator has no automatic production-ready state. Full approved-service containment remains blocked on the live topology/lifecycle evidence and the remaining enforcement components documented in `docs/studio-egress-implementation.md`.
+The generator has no automatic production-ready state. Full approved-service containment still requires live topology, lifecycle, and negative-test evidence.

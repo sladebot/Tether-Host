@@ -1,4 +1,4 @@
-# Mac Studio installation test — 2026-09-21
+# Historical Mac Studio installation test — 2026-09-21
 
 ## Current preview
 

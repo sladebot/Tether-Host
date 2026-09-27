@@ -2,7 +2,7 @@
 
 Run these tools **inside the macOS VM**, in the selected non-admin interactive account.
 They do not establish host firewall or tailnet isolation. Follow the isolation gate in
-`docs/hermes-vm-backend-checklist.md` before provider sign-in or agent execution.
+`docs/guest-setup-implementation.md` before provider sign-in or agent execution.
 
 ## Inventory before setup
 
