@@ -112,13 +112,24 @@ check_tailnet() {
 tailscale_cli() {
     /usr/bin/env TAILSCALE_BE_CLI=1 "$TAILSCALE_BIN" "$@"
 }
+is_hermes_command() {
+    local command_path="$1"
+    [ -x "$command_path" ] || return 1
+    [ "$command_path" -ef "$HERMES_BIN" ] && return 0
+    # The upstream installer may publish a shell wrapper instead of a symlink.
+    [ -f "$command_path" ] && [ ! -L "$command_path" ] || return 1
+    /usr/bin/cmp -s "$command_path" <(printf '#!/usr/bin/env bash\nunset PYTHONPATH\nunset PYTHONHOME\nexec "%s" "$@"\n' "$HERMES_BIN") && return 0
+    /usr/bin/cmp -s "$command_path" <(printf '#!/usr/bin/env bash\nunset PYTHONPATH\nunset PYTHONHOME\nexec "%s" "%s" "$@"\n' \
+        "$PYTHON_BIN" "$HOME/.hermes/hermes-agent/hermes")
+}
 install_hermes_command() {
     local command_directory="$HOME/.local/bin"
     local command_path="$command_directory/hermes"
     local shell_profile="$HOME/.zprofile"
     /bin/mkdir -p "$command_directory"
     if [ -e "$command_path" ] || [ -L "$command_path" ]; then
-        [ -x "$command_path" ] || fail 'The existing ~/.local/bin/hermes command is not executable. Repair it, then retry.'
+        is_hermes_command "$command_path" ||
+            fail 'The existing ~/.local/bin/hermes command does not point to this Hermes installation. Repair it, then retry.'
     else
         /bin/ln -s "$HERMES_BIN" "$command_path"
     fi
