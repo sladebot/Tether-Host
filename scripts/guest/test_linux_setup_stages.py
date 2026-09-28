@@ -60,13 +60,19 @@ start_stage tailscale 'Reconnect Tailscale'
         self.assertIn('if [[ "$ACTION" == all ]]', source)
         self.assertIn('for mode in -lc -ic; do', source)
 
-    def run_hermes_path_setup(self, profiles=(), *, conflicting_command=False, repeat=False):
+    def run_hermes_path_setup(self, profiles=(), *, conflicting_command=False,
+                              wrapper=None, repeat=False):
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)
             binary = home / '.hermes/hermes-agent/venv/bin/hermes'
             binary.parent.mkdir(parents=True)
             binary.write_text('#!/bin/sh\nexit 0\n')
             binary.chmod(0o755)
+            python = binary.with_name('python')
+            python.write_text('#!/bin/sh\nexit 0\n')
+            python.chmod(0o755)
+            entry = home / '.hermes/hermes-agent/hermes'
+            entry.write_text('# Hermes entry point\n')
             for profile in profiles:
                 (home / profile).write_text('# Keep user settings\nexport EXISTING_SETTING=keep\n')
             if conflicting_command:
@@ -76,10 +82,27 @@ start_stage tailscale 'Reconnect Tailscale'
                 other.write_text('#!/bin/sh\nexit 0\n')
                 other.chmod(0o755)
                 (local / 'hermes').symlink_to(other)
+            if wrapper is not None:
+                local = home / '.local/bin'
+                local.mkdir(parents=True)
+                content = ('#!/usr/bin/env bash\nunset PYTHONPATH\nunset PYTHONHOME\n'
+                           f'exec "{binary}" "$@"\n')
+                if wrapper in ('official-python', 'wrong-entry'):
+                    content = ('#!/usr/bin/env bash\nunset PYTHONPATH\nunset PYTHONHOME\n'
+                               f'exec "{python}" "{entry}" "$@"\n')
+                if wrapper == 'extra-command':
+                    content += 'echo unexpected\n'
+                elif wrapper == 'wrong-target':
+                    content = content.replace(str(binary), str(home / 'other-hermes'))
+                elif wrapper == 'wrong-entry':
+                    content = content.replace(str(entry), str(home / 'other-hermes'))
+                (local / 'hermes').write_text(content)
+                (local / 'hermes').chmod(0o755)
             source = SETUP.read_text()
-            function = source[source.index('ensure_hermes_command() {'):source.index('run_hermes_install() {')]
+            function = source[source.index('is_hermes_command() {'):source.index('run_hermes_install() {')]
             runner = f'''set -Eeuo pipefail
 hermes="$HOME/.hermes/hermes-agent/venv/bin/hermes"
+python="$HOME/.hermes/hermes-agent/venv/bin/python"
 die() {{ echo "$1" >&2; exit 1; }}
 {function}
 ensure_hermes_command
@@ -92,17 +115,18 @@ ensure_hermes_command
             files = {name: (home / name).read_text() for name in
                      ('.profile', '.bash_profile', '.bash_login', '.bashrc') if (home / name).exists()}
             link = home / '.local/bin/hermes'
-            return result, files, link.resolve() if link.exists() else None, binary
+            command_content = link.read_text() if link.is_file() and not link.is_symlink() else None
+            return result, files, link.resolve() if link.exists() else None, binary, command_content
 
     def test_fresh_home_gets_login_and_interactive_hermes_path(self):
-        result, files, link, binary = self.run_hermes_path_setup(repeat=True)
+        result, files, link, binary, _ = self.run_hermes_path_setup(repeat=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(link, binary.resolve())
         self.assertEqual(files['.profile'].count('# Tether Hermes command'), 1)
         self.assertEqual(files['.bashrc'].count('# Tether Hermes command'), 1)
 
     def test_existing_bash_profile_takes_login_precedence_without_clobbering(self):
-        result, files, _, _ = self.run_hermes_path_setup(
+        result, files, _, _, _ = self.run_hermes_path_setup(
             profiles=('.profile', '.bash_login', '.bash_profile', '.bashrc'))
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('EXISTING_SETTING=keep', files['.bash_profile'])
@@ -112,17 +136,41 @@ ensure_hermes_command
         self.assertIn('# Tether Hermes command', files['.bashrc'])
 
     def test_bash_login_is_used_when_bash_profile_is_absent(self):
-        result, files, _, _ = self.run_hermes_path_setup(profiles=('.profile', '.bash_login'))
+        result, files, _, _, _ = self.run_hermes_path_setup(profiles=('.profile', '.bash_login'))
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('# Tether Hermes command', files['.bash_login'])
         self.assertNotIn('# Tether Hermes command', files['.profile'])
 
     def test_conflicting_existing_hermes_command_is_preserved_and_reported(self):
-        result, files, link, binary = self.run_hermes_path_setup(conflicting_command=True)
+        result, files, link, binary, _ = self.run_hermes_path_setup(conflicting_command=True)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('does not point to this Hermes installation', result.stderr)
         self.assertNotEqual(link, binary.resolve())
         self.assertEqual(files, {})
+
+    def test_official_hermes_wrapper_is_preserved(self):
+        for wrapper in ('official', 'official-python'):
+            with self.subTest(wrapper=wrapper):
+                result, files, command, binary, content = self.run_hermes_path_setup(
+                    wrapper=wrapper, repeat=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertNotEqual(command, binary.resolve())
+                target = (f'{binary.with_name("python")}" "{binary.parents[2] / "hermes"}'
+                          if wrapper == 'official-python' else str(binary))
+                self.assertEqual(content,
+                                 '#!/usr/bin/env bash\nunset PYTHONPATH\nunset PYTHONHOME\n'
+                                 f'exec "{target}" "$@"\n')
+                self.assertEqual(files['.profile'].count('# Tether Hermes command'), 1)
+
+    def test_hermes_wrapper_with_extra_code_or_wrong_target_is_rejected(self):
+        for wrapper in ('extra-command', 'wrong-target', 'wrong-entry'):
+            with self.subTest(wrapper=wrapper):
+                result, files, command, _, content = self.run_hermes_path_setup(wrapper=wrapper)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('does not point to this Hermes installation', result.stderr)
+                self.assertEqual(files, {})
+                self.assertIsNotNone(command)
+                self.assertIsNotNone(content)
 
 
 class PrivilegedUpdaterTests(unittest.TestCase):

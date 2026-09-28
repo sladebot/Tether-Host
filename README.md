@@ -140,7 +140,7 @@ For built-in VMs, the verified guest sends its private URL and token to Tether H
 
 ## Current status
 
-The current preview is version 1.0.0, build 86. It is ad-hoc signed and is not a notarized production release, so macOS may request confirmation on first launch. Debian creation asks for the account username and password and writes only a salted password hash to its first-boot seed. Build 86 fixes first-boot guest-installer file permissions and makes Xfce follow the host display's preferred size. Debian networking, native Chromium, Xfce/X11, packaged tools, reboot persistence, and sparse-disk behavior have passed; Tailscale/model sign-in and physical-phone pairing still require interactive acceptance.
+The current preview is version 1.0.0, build 87. It is ad-hoc signed and is not a notarized production release, so macOS may request confirmation on first launch. Debian creation asks for the account username and password and writes only a salted password hash to its first-boot seed. Build 87 fixes first-boot guest-installer permissions, makes Xfce follow the host display's preferred size, and accepts the managed command wrapper created by current Hermes installers. Debian networking, native Chromium, Xfce/X11, packaged tools, reboot persistence, and sparse-disk behavior have passed; Tailscale/model sign-in and physical-phone pairing still require interactive acceptance.
 
 Deployment target: macOS 14 or newer. Bundle identifier: `app.tether.host`.
 

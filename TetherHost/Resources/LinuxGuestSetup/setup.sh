@@ -114,11 +114,22 @@ run_tailscale() {
     sudo tailscale set --operator="$(id -un)"
     finish_stage 'Tailscale is connected.'
 }
+is_hermes_command() {
+    local command_path="$1"
+    [[ -x "$command_path" ]] || return 1
+    [[ "$command_path" -ef "$hermes" ]] && return 0
+    # The upstream installer publishes a shell wrapper rather than a symlink.
+    # Compare the whole file: a path mention alone must not approve extra code.
+    [[ -f "$command_path" && ! -L "$command_path" ]] || return 1
+    cmp -s "$command_path" <(printf '#!/usr/bin/env bash\nunset PYTHONPATH\nunset PYTHONHOME\nexec "%s" "$@"\n' "$hermes") && return 0
+    cmp -s "$command_path" <(printf '#!/usr/bin/env bash\nunset PYTHONPATH\nunset PYTHONHOME\nexec "%s" "%s" "$@"\n' \
+        "$python" "$HOME/.hermes/hermes-agent/hermes")
+}
 ensure_hermes_command() {
     local command_path="$HOME/.local/bin/hermes" profile mode
     mkdir -p "$HOME/.local/bin"
     if [[ -e "$command_path" || -L "$command_path" ]]; then
-        [[ -x "$command_path" && "$command_path" -ef "$hermes" ]] ||
+        is_hermes_command "$command_path" ||
             die 'The existing ~/.local/bin/hermes command does not point to this Hermes installation. Repair it, then retry.'
     else
         ln -s "$hermes" "$command_path"
