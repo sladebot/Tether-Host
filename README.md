@@ -2,13 +2,13 @@
 
 Tether Host prepares a separate macOS guest for [Tether Flow on iPhone](https://github.com/sladebot/Tether). It manages the VM, installs and verifies guest-only Tailscale and Hermes services, and hands the phone a private connection without sharing the physical Mac's agent files or desktop.
 
-[Download the latest preview](https://github.com/sladebot/Tether-Host/releases)
+[Download build 92](https://github.com/sladebot/Tether-Host/releases/tag/v1.0.0-build.92-preview)
 
 ## Screenshots
 
 ### Guided host workspace
 
-![Tether Host workspace with guided VM setup and an embedded macOS guest](./screenshots/host-workspace.png)
+![Native Tether Host workspace with an existing VM stopped and ready to start](./screenshots/host-workspace.png)
 
 ## Overview
 
@@ -54,6 +54,8 @@ The verified guest sends its private URL and token to Tether Host through a priv
 - Destructive VM removal is limited to a stopped, exactly matched UUID and requires typing its final eight characters.
 
 ## Current status
+
+Debian restoration is planned separately and is not included in this macOS preview.
 
 The current preview is version 1.0.0, build 92. It is ad-hoc signed and is not a notarized production release, so macOS may request confirmation on first launch. The new guest installation flow has not yet completed a clean-VM, physical-phone end-to-end acceptance run.
 
@@ -102,8 +104,8 @@ This repository was extracted from the Tether iOS repository at source commit `4
 ### Connect Tether Flow on iPhone
 
 1. Keep the guest VM running and join the same tailnet on the iPhone.
-2. In Tether Host, open **Connect iPhone** and verify the guest connection.
-3. Copy the **Tailscale URL** and **Hermes Token**.
+2. In Tether Host, verify the guest connection under **Hermes**, then open **Connect iPhone**.
+3. Copy the **Server URL** and **API token**.
 4. In Tether Flow, add a **Hermes API Server** connection with those values.
 5. Tap **Test Connection** on the phone, then save the profile.
 
