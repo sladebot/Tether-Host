@@ -3,7 +3,9 @@ import CryptoKit
 import Darwin
 import Foundation
 import SwiftUI
-import Virtualization
+// Older SDKs lack concurrency annotations for these Objective-C API results.
+// VM objects remain owned and used by this main-actor manager.
+@preconcurrency import Virtualization
 import TetherHostCore
 
 enum NativeVMError: LocalizedError {

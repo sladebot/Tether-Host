@@ -542,18 +542,19 @@ final class AppViewModel: ObservableObject {
         let locator = VirtualMachineBundleLocator(
             nativeRoot: support.appendingPathComponent("Tether Host for Mac/Virtual Machines")
         )
-        Task.detached(priority: .utility) { [weak self] in
-            var located: [VirtualMachineID: URL] = [:]
-            for id in ids {
-                if let bundle = locator.locate(id) {
-                    located[id] = bundle
+        Task { @MainActor [weak self] in
+            let located = await Task.detached(priority: .utility) {
+                var result: [VirtualMachineID: URL] = [:]
+                for id in ids {
+                    if let bundle = locator.locate(id) {
+                        result[id] = bundle
+                    }
                 }
-            }
-            await MainActor.run {
-                guard let self, self.bundleLookupRevision == revision,
-                      self.providerSetup.provider == provider else { return }
-                self.locatedVMBundles = located
-            }
+                return result
+            }.value
+            guard let self, self.bundleLookupRevision == revision,
+                  self.providerSetup.provider == provider else { return }
+            self.locatedVMBundles = located
         }
     }
 
