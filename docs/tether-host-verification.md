@@ -1,3 +1,34 @@
+# Current verification status
+
+The Apple-only remediation adds lifecycle, setup-retry, verification-expiry and
+media-replacement regression coverage, plus a shared local/CI verification command:
+
+```sh
+TETHER_TEST_PYTHON="$PWD/build/test-venv/bin/python" bash scripts/verify.sh
+```
+
+Local remediation verification on 2026-10-01 passed: **59 Swift tests**, **29
+guest Python tests**, **7 isolation Python tests**, guest Tailscale-status and
+clipboard framing checks, and ad-hoc signed Debug/Release app builds. Every
+embedded Mach-O passed hardened-runtime checks; deep strict app signature
+verification passed. The startup concurrency test uses a suspended media exporter
+and an incomplete fixture bundle, and never constructs a running VM. The real
+ISO integration test generated and mounted temporary installer media.
+
+Install `requirements-test.txt` in that virtual environment first. Core tests do
+not boot a real VM; the media integration test mounts a temporary read-only ISO.
+CI uses ad-hoc signatures and does not test Developer ID notarization.
+
+Live clean-VM, physical-phone, permission-revocation, host-restart, and external
+network-containment acceptance are outstanding. No automated unit-test result
+should be represented as satisfying those release gates. See
+[the acceptance matrix](acceptance-matrix.md).
+
+---
+
+The following is preserved historical evidence. Provider behavior, test counts,
+and architecture statements below do not describe the current application.
+
 # Tether Host for Mac verification — 2026-09-20
 
 This began as evidence for the initial read-only milestone. The section below

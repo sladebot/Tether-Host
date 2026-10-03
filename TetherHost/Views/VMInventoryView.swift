@@ -5,6 +5,7 @@ import TetherHostCore
 
 struct VMInventoryView: View {
     @EnvironmentObject private var model: AppViewModel
+    var createVM: (() -> Void)? = nil
     @State private var pendingDeletion: VMDeletionRequest?
     @State private var confirmationCode = ""
 
@@ -16,28 +17,14 @@ struct VMInventoryView: View {
                         .font(.headline)
                     Spacer()
                     if !model.isInsideGuest {
-                        Button("Create New VM") { model.startNewVMSetup() }
+                        Button("Create New VM") {
+                            if let createVM { createVM() } else { model.startNewVMSetup() }
+                        }
                             .buttonStyle(.borderedProminent)
+                            .disabled(model.nativeVM.isBusy || model.nativeVM.isRunning || model.nativeVM.hasOtherHostCopy)
                             .accessibilityHint("Opens creation for the selected VM provider")
                     }
                 }
-                Picker("Show VMs from", selection: Binding(
-                    get: { model.providerSetup.provider },
-                    set: { source in
-                        model.selectProvider(source)
-                        Task { await model.refresh() }
-                    }
-                )) {
-                    Text("Apple Virtualization").tag(VMProvider.builtIn)
-                    Text("UTM").tag(VMProvider.utm)
-                }
-                .pickerStyle(.segmented)
-                .disabled(model.isRemovingVM)
-                Text(model.providerSetup.provider == .builtIn
-                     ? "Apple Virtualization VMs are saved by Tether Host and do not appear in UTM."
-                     : "These VMs are registered with UTM. Apple Virtualization VMs appear in the other list.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
                 if model.isRemovingVM { ProgressView("Deleting VM files…") }
                 if let message = model.vmRemovalMessage {
                     Text(message).font(.callout).textSelection(.enabled)
@@ -47,9 +34,7 @@ struct VMInventoryView: View {
             if model.candidateVMs.isEmpty {
                 EmptyEvidenceView(
                     title: "No VM found",
-                    message: model.providerSetup.provider == .builtIn
-                        ? "Choose Create New VM to install macOS with Apple Virtualization."
-                        : "No UTM VM is registered here. Switch to Apple Virtualization to see VMs created in this app.",
+                    message: "Choose Create New VM to install macOS with Apple Virtualization.",
                     symbol: "macpro.gen3"
                 )
             } else {
@@ -87,9 +72,7 @@ struct VMInventoryView: View {
                 Text(request.vm.id.description)
                     .font(.system(.caption, design: .monospaced))
                     .textSelection(.enabled)
-                Text(request.provider == .builtIn
-                     ? "Tether Host will permanently delete this VM bundle, including its macOS disk and data, to free disk space. It will not go to Trash."
-                     : "Tether Host will ask UTM to delete this VM, then permanently remove its exact local bundle if UTM leaves it behind. This cannot be undone.")
+                Text("Tether Host will permanently delete this VM bundle, including its macOS disk and data. It will not go to Trash.")
                     .fixedSize(horizontal: false, vertical: true)
                 Text("Type the last 8 characters of the VM ID to confirm: \(request.confirmationCode)")
                     .font(.callout)

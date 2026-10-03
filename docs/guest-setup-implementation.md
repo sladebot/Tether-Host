@@ -65,8 +65,8 @@ guest helper still need a live guest test before this feature is considered veri
 ## Manual user boundaries and remaining work
 
 - Finish macOS account setup in the VM display. Tether Host attaches the guest
-  ISO automatically for built-in and newly created UTM VMs. Existing UTM VMs
-  need the ISO attached once.
+  ISO automatically for Tether-owned Apple VMs. Media replacement preserves the
+  previous usable image if generation fails.
 - Complete model login, Tailscale sign-in/system-extension consent, and guest
   Accessibility/Screen Recording approvals. OS approvals cannot be silently granted.
 - Install/connect Tailscale on the iPhone, enter URL/token as a Hermes API Server

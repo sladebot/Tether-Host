@@ -15,7 +15,7 @@ enum NativeVMError: LocalizedError {
     case invalidVM
     case anotherVMRunning
     case anotherHostCopyRunning
-    case guestDiskUnavailable
+    case operationInProgress
     case cannotRemoveRunningVM
     case cannotRemoveDuringInstall
     case cannotRemoveWithOtherHostCopy
@@ -31,7 +31,7 @@ enum NativeVMError: LocalizedError {
         case .invalidVM: "The Tether VM is incomplete or damaged. Create a new VM from an IPSW."
         case .anotherVMRunning: "Another Tether VM is already running. Shut it down before starting this one."
         case .anotherHostCopyRunning: "Another Tether Host for Mac copy is open. Quit it before starting this VM."
-        case .guestDiskUnavailable: "The guest setup disk could not be prepared. Check the Tether Host installation and try Start VM again."
+        case .operationInProgress: "Wait for the current VM operation to finish."
         case .cannotRemoveRunningVM: "Shut down the built-in VM before deleting its files."
         case .cannotRemoveDuringInstall: "Wait for VM installation or setup to finish before deleting a VM."
         case .cannotRemoveWithOtherHostCopy: "Quit the other Tether Host copy before deleting this VM."
@@ -118,6 +118,7 @@ private final class RestoreImageDownload: NSObject, URLSessionDownloadDelegate, 
 final class NativeVMManager: ObservableObject {
     private static let macOS262URL = URL(string: "https://updates.cdn-apple.com/2025FallFCS/fullrestores/093-37399/E144C918-CF99-4BBC-B1D0-3E739B9A3F2D/UniversalMac_26.2_25C56_Restore.ipsw")!
     private static let macOS262SHA256 = "bc7c67b2a2cc4ac8c9da0c2b149b9f31e153cd542ce387e6fb8620e41b5278ef"
+    private static let networkEnabledKey = "nativeVM.networkEnabled"
     private static let selectedImageKey = "restoreImage.lastSelectedPath"
 
     static var canDownloadHostImage: Bool {
@@ -128,7 +129,8 @@ final class NativeVMManager: ObservableObject {
     @Published private(set) var imageURL: URL?
     @Published private(set) var imageDescription = "Choose a macOS IPSW to create a fresh VM."
     @Published private(set) var status = "No VM installation has started."
-    @Published private(set) var isBusy = false
+    @Published private(set) var operationState = NativeVMOperationState()
+    var isBusy: Bool { operationState.isBusy }
     @Published private(set) var installationProgress: Double?
     @Published private(set) var downloadProgress: DownloadProgressEstimate?
     @Published private(set) var isRunning = false
@@ -136,19 +138,42 @@ final class NativeVMManager: ObservableObject {
     @Published private(set) var virtualMachine: VZVirtualMachine?
     @Published private(set) var desktopReadyVMID: VirtualMachineID?
     @Published var showsDisplay = false
+    @Published var networkEnabled = true {
+        didSet { preferences.set(networkEnabled, forKey: Self.networkEnabledKey) }
+    }
+    var networkStatus: String {
+        networkEnabled
+            ? "Shared internet (NAT). Guest access to the host and local network is not blocked."
+            : "Offline. The VM has no network device; Tailscale and internet access are unavailable."
+    }
 
     private var restoreImage: VZMacOSRestoreImage?
     private var activeDownloadID: UUID?
     private var runningID: VirtualMachineID?
     var runningVMID: VirtualMachineID? { isRunning ? runningID : nil }
+    private let otherHostCopyRunning: @MainActor () -> Bool
     private let rootURL: URL
+    private let guestDiskExporter: @Sendable (URL) async throws -> Void
     private let vmDelegate = NativeVMDelegate()
     private let preferences: UserDefaults
 
-    init(preferences: UserDefaults = .standard) {
+    init(
+        preferences: UserDefaults = .standard,
+        rootURL: URL? = nil,
+        otherHostCopyRunning: @escaping @MainActor () -> Bool = {
+            NSRunningApplication.runningApplications(withBundleIdentifier: "app.tether.host")
+                .contains { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }
+        },
+        guestDiskExporter: @escaping @Sendable (URL) async throws -> Void = { destination in
+            try await GuestSetupDiskExporter.export(appURL: Bundle.main.bundleURL, to: destination)
+        }
+    ) {
         self.preferences = preferences
+        self.otherHostCopyRunning = otherHostCopyRunning
+        networkEnabled = preferences.object(forKey: Self.networkEnabledKey) as? Bool ?? true
         desktopReadyVMID = preferences.string(forKey: "setup.nativeDesktopReadyVMID").flatMap(VirtualMachineID.init)
-        rootURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        self.guestDiskExporter = guestDiskExporter
+        self.rootURL = rootURL ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Tether Host for Mac/Virtual Machines", isDirectory: true)
         vmDelegate.owner = self
         if let savedPath = preferences.string(forKey: Self.selectedImageKey) {
@@ -183,16 +208,16 @@ final class NativeVMManager: ObservableObject {
 
     func useCachedHostImage() async {
         guard !isBusy, hasCachedHostImage else { return }
-        isBusy = true
+        operationState.begin(.checkingImage)
         status = "Verifying the saved macOS image…"
         do {
             guard try await Self.sha256(of: cachedHostImageURL) == Self.macOS262SHA256 else {
                 throw NativeVMError.unsupportedImage
             }
-            isBusy = false
+            operationState.finish()
             await inspect(cachedHostImageURL)
         } catch {
-            isBusy = false
+            operationState.finish()
             status = "Saved image could not be verified. Choose Download again to replace it. \(error.localizedDescription)"
         }
     }
@@ -235,9 +260,9 @@ final class NativeVMManager: ObservableObject {
 
     func inspect(_ url: URL) async {
         guard !isBusy else { return }
-        isBusy = true
+        operationState.begin(.checkingImage)
         status = "Checking the macOS image…"
-        defer { isBusy = false }
+        defer { operationState.finish() }
         do {
             let image = try await VZMacOSRestoreImage.image(from: url)
             guard image.isSupported, image.mostFeaturefulSupportedConfiguration != nil else {
@@ -267,7 +292,7 @@ final class NativeVMManager: ObservableObject {
 
     func downloadHostImage() async {
         guard Self.canDownloadHostImage, !isBusy else { return }
-        isBusy = true
+        operationState.begin(.downloadingImage)
         downloadProgress = nil
         defer {
             activeDownloadID = nil
@@ -311,10 +336,10 @@ final class NativeVMManager: ObservableObject {
             } else {
                 try FileManager.default.moveItem(at: temporary, to: destination)
             }
-            isBusy = false
+            operationState.finish()
             await inspect(destination)
         } catch {
-            isBusy = false
+            operationState.finish()
             status = "Could not download or verify macOS 26.2: \(error.localizedDescription)"
         }
     }
@@ -331,19 +356,15 @@ final class NativeVMManager: ObservableObject {
         }.value
     }
 
-    func install(for provider: VMProvider = .builtIn) async -> VirtualMachineID? {
-        guard !isBusy, let imageURL, let restoreImage,
+    func install() async -> VirtualMachineID? {
+        guard !isBusy, !isRunning, !shutdownRequested, let imageURL, let restoreImage,
               let requirements = restoreImage.mostFeaturefulSupportedConfiguration else { return nil }
-        if provider == .utm && UTMInstallation.detect() != .installed {
-            status = "Install a compatible UTM in Applications before creating a UTM VM."
-            return nil
-        }
         guard !hasOtherHostCopy else {
             status = NativeVMError.anotherHostCopyRunning.localizedDescription
             return nil
         }
-        isBusy = true
-        defer { isBusy = false }
+        operationState.begin(.installing)
+        defer { operationState.finish() }
         let id = VirtualMachineID(rawValue: UUID())
         let stage = rootURL.appendingPathComponent(".creating-\(id.description)", isDirectory: true)
         let destination = rootURL.appendingPathComponent(id.description, isDirectory: true)
@@ -407,18 +428,9 @@ final class NativeVMManager: ObservableObject {
                 to: stage.appendingPathComponent(NativeVirtualMachineStore.manifestFilename), options: .atomic
             )
             try FileManager.default.moveItem(at: stage, to: destination)
-            if provider == .utm {
-                do {
-                    try await moveInstalledVMToUTM(id, nativeBundle: destination)
-                    status = "Fresh macOS VM registered with UTM. Open it in UTM to finish the welcome screens."
-                    return id
-                } catch {
-                    status = "macOS was installed, but UTM registration was not confirmed: \(error.localizedDescription) The Apple VM remains saved in Tether Host."
-                    return nil
-                }
-            }
+            operationState.transition(from: .installing, to: .starting)
             status = "Starting the fresh VM…"
-            try await boot(id)
+            try await bootWhileBusy(id)
             return id
         } catch {
             virtualMachine = nil
@@ -433,88 +445,22 @@ final class NativeVMManager: ObservableObject {
         }
     }
 
-    func moveToUTM(_ id: VirtualMachineID) async -> Bool {
-        guard !isBusy, !isRunning, !hasOtherHostCopy else {
-            status = "Shut down the Apple VM and quit any other Tether Host copy before moving it to UTM."
-            return false
-        }
-        guard UTMInstallation.detect() == .installed else {
-            status = "Install a compatible UTM in Applications before moving this VM."
-            return false
-        }
-        let nativeBundle = rootURL.appendingPathComponent(id.description, isDirectory: true)
-        let locator = VirtualMachineBundleLocator(nativeRoot: rootURL, utmRoots: [])
-        guard locator.locate(id, provider: .builtIn) == nativeBundle else {
-            status = "The exact Apple VM bundle could not be found. Refresh the VM list."
-            return false
-        }
-        isBusy = true
-        defer { isBusy = false }
-        do {
-            try await moveInstalledVMToUTM(id, nativeBundle: nativeBundle)
-            status = "VM \(id.description.prefix(8)) now appears in UTM."
-            return true
-        } catch {
-            status = "Could not confirm UTM registration: \(error.localizedDescription) The Apple VM is still saved in Tether Host."
-            return false
-        }
-    }
-
-    private func moveInstalledVMToUTM(_ id: VirtualMachineID, nativeBundle: URL) async throws {
-        let packageRoot = rootURL.deletingLastPathComponent()
-            .appendingPathComponent("UTM Virtual Machines", isDirectory: true)
-        let candidate = packageRoot.appendingPathComponent("\(id.description).utm", isDirectory: true)
-        let locator = VirtualMachineBundleLocator(nativeRoot: rootURL, utmRoots: [packageRoot])
-        let package: URL
-        if FileManager.default.fileExists(atPath: candidate.path) {
-            guard locator.locate(id, provider: .utm) == candidate else {
-                throw UTMApplePackageError.packageAlreadyExists
-            }
-            package = candidate
-        } else {
-            status = "Preparing the guest installer for the UTM VM…"
-            let guestISO = FileManager.default.temporaryDirectory
-                .appendingPathComponent("tether-guest-\(UUID().uuidString).iso")
-            defer { try? FileManager.default.removeItem(at: guestISO) }
-            try await GuestSetupDiskExporter.export(appURL: Bundle.main.bundleURL, to: guestISO)
-            status = "Preparing a UTM package with the guest installer ready…"
-            package = try UTMApplePackageWriter.createPackage(
-                nativeBundle: nativeBundle, guestSetupISO: guestISO, in: packageRoot
-            )
-        }
-        status = "Registering the VM with UTM…"
-        try await registerWithUTM(package, id: id)
-        try FileManager.default.removeItem(at: nativeBundle)
-    }
-
-    private func registerWithUTM(_ package: URL, id: VirtualMachineID) async throws {
-        let configuration = NSWorkspace.OpenConfiguration()
-        configuration.activates = false
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            NSWorkspace.shared.open([package], withApplicationAt: UTMInstallation.applicationURL,
-                                    configuration: configuration) { _, error in
-                if let error { continuation.resume(throwing: error) }
-                else { continuation.resume() }
-            }
-        }
-        let adapter = UTMCTLAdapter(executor: try UTMCTLProcessExecutor())
-        for _ in 0..<20 {
-            if let inventory = try? await adapter.list(), inventory.contains(where: { $0.id == id }) {
-                return
-            }
-            try await Task.sleep(for: .seconds(1))
-        }
-        throw UTMAdapterError.vmNotFound(id)
-    }
-
     func boot(_ id: VirtualMachineID) async throws {
-        guard !isBusy || virtualMachine == nil else { return }
+        guard !isBusy, !shutdownRequested else { throw NativeVMError.operationInProgress }
+        operationState.begin(.starting)
+        defer { operationState.finish() }
+        try await bootWhileBusy(id)
+    }
+
+    /// The installation transaction deliberately retains its operation lock through boot.
+    private func bootWhileBusy(_ id: VirtualMachineID) async throws {
         if isRunning, runningID == id { showsDisplay = true; return }
         if isRunning { throw NativeVMError.anotherVMRunning }
         guard !hasOtherHostCopy else { throw NativeVMError.anotherHostCopyRunning }
         let bundle = rootURL.appendingPathComponent(id.description, isDirectory: true)
         guard FileManager.default.fileExists(atPath: bundle.path) else { throw NativeVMError.missingVM }
-        guard await prepareGuestDisk() else { throw NativeVMError.guestDiskUnavailable }
+        let freshMedia = await prepareGuestDiskWhileBusy()
+        let includeGuestDisk = GuestSetupDiskExporter.isUsableImage(at: guestDiskURL)
         let hardwareData = try Data(contentsOf: bundle.appendingPathComponent("hardware.bin"))
         let machineData = try Data(contentsOf: bundle.appendingPathComponent("machine.bin"))
         guard let hardware = VZMacHardwareModel(dataRepresentation: hardwareData),
@@ -523,19 +469,27 @@ final class NativeVMManager: ObservableObject {
         let configuration = try makeConfiguration(
             bundle: bundle, hardware: hardware, machineID: machineID,
             cpuCount: min(4, max(2, ProcessInfo.processInfo.activeProcessorCount / 2)),
-            memorySize: 8 * 1_073_741_824, includeGuestDisk: true
+            memorySize: 8 * 1_073_741_824, includeGuestDisk: includeGuestDisk
         )
         let vm = VZVirtualMachine(configuration: configuration)
         vm.delegate = vmDelegate
         virtualMachine = vm
         do {
             try await vm.start()
+            guard self.virtualMachine === vm, vm.state == .running else {
+                throw NativeVMError.invalidVM
+            }
             runningID = id
             isRunning = true
             shutdownRequested = false
             showsDisplay = true
             markBundleUsed(id)
             status = "Tether Host VM started. Finish the macOS welcome screens in this window."
+            if !freshMedia {
+                status += includeGuestDisk
+                    ? " Using the previous guest setup disk because its update failed."
+                    : " Guest setup disk unavailable; the VM started without it. Repair or reinstall Tether Host to restore the installer."
+            }
         } catch {
             virtualMachine = nil
             showsDisplay = false
@@ -552,7 +506,7 @@ final class NativeVMManager: ObservableObject {
     }
 
     func requestShutdown() {
-        guard isRunning, let virtualMachine else { return }
+        guard isRunning, !isBusy, !shutdownRequested, let virtualMachine else { return }
         do {
             try virtualMachine.requestStop()
             shutdownRequested = true
@@ -601,11 +555,12 @@ final class NativeVMManager: ObservableObject {
 
     func forcePowerOff() async {
         guard isRunning, !isBusy, let virtualMachine else { return }
-        isBusy = true
+        operationState.begin(.stopping)
         status = "Powering off the VM…"
-        defer { isBusy = false }
+        defer { operationState.finish() }
         do {
             try await virtualMachine.stop()
+            guestStopped(identity: ObjectIdentifier(virtualMachine), error: nil)
         } catch {
             status = "Could not power off the VM: \(error.localizedDescription)"
         }
@@ -615,16 +570,15 @@ final class NativeVMManager: ObservableObject {
         guard !isBusy else { throw NativeVMError.cannotRemoveDuringInstall }
         guard !isRunning else { throw NativeVMError.cannotRemoveRunningVM }
         guard !hasOtherHostCopy else { throw NativeVMError.cannotRemoveWithOtherHostCopy }
-        let locator = VirtualMachineBundleLocator(nativeRoot: rootURL, utmRoots: [])
-        guard let bundle = locator.locate(id, provider: .builtIn) else { throw NativeVMError.missingVM }
+        let locator = VirtualMachineBundleLocator(nativeRoot: rootURL)
+        guard let bundle = locator.locate(id) else { throw NativeVMError.missingVM }
         try FileManager.default.removeItem(at: bundle)
         clearDesktopReady(for: id)
         status = "Tether Host VM \(id.description) and its files were deleted."
     }
 
     var hasOtherHostCopy: Bool {
-        NSRunningApplication.runningApplications(withBundleIdentifier: "app.tether.host")
-            .contains { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }
+        otherHostCopyRunning()
     }
 
     private func makeConfiguration(
@@ -649,7 +603,7 @@ final class NativeVMManager: ObservableObject {
         configuration.graphicsDevices = [graphics]
         let network = VZVirtioNetworkDeviceConfiguration()
         network.attachment = VZNATNetworkDeviceAttachment()
-        configuration.networkDevices = [network]
+        configuration.networkDevices = networkEnabled ? [network] : []
         let diskAttachment = try VZDiskImageStorageDeviceAttachment(url: bundle.appendingPathComponent("disk.img"), readOnly: false)
         configuration.storageDevices = [VZVirtioBlockDeviceConfiguration(attachment: diskAttachment)]
         if includeGuestDisk {
@@ -663,12 +617,23 @@ final class NativeVMManager: ObservableObject {
         return configuration
     }
 
+    private var guestDiskURL: URL {
+        rootURL.deletingLastPathComponent().appendingPathComponent("Tether Guest Setup.iso")
+    }
+
     @discardableResult
     func prepareGuestDisk() async -> Bool {
-        let destination = rootURL.deletingLastPathComponent().appendingPathComponent("Tether Guest Setup.iso")
+        guard !isBusy, !isRunning else { return false }
+        operationState.begin(.preparingMedia)
+        defer { operationState.finish() }
+        return await prepareGuestDiskWhileBusy()
+    }
+
+    private func prepareGuestDiskWhileBusy() async -> Bool {
+        let destination = guestDiskURL
         do {
             status = "Preparing the guest setup disk…"
-            try await GuestSetupDiskExporter.export(appURL: Bundle.main.bundleURL, to: destination)
+            try await guestDiskExporter(destination)
             status = "Guest setup disk is ready. It will appear when the VM next starts."
             return true
         } catch {
@@ -677,7 +642,8 @@ final class NativeVMManager: ObservableObject {
         }
     }
 
-    fileprivate func guestStopped(error: Error?) {
+    fileprivate func guestStopped(identity: ObjectIdentifier, error: Error?) {
+        guard let currentVM = virtualMachine, ObjectIdentifier(currentVM) == identity else { return }
         if let runningID { markBundleUsed(runningID) }
         isRunning = false
         shutdownRequested = false
@@ -789,11 +755,13 @@ private final class NativeVMDelegate: NSObject, VZVirtualMachineDelegate, @unche
     weak var owner: NativeVMManager?
 
     nonisolated func guestDidStop(_ virtualMachine: VZVirtualMachine) {
-        Task { @MainActor [weak owner] in owner?.guestStopped(error: nil) }
+        let identity = ObjectIdentifier(virtualMachine)
+        Task { @MainActor [weak owner] in owner?.guestStopped(identity: identity, error: nil) }
     }
 
     nonisolated func virtualMachine(_ virtualMachine: VZVirtualMachine, didStopWithError error: any Error) {
-        Task { @MainActor [weak owner] in owner?.guestStopped(error: error) }
+        let identity = ObjectIdentifier(virtualMachine)
+        Task { @MainActor [weak owner] in owner?.guestStopped(identity: identity, error: error) }
     }
 }
 

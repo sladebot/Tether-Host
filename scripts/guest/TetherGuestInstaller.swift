@@ -212,7 +212,7 @@ final class TetherGuestInstaller: NSObject, NSApplicationDelegate, NSWindowDeleg
                                    action: #selector(enableClipboardTransfer))
         clipboardButton.bezelStyle = .rounded
         clipboardButton.frame = NSRect(x: 496, y: 429, width: 190, height: 32)
-        clipboardButton.toolTip = "Enable explicit text transfers for Tether's built-in Apple VM. UTM manages its own clipboard settings."
+        clipboardButton.toolTip = "Enable explicit text transfers for Tether's Apple VM."
         content.addSubview(clipboardButton)
         addLabel("SETUP CONSOLE", to: content, frame: NSRect(x: 274, y: 343, width: 580, height: 22),
                  font: .systemFont(ofSize: 11, weight: .semibold), color: .secondaryLabelColor)

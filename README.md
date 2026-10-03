@@ -1,6 +1,6 @@
 # Tether Host for Mac
 
-Tether Host prepares an isolated macOS guest for [Tether Flow on iPhone](https://github.com/sladebot/Tether). It manages the VM, installs and verifies guest-only Tailscale and Hermes services, and hands the phone a private connection without exposing the physical Mac's agent environment.
+Tether Host prepares a separate macOS guest for [Tether Flow on iPhone](https://github.com/sladebot/Tether). It manages the VM, installs and verifies guest-only Tailscale and Hermes services, and hands the phone a private connection without sharing the physical Mac's agent files or desktop.
 
 [Download the latest preview](https://github.com/sladebot/Tether-Host/releases)
 
@@ -12,12 +12,9 @@ Tether Host prepares an isolated macOS guest for [Tether Flow on iPhone](https:/
 
 ## Overview
 
-Tether Host supports two VM providers:
+Tether Host uses Apple's `Virtualization.framework` exclusively. It creates and runs a Tether-owned macOS VM with its display embedded in the host workspace.
 
-- **Built-in Apple Virtualization:** creates and runs a Tether-owned macOS VM with its display embedded in the host workspace.
-- **UTM:** creates an Apple-backend VM package, registers it by exact UUID, and lets UTM own the live display.
-
-Both paths use a compatible macOS IPSW. The built-in path can download a supported restore image and verify its pinned SHA-256 digest before installation. The current UTM path supports the tested UTM 4.7.x line.
+Choose a compatible macOS IPSW, or download the supported restore image in the app. Downloaded images are checked against a pinned SHA-256 digest before installation.
 
 After macOS setup, Tether Host attaches a read-only **Tether Guest Setup** disk. Its six-step guest installer:
 
@@ -36,9 +33,11 @@ After macOS setup, Tether Host attaches a read-only **Tether Guest Setup** disk.
 | macOS guest | Tailscale identity, Hermes runtime, model login, computer-use permissions, durable agent execution |
 | Tether Flow | Phone-side connection test, origin-bound Keychain credential, chat, approvals, and mini apps |
 
-For built-in VMs, the verified guest sends its private URL and token to Tether Host through a private VM socket. Tether Host fills the connection screen, confirms guest Tailscale status, verifies Hermes from the Mac, and stores the token in Keychain. UTM guests can use private file import or manual entry.
+The verified guest sends its private URL and token to Tether Host through a private VM socket. Tether Host fills the connection screen, confirms guest Tailscale status, verifies Hermes from the Mac, and stores the token in Keychain. Private file import and manual entry remain available for recovery.
 
 ## Security model
+
+**Network containment is not yet implemented.** Internet mode uses Apple NAT and does not block guest access to reachable host, LAN, tailnet, or public services. A separate guest desktop and authenticated phone connection do not prove network isolation. The PF tools are offline prototypes, not active protection. Disable **Enable internet access for VM starts** for a disconnected VM with no network device; this setting persists across app launches and applies to subsequent VM starts. Full network containment and physical-phone acceptance remain production release blockers.
 
 - Guest dependency checks never use Hermes, Tailscale, or developer tools from the physical Mac.
 - Hermes listens on guest loopback at `127.0.0.1:8642`; Tailscale Serve provides tailnet-only HTTPS and Funnel must remain disabled.
@@ -81,12 +80,10 @@ This repository was extracted from the Tether iOS repository at source commit `4
 
 ### Create the macOS guest
 
-1. Open Tether Host and choose **Built-in Apple** or **UTM**.
+1. Open Tether Host and choose **Create new…**.
 2. Choose a compatible macOS IPSW or use the in-app restore-image download.
 3. Create the VM and complete Apple's macOS welcome and account screens.
 4. Return to Tether Host and choose **Desktop is ready — Continue**.
-
-For UTM, install the supported app at `/Applications/UTM.app`. Tether Host installs macOS before creating and registering the UTM package because UTM's public command-line interface does not create a macOS VM directly from an IPSW.
 
 ### Install guest services
 
@@ -108,12 +105,15 @@ For UTM, install the supported app at `/Applications/UTM.app`. Tether Host insta
 
 Open `TetherHost.xcodeproj`, select the `Tether Host for Mac` scheme, and build for **My Mac**.
 
-Run the core tests:
+Run all automated checks (Apple silicon, macOS 14+, Xcode with Swift 6):
 
 ```sh
-cd TetherHost
-swift test
+python3 -m venv build/test-venv
+build/test-venv/bin/python -m pip install -r requirements-test.txt
+TETHER_TEST_PYTHON="$PWD/build/test-venv/bin/python" bash scripts/verify.sh
 ```
+
+This runs core and guest tests, builds Debug and Release, and verifies embedded code signatures and hardened runtime. CI runs the same script. `swift test --package-path TetherHost` runs the core suite alone. Neither command establishes live network containment or phone acceptance.
 
 Build an ad-hoc signed preview DMG and checksum:
 

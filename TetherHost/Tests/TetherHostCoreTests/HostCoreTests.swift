@@ -29,25 +29,6 @@ final class HostCoreTests: XCTestCase {
         XCTAssertNil(early.secondsRemaining)
     }
 
-    func testUTMListParsesExactIDsAndDuplicateNames() throws {
-        let input = """
-        UUID                                 Status   Name
-        738EECC5-6357-43D9-BE03-298E0B3DE206 started  Hermes Sandbox
-        DBAD34AA-6E6F-41BB-A23D-2C57DC8B3334 stopped  Hermes Sandbox
-        """
-        let records = try UTMCTLAdapter.parseList(input)
-        XCTAssertEqual(records.count, 2)
-        XCTAssertEqual(records[0].id, vmID)
-        XCTAssertEqual(records[0].state, .started)
-        if case .ambiguousName(let matches) = VirtualMachineSelector.select(
-            designated: nil, expectedName: "Hermes Sandbox", from: records
-        ) {
-            XCTAssertEqual(matches.count, 2)
-        } else {
-            XCTFail("Duplicate names must remain ambiguous")
-        }
-    }
-
     func testExactDesignationWinsOverDuplicateName() throws {
         let other = VirtualMachineID(rawValue: UUID())
         let records = [
@@ -62,17 +43,12 @@ final class HostCoreTests: XCTestCase {
         XCTAssertEqual(selection, .selected(records[0]))
     }
 
-    func testDuplicateExactUUIDIsRejected() throws {
-        let line = "738EECC5-6357-43D9-BE03-298E0B3DE206 started Hermes Sandbox"
-        XCTAssertThrowsError(try UTMCTLAdapter.parseList("UUID Status Name\n\(line)\n\(line)"))
-    }
-
     func testInterruptedSetupRequiresReconciliation() {
         let start = Date(timeIntervalSince1970: 100)
         var journal = SetupJournal(now: start)
-        journal.record(.running, for: .utmDetection, diagnostic: "checking", now: start)
+        journal.record(.running, for: .virtualizationSupport, diagnostic: "checking", now: start)
         let recovered = journal.recoveredAfterInterruption(now: start.addingTimeInterval(5))
-        let stage = recovered.stages.first { $0.stage == .utmDetection }
+        let stage = recovered.stages.first { $0.stage == .virtualizationSupport }
         XCTAssertEqual(stage?.state, .interrupted)
         XCTAssertEqual(stage?.attempts, 1)
         XCTAssertTrue(stage?.diagnostic?.contains("reconciliation") == true)
@@ -85,12 +61,12 @@ final class HostCoreTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         let store = FileSetupJournalStore(fileURL: url)
         var journal = SetupJournal()
-        journal.record(.running, for: .utmDetection, diagnostic: "token=super-secret-value")
+        journal.record(.running, for: .virtualizationSupport, diagnostic: "token=super-secret-value")
         try await store.save(journal)
         let bytes = try Data(contentsOf: url)
         XCTAssertFalse(String(decoding: bytes, as: UTF8.self).contains("super-secret-value"))
         let restored = try await store.load()
-        XCTAssertEqual(restored?.stages.first { $0.stage == .utmDetection }?.state, .interrupted)
+        XCTAssertEqual(restored?.stages.first { $0.stage == .virtualizationSupport }?.state, .interrupted)
     }
 
     func testEndpointValidatorRejectsPublicAndInsecureOrigins() throws {
@@ -398,37 +374,6 @@ final class HostCoreTests: XCTestCase {
         } catch let error as GuestSetupDiskError {
             guard case .missingGuestHelper = error else { return XCTFail("Unexpected error: \(error)") }
         }
-    }
-
-    func testFinderLocatorUsesExactUTMIdentityAndRejectsAmbiguousCopies() throws {
-        let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("tether-vm-locator-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: root) }
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        let firstID = VirtualMachineID(rawValue: UUID())
-        let secondID = VirtualMachineID(rawValue: UUID())
-        func makeUTM(_ name: String, id: VirtualMachineID) throws -> URL {
-            let bundle = root.appendingPathComponent("\(name).utm", isDirectory: true)
-            try FileManager.default.createDirectory(at: bundle, withIntermediateDirectories: false)
-            let plist: [String: Any] = ["Information": ["UUID": id.description, "Name": "Same display name"]]
-            let data = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
-            try data.write(to: bundle.appendingPathComponent("config.plist"))
-            return bundle
-        }
-        let first = try makeUTM("first", id: firstID)
-        _ = try makeUTM("second", id: secondID)
-        let locator = VirtualMachineBundleLocator(nativeRoot: root, utmRoots: [root])
-        XCTAssertEqual(locator.locate(firstID, provider: .utm)?.resolvingSymlinksInPath(),
-                       first.resolvingSymlinksInPath())
-        XCTAssertNil(locator.locate(VirtualMachineID(rawValue: UUID()), provider: .utm))
-        let otherRoot = root.appendingPathComponent("another", isDirectory: true)
-        try FileManager.default.createDirectory(at: otherRoot, withIntermediateDirectories: false)
-        let duplicate = otherRoot.appendingPathComponent("duplicate.utm", isDirectory: true)
-        try FileManager.default.createDirectory(at: duplicate, withIntermediateDirectories: false)
-        try FileManager.default.copyItem(at: first.appendingPathComponent("config.plist"),
-                                         to: duplicate.appendingPathComponent("config.plist"))
-        let ambiguous = VirtualMachineBundleLocator(nativeRoot: root, utmRoots: [root, otherRoot])
-        XCTAssertNil(ambiguous.locate(firstID, provider: .utm))
     }
 
     func testGuestSetupDiskExporterRejectsWrongExtension() async {

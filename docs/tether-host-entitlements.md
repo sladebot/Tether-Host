@@ -13,23 +13,16 @@ entitlement.
 
 ## Host application
 
-The primary host path manages its application-owned VM through
-`Virtualization.framework`; users do not install UTM. The compatibility adapter
-may inspect an existing UTM installation through `utmctl`, using absolute
-executable resolution, fixed argument arrays, exact VM identity matching,
-bounded output, and no shell interpolation. That path needs no Apple Events
-entitlement. If a future migration release requires UTM AppleScript, add
-`com.apple.security.automation.apple-events` only after the implementation and
-usage description are reviewed. It creates a visible Automation consent prompt
-and must be scoped to UTM. Do not add temporary Apple Events exception
-entitlements as a shortcut.
+The host manages only application-owned VMs through `Virtualization.framework`.
+There is no external provider adapter, AppleScript automation, or package
+migration action. No Apple Events entitlement is needed.
 
-The Developer ID build is currently outside the Mac App Store. Enabling App
-Sandbox without a complete design for UTM automation, XPC, file selection, and
-updates can break the product; disabling it also means entitlements are not the
-primary containment boundary. The host app still runs as the logged-in user and
-must keep secrets in Keychain, validate all untrusted VM output, and talk to the
-root helper only through a narrow authenticated XPC protocol.
+The Developer ID build is outside the Mac App Store and is not App Sandbox
+confined. Enabling App Sandbox needs a complete design for virtualization, file
+selection, updates, and any future XPC helper. The host runs as the logged-in
+user, keeps credentials in Keychain, and validates untrusted VM output. The
+privileged networking helper described below is a future requirement; it is not
+installed by the current app, and NAT does not provide network containment.
 
 Do not add these Release entitlements unless a concrete reviewed feature cannot
 work without one:
@@ -48,7 +41,9 @@ ID provisioning/capability setup, Team ID prefix, and every participant must be
 reviewed together. The privileged helper should not receive the Hermes bearer
 token merely to simplify sharing.
 
-## Privileged network helper
+## Future privileged network helper
+
+This component is not implemented or registered by the current app.
 
 `SMAppService` does not itself require a broad privileged entitlement. Privilege
 comes from launchd installing/running the signed daemon as root after the macOS
@@ -80,12 +75,11 @@ production requirement.
 
 | Approval | Location | Why it is required | Security consequence |
 | --- | --- | --- | --- |
-| Helper/background item authorization | Host macOS | Registers the signed root network-policy daemon | Grants a narrowly implemented component root authority; a flaw can affect host networking. |
+| Future helper/background item authorization | Host macOS | Registers the signed root network-policy daemon | Grants a narrowly implemented component root authority; a flaw can affect host networking. |
 | Tailscale VPN/network extension and login | Guest macOS | Joins the guest to the user's tailnet | Gives the guest the tailnet reachability allowed by account policy. Funnel remains forbidden. |
 | Accessibility | Guest macOS | Allows CUA to drive the guest UI | CUA can control the guest desktop session. It must have no path to the host desktop. |
 | Screen Recording | Guest macOS | Allows CUA to observe the guest display | CUA can capture guest display contents, which may contain user data. |
 | Provider login | Guest or user-owned browser flow | Authorizes model/provider access | Grants provider-specific account and data access. Store resulting credentials only in the intended guest store. |
-| Automation, only if AppleScript migration is adopted | Host macOS | Lets Tether Host for Mac send Apple Events to UTM | Applies only to optional migration; avoid by preferring `utmctl`. |
 
 Tailscale account ACLs/grants are account-side controls. The app may generate and
 validate a proposed scoped policy, but it cannot silently approve or broaden the

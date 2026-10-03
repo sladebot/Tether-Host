@@ -1,142 +1,82 @@
-# Tether Host for Mac implementation
+# Tether Host architecture
 
-## Repository assessment (2026-09-20)
+Updated 2026-10-01. This describes the current Apple-only application. Earlier
+migration and isolation investigations in this directory are historical evidence,
+not supported runtime options or proof of deployed protection.
 
-This repository contains the native macOS app, its local `TetherHostCore` Swift
-package, host tests, VM/isolation support assets, and release tooling. The Tether
-iOS application now lives in a separate repository and will interoperate through
-a versioned pairing and capability contract. The current preview includes
-read-only VM inventory, a manually attached guest setup ISO, and a guest-local
-macOS installer. There is no privileged daemon, automatic VM lifecycle, or
-completed Developer ID distribution artifact yet.
+## Runtime and ownership
 
-The working preview uses a macOS guest in UTM. It detects an exact VM and running
-state, exports a read-only transfer ISO, then checks and configures Tailscale and
-Hermes only after Tether Host is running inside that guest. The production target
-uses Apple's `Virtualization.framework` so UTM is not a customer prerequisite,
-but the native guest image and lifecycle are not implemented in this preview.
-UTM remains the supported preview and future recovery path.
+Tether Host owns macOS VMs through Apple's `Virtualization.framework`. The host
+app creates a fresh hardware identity, installs a compatible IPSW, and stores the
+VM disk and manifest in its application-support directory under an immutable UUID.
+The display is embedded in the host workspace. VM operations are serialized before
+asynchronous work begins; deletion requires a stopped VM and exact confirmation.
 
-An existing working UTM guest must be adopted or migrated without destructive
-recreation. The migration notes report two registrations named Hermes Sandbox,
-formerly pointing to the same package. Names and a single config.plist are
-insufficient identity/sharing evidence: UTM's registry held a live
-shared-directory bookmark independently of that plist.
+There is no third-party VM provider, command-line adapter, package conversion,
+registration, or migration action. Obsolete provider preferences are reconciled
+without opening or deleting previously managed external VM packages. Historical
+user disks remain the user's property.
 
-The existing Python PF generator and audit tests are useful offline tools. They
-explicitly do not establish a guest-root-resistant network boundary. The current
-shared bridge, source-IP rules, unverified IPv6 paths, pre-existing states, and
-public Studio Funnel are unresolved containment risks. Guest PF is defense in
-depth. A reachable HTTPS endpoint is not evidence of isolation. Historical test
-results in the migration document are not current app-generated observations.
+The `TetherHostCore` package contains identity, inventory, lifecycle coordination,
+media generation, verification, and security-policy value types. The SwiftUI app
+owns presentation and the live Virtualization objects. Guest provisioning runs
+only in the separate macOS guest; host-installed agent tools never satisfy guest
+dependency checks.
 
-`docs/hermes-sandbox-migration.md` is preserved as historical source evidence.
+## Guest provisioning and credentials
 
-## Phased plan and release gates
+A read-only setup image contains the guest installer and its signed clipboard /
+connection helper. Installer media is generated atomically so failed replacement
+does not remove a usable previous image. The installer verifies guest networking,
+Tailscale identity and Serve configuration, loopback bearer authentication, durable
+run capabilities, computer-use permission and full-screen capture, and a real
+model response. Pending model checks retain their admission identity; terminal
+unsuccessful checks can be retried as a new deliberate attempt.
 
-1. **Observe:** native macOS target; typed services; fail-closed inventory for
-   Tether-owned Apple VM bundles; bounded, read-only UTM fallback; exact-ID
-   selection; persistent setup journal; evidence dashboard; unit tests; release
-   tooling. No helper installation or live policy changes.
-2. **Establish containment:** prove an exclusive, externally enforced attachment
-   with IPv4/IPv6, source-spoofing, existing-state and reload tests. Show the exact
-   host/tailnet diff and obtain approval before any live policy change. The
-   Tether-owned native attachment is the production path; the UTM fallback may
-   be migrated only after equivalent boundary evidence passes.
-3. **Privileged service:** embed an SMAppService daemon with authenticated XPC
-   peers, root-owned identity inventory, journaled scoped policy transactions,
-   boot ordering, drift detection and rollback. Never accept commands, paths,
-   interfaces, addresses or PF text from an IPC client. Ship only after containment
-   and peer-authentication tests pass; a typed Swift protocol alone is not XPC security.
-4. **Provision:** release-owned signed manifest, pinned guest components and
-   SHA-256; authenticated bootstrap channel; idempotent guest receipts; isolated
-   non-admin GUI session; guest token generation; Keychain host storage;
-   Tailscale consent, Serve configuration and guest CUA permissions.
-5. **Operate:** two-phase token rotation and pairing; fresh health/auth/negative
-   evidence; start/stop/update/repair; explicitly confirmed VM deletion; scoped
-   uninstall. Phone handoff needs an iOS receiver and an authenticated, expiring
-   one-use exchange. A URL with a reusable bearer token is not acceptable.
-6. **Distribute:** Developer ID app/helper signatures, hardened runtime, notarized
-   and stapled DMG; fresh-Mac, restart, fault injection and real phone acceptance.
+The guest sends its connection receipt over a private VM socket. That receipt is
+untrusted input: the host independently validates the HTTPS endpoint, missing and
+incorrect token rejection, capabilities, and available models. Verification expires
+and must be refreshed even when the receipt's endpoint and token are unchanged.
+The host stores accepted credentials in Keychain. Clipboard transfer is explicit;
+there is no automatic host-folder sharing or clipboard synchronization.
 
-## Trust boundaries
+## Network boundary and remaining containment work
 
-```mermaid
-flowchart TB
-    Phone[Authorized Tether iPhone] -->|Tailnet HTTPS + API authentication|Serve
-    subgraph Host[Trusted Mac host]
-      GUI[Unprivileged Tether Host for Mac]
-      KC[Host Keychain]
-      Helper[Signed privileged helper]
-      Policy[Externally enforced VM network boundary]
-      VM[Future Apple backend / current UTM preview]
-      GUI --> KC
-      GUI -->|Typed authenticated XPC|Helper
-      Helper -->|Only Tether-owned policy|Policy
-      GUI -->|Exact VM identity; native lifecycle|VM
-    end
-    subgraph Guest[Untrusted guest; assume Hermes compromise]
-      Serve[Tailscale Serve; Funnel disabled]
-      Hermes[127.0.0.1:8642 Hermes]
-      CUA[CUA; guest desktop only]
-      Serve --> Hermes --> CUA
-    end
-    VM --> Guest
-    Guest -->|Default deny; approved destinations only|Policy
-    Policy --> Providers[Approved model / update / bootstrap services]
-    Manifest[Signed release manifest] -->|Signature + version + digest validation|GUI
-```
+Internet mode uses `VZNATNetworkDeviceAttachment`. NAT does not enforce a
+host/LAN/tailnet destination deny policy. A private phone connection, a guest-only
+filesystem, and successful API authentication are separate properties and cannot
+certify network containment. The policy generators and audit scripts are offline
+research tools; no privileged networking service is installed by this app.
 
-## Threat model
+Offline mode provides a VM with no network device. It is useful for disconnected
+work but cannot support Tailscale, model access, or phone connectivity. The network choice persists across app launches and applies to subsequent VM
+starts. Selecting Internet mode provides ordinary NAT connectivity, not
+approved-service containment.
 
-| Threat | Required control / evidence |
-| --- | --- |
-| Compromised guest or prompt injection | No host mounts, clipboard, USB, camera/mic; no host automation credentials; external network enforcement |
-| Guest-root address spoofing or alternate route | Exclusive enforced attachment; IP-scoped shared bridge is insufficient |
-| Unrelated VM selected / duplicate registration | Exact immutable UUID plus package/adapter binding; ambiguous inventory blocks mutations |
-| IPC abuse | Authenticate audit-token/code-signing identity; helper-owned resources; operation enum and pinned revision only |
-| Supply-chain substitution/downgrade | Pinned Ed25519 release key, monotonic manifest sequence, expiry, fixed component IDs, SHA-256 over exact downloaded bytes |
-| Token theft / endpoint change | Keychain origin binding; no credentials in argv, journals, QR, exports or errors; reject redirects |
-| Public Serve / raw listener | Parse complete Serve config; require only HTTPS 443 to loopback 8642; separate negative external probe |
-| Stale or guest-forged health | Show source/time; guest reports cannot certify host boundary; expire observations |
-| Interrupted setup / rollback | Persist running intent before effect; reconcile external state on retry; no blind replay |
-| Uninstall collateral damage | Ownership receipts; preserve adopted VM and dependencies; explicit disk-delete confirmation |
+The following remain prerequisites for a production containment claim:
 
-The host OS, signed application, release key and helper are trusted. A hostile host
-administrator is outside scope. Guest output, VM names, remote errors, DNS and
-downloaded bytes are untrusted. Never interpolate them into a shell or log them.
+- A host-controlled network attachment or independently enforced gateway covering
+  both IPv4 and IPv6, source spoofing, alternate routes, and existing sessions.
+- An explicit service policy derived from the actual guest clients, with trusted
+  DNS resolution and no arbitrary proxy or transport bypass.
+- Enforced startup ordering, failure behavior, update/rollback, and policy drift
+  handling. A polling script or guest-admin-editable firewall is insufficient.
+- Fresh negative probes for host, LAN, tailnet, and public host endpoints alongside
+  successful phone/model connectivity. Test guest-root behavior under the claimed
+  threat model.
 
-## Native interface direction
+Do not install the environment-specific PF examples as a generic fix. They contain
+historical topology assumptions and are not wired into VM startup.
 
-Use the macOS sidebar, system SF typography, grouped status rows and a wide
-evidence detail pane. Semantic colors adapt to light/dark appearance: label
-`#1D1D1F`, secondary `#6E6E73`, surface `#F5F5F7`, accent `#007AFF`, caution
-`#9A6700`, failure `#C9342D` are reference values, not forced appearance overrides.
-One prominent isolation summary anchors the dashboard. Unknown is never green.
-Setup is a real ordered checklist with persisted progress and explicit blockers.
-Actions explain the missing prerequisite instead of pretending setup succeeded.
+## Verification and release
 
-## Native VM implementation
+`bash scripts/verify.sh` runs Python and Swift tests, guest helper checks, Debug and
+Release builds, and ad-hoc nested-signature/hardened-runtime validation. It does not
+boot a VM, exercise OS permission prompts, install host policy, or contact a phone.
+Developer ID export, secure timestamps, notarization, and clean-machine acceptance
+are additional release checks. See [verification](tether-host-verification.md) and
+[distribution](tether-host-distribution.md).
 
-Keep VM reading separate from lifecycle and provisioning. Use
-`Virtualization.framework` as the primary production backend and retain UTM for
-preview, migration, and recovery. The current guest installer targets macOS for
-both providers. A future signed native macOS guest artifact must include a
-versioned manifest and verified restore-image inputs. Persist VM identity and disk ownership
-atomically. Omit directory, clipboard and other sharing devices by construction.
-Own a tested network attachment and stop networked execution synchronously when
-its trusted identity or policy changes. NAT alone does not establish host
-isolation. Import or migrate only while stopped and retain the original disk
-until verification succeeds.
-
-## Primary references
-
-- [UTM supported automation](https://docs.getutm.app/scripting/scripting/)
-- [Apple Virtualization framework](https://developer.apple.com/documentation/virtualization)
-- [SMAppService](https://developer.apple.com/documentation/servicemanagement/smappservice)
-- [Tailscale Serve](https://tailscale.com/docs/reference/tailscale-cli/serve)
-- [Apple notarization](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution)
-- [Virtualizing macOS](https://developer.apple.com/documentation/virtualization/virtualize-macos-on-a-mac)
-
-See `tether-host-verification.md` for actual implementation and test evidence;
-this plan is not a claim that the production release gates have passed.
+Apple references: [NAT attachment](https://developer.apple.com/documentation/virtualization/vznatnetworkdeviceattachment),
+[custom packet attachment](https://developer.apple.com/documentation/virtualization/vzfilehandlenetworkdeviceattachment),
+[vmnet attachment](https://developer.apple.com/documentation/virtualization/vzvmnetnetworkdeviceattachment).

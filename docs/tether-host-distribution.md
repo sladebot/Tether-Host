@@ -4,18 +4,15 @@ This repository contains a release pipeline scaffold. It has not produced a
 signed or notarized artifact, and no release is ready to distribute until the
 checks below pass on a clean machine.
 
-The production contract is one DMG containing one application, with no UTM
-prerequisite. That target will download a pinned Tether macOS guest artifact,
-verify its signature and digest, store it in the app-owned VM directory, and run
-it with Apple's `Virtualization.framework`. An installed UTM copy will remain
-available for migration or recovery.
+The application uses Apple Virtualization exclusively and has no external VM
+provider prerequisite or recovery integration. The preview DMG contains the app
+and a guest setup ISO. The app installs a fresh macOS guest from a compatible
+IPSW; its supported download is checked against a pinned digest.
 
-The current development preview does not meet that contract. Its DMG contains
-the app plus a guest setup ISO. The built-in path now accepts a local IPSW and
-creates a fresh VM without UTM; UTM 4.7.x remains a manual backup path. The
-built-in path does not yet download a pinned guest image automatically, and it
-has not passed a clean-VM, real-phone end-to-end test. This preview is ad-hoc
-signed and is not notarized.
+The preview does not establish network containment. Internet mode is ordinary
+Apple NAT. External enforcement, clean-VM acceptance, and physical-phone tests
+remain release blockers. A successful signing pipeline does not satisfy them.
+The development preview is ad-hoc signed and is not notarized.
 
 ## Release identity and one-time setup
 

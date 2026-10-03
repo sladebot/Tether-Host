@@ -264,6 +264,9 @@ def test_model(endpoint, token):
     # Persist admission identity BEFORE sending; retries cannot duplicate an ambiguous run.
     path = STATE / 'verification-run.json'
     run = json.loads(path.read_text()) if path.exists() else {'key': str(uuid.uuid4()), 'marker': 'TETHER_READY_' + secrets.token_hex(6)}
+    if run.get('endpoint', endpoint) != endpoint:
+        raise SetupFailure('A verification run is pending on the previous guest endpoint. Restore that endpoint and finish checking it before verifying a different guest.')
+    run['endpoint'] = endpoint
     private_write(path, json.dumps(run))
     if 'run_id' not in run:
         status, data = request(endpoint, '/v1/runs', token,
@@ -278,7 +281,11 @@ def test_model(endpoint, token):
         if status != 200:
             raise SetupFailure('The model verification run could not be read.')
         if data.get('status') == 'completed':
-            if data.get('output', '').strip() != run['marker']:
+            output = data.get('output')
+            if not isinstance(output, str) or output.strip() != run['marker']:
+                # A terminal response cannot improve on retry. Preserve its identity
+                # for diagnosis and let the next explicit attempt submit a new run.
+                path.rename(STATE / ('verification-run-' + run['key'] + '-rejected.json'))
                 raise SetupFailure('The model did not return the verification marker.')
             path.rename(STATE / ('verification-run-' + run['key'] + '-completed.json'))
             return

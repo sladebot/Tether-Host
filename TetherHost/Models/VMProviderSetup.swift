@@ -1,9 +1,9 @@
 import Foundation
 
 public enum VMProvider: String, CaseIterable, Codable, Sendable {
-    case builtIn, utm
+    case builtIn
 
-    public var title: String { self == .builtIn ? "Apple Virtualization" : "UTM" }
+    public var title: String { "Apple Virtualization" }
 }
 
 public enum VMProviderAvailability: Equatable, Sendable {

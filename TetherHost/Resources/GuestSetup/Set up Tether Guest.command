@@ -32,6 +32,15 @@ cleanup() {
 trap cleanup EXIT
 # Any changed guest dependency requires a fresh final verification.
 if [ "$ACTION" != internet ]; then rm -f "$TETHER_GUEST_STATE/connection.json" "$TETHER_GUEST_STATE/verified.ready"; fi
+# A retry must not leave a previous completion receipt behind after failure.
+# Invalidate dependent steps before changing their prerequisites.
+case "$ACTION" in
+    internet) rm -f "$TETHER_GUEST_STATE/internet.ready" ;;
+    tailscale) rm -f "$TETHER_GUEST_STATE/tailscale.ready" ;;
+    hermes-install) rm -f "$TETHER_GUEST_STATE/hermes-installed.ready" "$TETHER_GUEST_STATE/hermes-configured.ready" "$TETHER_GUEST_STATE/computer-use.ready" ;;
+    hermes-configure) rm -f "$TETHER_GUEST_STATE/hermes-configured.ready" "$TETHER_GUEST_STATE/computer-use.ready" ;;
+    computer-use) rm -f "$TETHER_GUEST_STATE/computer-use.ready" ;;
+esac
 stage() { CURRENT_STAGE="$1"; printf '\n%s\n' "$1"; printf '%s\n' "$1" > "$TETHER_GUEST_STATE/status.txt"; }
 wait_for_user() { printf '\n%s\nPress Return when finished, or Control-C to stop. ' "$1"; read -r _; }
 check_tailnet() {
@@ -150,11 +159,11 @@ if [ ! -x "$HERMES_BIN" ] || [ ! -x "$PYTHON_BIN" ]; then
     curl --proto '=https' --tlsv1.2 -fL --retry 2 --connect-timeout 15 --max-time 180 "$INSTALLER_URL" -o "$TETHER_GUEST_STATE/hermes-install.sh"
     ACTUAL_DIGEST="$(shasum -a 256 "$TETHER_GUEST_STATE/hermes-install.sh" | awk '{print $1}')"
     [ "$ACTUAL_DIGEST" = "$INSTALLER_DIGEST" ] || fail 'The Hermes installer checksum did not match.'
-    if [ ! -f "$TETHER_GUEST_STATE/hermes-installed" ]; then
-        printf 'Hermes may spend up to 10 minutes downloading its optional Chromium browser; the upstream installer is quiet during that step.\n'
-        /bin/bash "$TETHER_GUEST_STATE/hermes-install.sh" --skip-setup --commit "$HERMES_REVISION"
-        touch "$TETHER_GUEST_STATE/hermes-installed"
-    fi
+    # The runtime checks above are authoritative. A historical installation
+    # marker must not prevent repair of an incomplete managed installation.
+    printf 'Hermes may spend up to 10 minutes downloading its optional Chromium browser; the upstream installer is quiet during that step.\n'
+    /bin/bash "$TETHER_GUEST_STATE/hermes-install.sh" --skip-setup --commit "$HERMES_REVISION"
+    touch "$TETHER_GUEST_STATE/hermes-installed"
 fi
 [ -x "$HERMES_BIN" ] && [ -x "$PYTHON_BIN" ] || fail 'Hermes is incomplete. Repair it inside this VM, then run setup again.'
 install_hermes_command

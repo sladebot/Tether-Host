@@ -56,6 +56,10 @@ PLIST
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${CURRENT_PROJECT_VERSION:-1}" "$APP/Contents/Info.plist"
 SIGNING_IDENTITY="${EXPANDED_CODE_SIGN_IDENTITY:--}"
 if [ -z "$SIGNING_IDENTITY" ]; then SIGNING_IDENTITY='-'; fi
-codesign --force --sign "$SIGNING_IDENTITY" "$APP_RESOURCES/Tether Guest Clipboard Helper"
-codesign --force --sign "$SIGNING_IDENTITY" "$APP"
-codesign --verify --strict "$APP"
+SIGNING_OPTIONS=(--force --options runtime --sign "$SIGNING_IDENTITY")
+# Real identities need a secure timestamp for notarization. Ad-hoc preview
+# builds stay offline and must not request a timestamp from Apple's service.
+if [ "$SIGNING_IDENTITY" != '-' ]; then SIGNING_OPTIONS+=(--timestamp); fi
+codesign "${SIGNING_OPTIONS[@]}" "$APP_RESOURCES/Tether Guest Clipboard Helper"
+codesign "${SIGNING_OPTIONS[@]}" "$APP"
+codesign --verify --deep --strict "$APP"

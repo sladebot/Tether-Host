@@ -60,21 +60,15 @@ struct LiveHostStatusProvider: HostStatusProviding {
             guard let nativeReader else { throw NativeVirtualMachineStoreError.invalidRoot }
             inventory = try await nativeReader.list()
             evidenceSource = .appleVirtualization
-        case .utm:
-            // Recreate detection so installing UTM does not require restarting Tether.
-            inventory = try await UTMCTLAdapter(executor: UTMCTLProcessExecutor()).list()
-            evidenceSource = .utm
         }
         let now = Date()
         let matches = inventory
         let vmState: HealthState = matches.count == 1 ? .healthy : .degraded
         let detail: String
         if matches.count == 1 {
-            detail = evidenceSource == .appleVirtualization
-                ? "Tether's native Apple VM is available by exact UUID."
-                : "A UTM VM is available by exact UUID."
+            detail = "Tether's native Apple VM is available by exact UUID."
         } else if inventory.isEmpty {
-            detail = "No VM was found for the selected provider. Choose a provider in Setup Assistant."
+            detail = "No VM was found. Create a VM in Setup Assistant."
         } else {
             detail = "Found \(matches.count) matching VMs; exact designation is required."
         }
@@ -163,12 +157,11 @@ final class AppViewModel: ObservableObject {
     @Published private(set) var connectionMessage = "Verify the guest endpoint before connecting your phone."
     @Published private(set) var connectionCopyMessage: String?
     @Published private(set) var guestSetupStatus = "Guest setup has not started."
-    @Published private(set) var guestSetupDiskStatus = "No guest setup disk has been created yet."
-    @Published private(set) var guestSetupDiskURL: URL?
-    @Published private(set) var isExportingGuestSetupDisk = false
     @Published private(set) var guestDependencies: [GuestDependencyStatus] = []
-    let isInsideGuest = GuestSetupEnvironment.isVirtualMac
-    private let connectionVault = KeychainSecretStore(service: "app.tether.host.connection")
+    let isInsideGuest: Bool
+    private let connectionVault: any SecretStoring
+    private let connectionVerifier: ConnectionVerifier
+    private let now: @MainActor () -> Date
     private var connectionID = VirtualMachineID(rawValue: UUID())
     private var connectionInputRevision = 0
     private var hasManualConnectionOverride = false
@@ -177,39 +170,40 @@ final class AppViewModel: ObservableObject {
     private var lastAutomaticVerificationAt: Date?
 
     @Published private(set) var providerSetup: VMProviderSetup
-    let nativeVM = NativeVMManager()
+    let nativeVM: NativeVMManager
     @Published private(set) var selectedVMID: VirtualMachineID?
-    @Published private(set) var utmDesktopReadyVMID: VirtualMachineID?
     @Published private(set) var tailscaleConfirmedVMID: VirtualMachineID?
     @Published private(set) var verifiedForVMID: VirtualMachineID?
     private let preferences: UserDefaults
     private let provider: any HostStatusProviding
 
-    init(provider: any HostStatusProviding = LiveHostStatusProvider(), preferences: UserDefaults = .standard) {
+    init(provider: any HostStatusProviding = LiveHostStatusProvider(), preferences: UserDefaults = .standard,
+         nativeVM: NativeVMManager = NativeVMManager(),
+         connectionVerifier: ConnectionVerifier = ConnectionVerifier(),
+         connectionVault: any SecretStoring = KeychainSecretStore(service: "app.tether.host.connection"),
+         isInsideGuest: Bool = GuestSetupEnvironment.isVirtualMac,
+         now: @escaping @MainActor () -> Date = { Date() }) {
+        self.nativeVM = nativeVM
+        self.connectionVerifier = connectionVerifier
+        self.connectionVault = connectionVault
+        self.isInsideGuest = isInsideGuest
+        self.now = now
         self.preferences = preferences
         selectedVMID = preferences.string(forKey: "setup.vmID").flatMap(VirtualMachineID.init)
-        utmDesktopReadyVMID = preferences.string(forKey: "setup.utmDesktopReadyVMID").flatMap(VirtualMachineID.init)
         tailscaleConfirmedVMID = preferences.string(forKey: "setup.tailscaleConfirmedVMID").flatMap(VirtualMachineID.init)
-        let savedProvider = preferences.string(forKey: "setup.vmProvider").flatMap(VMProvider.init(rawValue:))
-        // Migrate the former UTM default once, then preserve future choices.
-        // Keep a selected built-in VM when upgrading from a preview.
-        let hasBuiltInDefault = preferences.bool(forKey: "setup.builtInDefaultApplied")
-        let initialProvider: VMProvider = hasBuiltInDefault ? (savedProvider ?? .builtIn) : .builtIn
-        if !hasBuiltInDefault {
-            preferences.set(VMProvider.builtIn.rawValue, forKey: "setup.vmProvider")
-            preferences.set(true, forKey: "setup.builtInDefaultApplied")
-            if savedProvider != .builtIn {
-                preferences.removeObject(forKey: "setup.vmID")
-                selectedVMID = nil
-            }
+        // Retire legacy preferences only; never move or delete existing VM disks.
+        if let previous = preferences.string(forKey: "setup.vmProvider"), previous != "builtIn" {
+            selectedVMID = nil
+            preferences.removeObject(forKey: "setup.vmID")
+            preferences.removeObject(forKey: "connection.endpoint")
+            preferences.removeObject(forKey: "connection.id")
         }
-        providerSetup = VMProviderSetup(provider: initialProvider)
-        if initialProvider == .builtIn {
-            // The guest can be offline or on a different tailnet after a host
-            // restart. Only a fresh guest status reply can restore this gate.
-            tailscaleConfirmedVMID = nil
-            preferences.removeObject(forKey: "setup.tailscaleConfirmedVMID")
+        for key in ["setup.vmProvider", "setup.builtInDefaultApplied", "setup.utmDesktopReadyVMID"] {
+            preferences.removeObject(forKey: key)
         }
+        providerSetup = VMProviderSetup()
+        tailscaleConfirmedVMID = nil
+        preferences.removeObject(forKey: "setup.tailscaleConfirmedVMID")
         selection = .setup
         self.provider = provider
         let initial = HostDashboardSnapshot.unobserved
@@ -230,7 +224,6 @@ final class AppViewModel: ObservableObject {
     func selectProvider(_ provider: VMProvider) {
         clearConnectionForVMChange()
         providerSetup.select(provider)
-        preferences.set(provider.rawValue, forKey: "setup.vmProvider")
         selectedVMID = nil
         preferences.removeObject(forKey: "setup.vmID")
         inventory = []
@@ -243,7 +236,6 @@ final class AppViewModel: ObservableObject {
     }
 
     private static func availability(for provider: VMProvider) -> VMProviderAvailability {
-        if provider == .utm { return UTMInstallation.detect().availability }
         guard AppleVirtualizationSupport.isAvailable else {
             return .blocked("Built-in VM requires an Apple silicon Mac with macOS 14 or later.")
         }
@@ -302,9 +294,7 @@ final class AppViewModel: ObservableObject {
         let vm = designatedVM
         let desktopConfirmed: Bool
         if let vm {
-            desktopConfirmed = providerSetup.provider == .builtIn
-                ? nativeVM.isDesktopReady(for: vm.id)
-                : utmDesktopReadyVMID == vm.id
+            desktopConfirmed = nativeVM.isDesktopReady(for: vm.id)
         } else {
             desktopConfirmed = false
         }
@@ -313,22 +303,8 @@ final class AppViewModel: ObservableObject {
             vmRunning: designatedVMIsRunning,
             desktopConfirmed: desktopConfirmed,
             tailscaleConfirmed: vm != nil && tailscaleConfirmedVMID == vm?.id,
-            backendVerified: vm != nil && connectionVerifiedAt != nil && verifiedForVMID == vm?.id
+            backendVerified: vm != nil && ConnectionVerificationFreshness.isFresh(connectionVerifiedAt, now: now()) && verifiedForVMID == vm?.id
         )
-    }
-
-    func confirmUTMDesktopReady() {
-        guard providerSetup.provider == .utm, designatedVMIsRunning,
-              let vm = designatedVM else { return }
-        utmDesktopReadyVMID = vm.id
-        preferences.set(vm.id.description, forKey: "setup.utmDesktopReadyVMID")
-    }
-
-    func clearUTMDesktopReady() {
-        guard providerSetup.provider == .utm, let vm = designatedVM,
-              utmDesktopReadyVMID == vm.id else { return }
-        utmDesktopReadyVMID = nil
-        preferences.removeObject(forKey: "setup.utmDesktopReadyVMID")
     }
 
     func confirmTailscaleSetup() {
@@ -396,14 +372,25 @@ final class AppViewModel: ObservableObject {
     }
 
     func refreshVerifiedGuestConnection() async {
+        if connectionVerifiedAt != nil && !ConnectionVerificationFreshness.isFresh(connectionVerifiedAt, now: now()) {
+            invalidateConnectionVerification()
+            connectionMessage = "Connection check expired. Verifying the backend again…"
+        }
+        if hasManualConnectionOverride, setupDependencies.tailscaleReady,
+           !isVerifyingConnection, !ConnectionVerificationFreshness.isFresh(connectionVerifiedAt, now: now()),
+           ConnectionVerificationFreshness.shouldAttempt(after: lastAutomaticVerificationAt, now: now()) {
+            lastAutomaticVerificationAt = now()
+            await verifyConnection()
+            return
+        }
         guard providerSetup.provider == .builtIn,
               let vmID = designatedVM?.id,
               vmID == nativeVM.runningVMID,
               !hasManualConnectionOverride,
               !isReadingVerifiedGuestConnection,
               !isVerifyingConnection else { return }
-        if let lastAutomaticVerificationAt,
-           Date().timeIntervalSince(lastAutomaticVerificationAt) < 30 { return }
+        guard ConnectionVerificationFreshness.shouldAttempt(after: lastAutomaticVerificationAt, now: now()) else { return }
+        lastAutomaticVerificationAt = now()
         let revision = connectionInputRevision
         isReadingVerifiedGuestConnection = true
         defer { isReadingVerifiedGuestConnection = false }
@@ -418,14 +405,14 @@ final class AppViewModel: ObservableObject {
             nativeVM.confirmDesktopReadyFromGuestSetup()
             confirmTailscaleSetup()
             hasDetectedGuestConnection = true
-            if connectionVerifiedAt != nil,
+            if ConnectionVerificationFreshness.isFresh(connectionVerifiedAt, now: now()),
                verifiedForVMID == vmID,
                connectionURL == receipt.endpoint,
                connectionToken == receipt.token { return }
             connectionID = vmID
             connectionURL = receipt.endpoint
             connectionToken = receipt.token
-            lastAutomaticVerificationAt = Date()
+            lastAutomaticVerificationAt = now()
             connectionMessage = "Guest details received. Verifying Hermes from this Mac…"
             await verifyConnection()
         } catch {
@@ -482,21 +469,14 @@ final class AppViewModel: ObservableObject {
         bundleLookupRevision = UUID()
         let revision = bundleLookupRevision
         locatedVMBundles = [:]
-        let home = FileManager.default.homeDirectoryForCurrentUser
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         let locator = VirtualMachineBundleLocator(
-            nativeRoot: support.appendingPathComponent("Tether Host for Mac/Virtual Machines"),
-            utmRoots: [
-                home.appendingPathComponent("Library/Containers/com.utmapp.UTM/Data/Documents"),
-                home.appendingPathComponent("Documents/UTM"),
-                support.appendingPathComponent("Tether Host for Mac/UTM Virtual Machines"),
-                home.appendingPathComponent("Documents")
-            ]
+            nativeRoot: support.appendingPathComponent("Tether Host for Mac/Virtual Machines")
         )
         Task.detached(priority: .utility) { [weak self] in
             var located: [VirtualMachineID: URL] = [:]
             for id in ids {
-                if let bundle = locator.locate(id, provider: provider) {
+                if let bundle = locator.locate(id) {
                     located[id] = bundle
                 }
             }
@@ -534,20 +514,7 @@ final class AppViewModel: ObservableObject {
         vmRemovalMessage = nil
         defer { isRemovingVM = false }
         do {
-            switch source {
-            case .builtIn:
-                try nativeVM.deleteFiles(record.id)
-            case .utm:
-                try await UTMCTLAdapter(executor: UTMCTLProcessExecutor(timeout: 30)).delete(record.id)
-                // UTM can unregister a shortcut without deleting its local bundle.
-                // Remove only the same path if it still resolves to this UUID.
-                if FileManager.default.fileExists(atPath: bundle.path) {
-                    guard vmBundleURL(for: record) == bundle else {
-                        throw VMRemovalError.filesRemain(bundle)
-                    }
-                    try FileManager.default.removeItem(at: bundle)
-                }
-            }
+            try nativeVM.deleteFiles(record.id)
             guard !FileManager.default.fileExists(atPath: bundle.path) else {
                 throw VMRemovalError.filesRemain(bundle)
             }
@@ -559,53 +526,6 @@ final class AppViewModel: ObservableObject {
                 ?? "Could not delete the VM. Refresh the list and try again."
             await refresh()
         }
-    }
-
-    func openUTM() {
-        guard UTMInstallation.detect() == .installed else {
-            guestSetupDiskStatus = "UTM is not installed in Applications."
-            return
-        }
-        NSWorkspace.shared.open(UTMInstallation.applicationURL)
-    }
-
-    func exportGuestSetupDisk() {
-        guard !isExportingGuestSetupDisk else { return }
-        let destination = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Tether Host for Mac/Tether Guest Setup.iso")
-        isExportingGuestSetupDisk = true
-        guestSetupDiskStatus = "Creating a read-only setup disk…"
-        let appURL = Bundle.main.bundleURL
-        Task {
-            defer { isExportingGuestSetupDisk = false }
-            do {
-                try FileManager.default.createDirectory(
-                    at: destination.deletingLastPathComponent(), withIntermediateDirectories: true
-                )
-                try await GuestSetupDiskExporter.export(appURL: appURL, to: destination)
-                guestSetupDiskURL = destination
-                guestSetupDiskStatus = "Guest setup disk is ready. Attach it to your VM in UTM."
-                NSWorkspace.shared.activateFileViewerSelecting([destination])
-            } catch {
-                guestSetupDiskURL = nil
-                guestSetupDiskStatus = (error as? LocalizedError)?.errorDescription
-                    ?? "Could not create the guest setup disk."
-            }
-        }
-    }
-
-    func revealGuestSetupDisk() {
-        guard let guestSetupDiskURL else { return }
-        NSWorkspace.shared.activateFileViewerSelecting([guestSetupDiskURL])
-    }
-
-    var selectedUTMVMHasGuestSetupDisk: Bool {
-        guard providerSetup.provider == .utm,
-              let vm = designatedVM,
-              let bundle = vmBundleURL(for: vm) else { return false }
-        return FileManager.default.fileExists(
-            atPath: bundle.appendingPathComponent("Data/Tether Guest Setup.iso").path
-        )
     }
 
     private func restoreConnectionToken(for id: VirtualMachineID, endpoint: String, revision: Int) async {
@@ -708,7 +628,7 @@ final class AppViewModel: ObservableObject {
         defer { isVerifyingConnection = false }
         connectionMessage = "Checking HTTPS, API authentication, durable runs, and model discovery…"
         do {
-            let result = try await ConnectionVerifier().verify(endpoint: endpoint, token: token)
+            let result = try await connectionVerifier.verify(endpoint: endpoint, token: token)
             guard revision == connectionInputRevision,
                   endpoint == connectionURL, token == connectionToken,
                   isInsideGuest || (vmProvider == providerSetup.provider && vmID == designatedVM?.id
@@ -721,7 +641,7 @@ final class AppViewModel: ObservableObject {
             connectionID = secretID
             preferences.set(secretID.description, forKey: "connection.id")
             preferences.set(result.endpoint.url.absoluteString, forKey: "connection.endpoint")
-            connectionVerifiedAt = result.verifiedAt
+            connectionVerifiedAt = now()
             verifiedForVMID = vmID
             connectionMessage = "Backend connection verified from this Mac. Now test the connection in Tether iOS on the same tailnet."
         } catch {
@@ -733,7 +653,7 @@ final class AppViewModel: ObservableObject {
     }
 
     func copyConnectionURL() {
-        guard connectionVerifiedAt != nil, !connectionURL.isEmpty else { return }
+        guard ConnectionVerificationFreshness.isFresh(connectionVerifiedAt, now: now()), !connectionURL.isEmpty else { return }
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         guard pasteboard.setString(connectionURL, forType: .string) else { return }
@@ -741,7 +661,7 @@ final class AppViewModel: ObservableObject {
     }
 
     func copyConnectionToken() {
-        guard connectionVerifiedAt != nil, !connectionToken.isEmpty else { return }
+        guard ConnectionVerificationFreshness.isFresh(connectionVerifiedAt, now: now()), !connectionToken.isEmpty else { return }
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         // Mark the credential as concealed/transient for clipboard consumers.
@@ -806,16 +726,7 @@ final class AppViewModel: ObservableObject {
                     : order == .orderedAscending
             }
             if wasDesignatedVMRunning && !designatedVMIsRunning {
-                // UTM is observed through inventory polling rather than the
-                // native VM's isRunning notification. Never reuse a prior
-                // network/backend check after that VM has stopped.
-                invalidateConnectionVerification()
-                if selectedProvider == .utm {
-                    tailscaleConfirmedVMID = nil
-                    preferences.removeObject(forKey: "setup.tailscaleConfirmedVMID")
-                    utmDesktopReadyVMID = nil
-                    preferences.removeObject(forKey: "setup.utmDesktopReadyVMID")
-                }
+                invalidateLiveGuestReadiness()
             }
             locateVMBundles(inventory.map(\.id), provider: selectedProvider)
             setup = next.setup

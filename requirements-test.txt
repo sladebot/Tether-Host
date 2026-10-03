@@ -1,0 +1,2 @@
+# Guest configuration tests import the same YAML parser used by Hermes.
+PyYAML==6.0.3

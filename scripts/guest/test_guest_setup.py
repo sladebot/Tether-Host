@@ -3,6 +3,8 @@ import itertools
 import json
 from pathlib import Path
 import sys
+import subprocess
+import os
 import tempfile
 import unittest
 import urllib.error
@@ -16,6 +18,117 @@ guest = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(guest)
 
 class GuestSetupTests(unittest.TestCase):
+    def test_retry_invalidates_stage_receipts_and_dependents(self):
+        script = (module_path.parent / 'Set up Tether Guest.command').read_text()
+        invalidation = script.split('# Any changed guest dependency')[1].split('stage()')[0]
+        markers = {'internet.ready', 'tailscale.ready', 'hermes-installed.ready',
+                   'hermes-configured.ready', 'computer-use.ready', 'verified.ready', 'connection.json'}
+        expected = {
+            'internet': {'internet.ready'},
+            'tailscale': {'tailscale.ready'},
+            'hermes-install': {'hermes-installed.ready', 'hermes-configured.ready', 'computer-use.ready'},
+            'hermes-configure': {'hermes-configured.ready', 'computer-use.ready'},
+            'computer-use': {'computer-use.ready'},
+            'verify': set(),
+        }
+        # Execute only the receipt invalidation block, never the provisioning code.
+        invalidation = '# Any changed guest dependency' + invalidation
+        for action, removed in expected.items():
+            with self.subTest(action=action), tempfile.TemporaryDirectory() as folder:
+                for marker in markers:
+                    (Path(folder) / marker).touch()
+                subprocess.run(['/bin/bash', '-euc', invalidation], check=True,
+                               env={**os.environ, 'ACTION': action, 'TETHER_GUEST_STATE': folder})
+                if action != 'internet':
+                    removed = removed | {'verified.ready', 'connection.json'}
+                self.assertEqual({p.name for p in Path(folder).iterdir()}, markers - removed)
+
+    def test_changed_endpoint_keeps_pending_run_and_does_not_contact_new_guest(self):
+        with tempfile.TemporaryDirectory() as folder, patch.object(guest, 'STATE', Path(folder)):
+            active = Path(folder) / 'verification-run.json'
+            run = {'key': 'key', 'marker': 'marker', 'run_id': 'run', 'endpoint': 'https://old.example.ts.net'}
+            active.write_text(json.dumps(run))
+            with patch.object(guest, 'request') as request:
+                with self.assertRaisesRegex(guest.SetupFailure, 'previous guest endpoint'):
+                    guest.test_model('https://new.example.ts.net', 'token')
+            request.assert_not_called()
+            self.assertEqual(json.loads(active.read_text()), run)
+
+    def test_non_string_terminal_output_allows_new_attempt(self):
+        for output in (None, [], {}, 42):
+            with self.subTest(output=output), tempfile.TemporaryDirectory() as folder, \
+                 patch.object(guest, 'STATE', Path(folder)):
+                active = Path(folder) / 'verification-run.json'
+                active.write_text(json.dumps({'key': 'key', 'marker': 'marker', 'run_id': 'run'}))
+                with patch.object(guest, 'request', return_value=(200, {'status': 'completed', 'output': output})):
+                    with self.assertRaisesRegex(guest.SetupFailure, 'verification marker'):
+                        guest.test_model('https://guest.example.ts.net', 'token')
+                self.assertFalse(active.exists())
+
+    def test_wrong_marker_archives_terminal_run_and_next_attempt_is_new(self):
+        with tempfile.TemporaryDirectory() as folder, patch.object(guest, 'STATE', Path(folder)):
+            active = Path(folder) / 'verification-run.json'
+            previous = {'key': 'old-key', 'marker': 'TETHER_READY_old', 'run_id': 'old-run'}
+            active.write_text(json.dumps(previous))
+            with patch.object(guest, 'request', return_value=(200, {'status': 'completed', 'output': 'wrong'})):
+                with self.assertRaisesRegex(guest.SetupFailure, 'verification marker'):
+                    guest.test_model('https://guest.example.ts.net', 'token')
+            self.assertFalse(active.exists())
+            self.assertEqual(json.loads((Path(folder) / 'verification-run-old-key-rejected.json').read_text()), {**previous, 'endpoint': 'https://guest.example.ts.net'})
+
+            def respond(endpoint, path, token, body=None, key=None):
+                persisted = json.loads(active.read_text())
+                self.assertNotEqual(persisted['key'], previous['key'])
+                if path == '/v1/runs':
+                    self.assertEqual(key, persisted['key'])
+                    return 202, {'run_id': 'new-run'}
+                return 200, {'status': 'completed', 'output': persisted['marker']}
+
+            with patch.object(guest, 'request', side_effect=respond) as request:
+                guest.test_model('https://guest.example.ts.net', 'token')
+            self.assertEqual(request.call_count, 2)
+            self.assertFalse(active.exists())
+
+    def test_pending_run_retries_poll_same_run_without_resubmission(self):
+        with tempfile.TemporaryDirectory() as folder, patch.object(guest, 'STATE', Path(folder)):
+            active = Path(folder) / 'verification-run.json'
+            with patch.object(guest, 'request', side_effect=[(202, {'run_id': 'pending-run'}),
+                    (200, {'status': 'running'})]), \
+                 patch.object(guest.time, 'monotonic', side_effect=[0, 0, 181]), \
+                 patch.object(guest.time, 'sleep'):
+                with self.assertRaisesRegex(guest.SetupFailure, 'still pending'):
+                    guest.test_model('https://guest.example.ts.net', 'token')
+            persisted = json.loads(active.read_text())
+            with patch.object(guest, 'request', return_value=(200, {'status': 'completed', 'output': persisted['marker']})) as request:
+                guest.test_model('https://guest.example.ts.net', 'token')
+            request.assert_called_once_with('https://guest.example.ts.net', '/v1/runs/pending-run', 'token')
+
+    def test_unsuccessful_terminal_runs_release_active_attempt(self):
+        for status in ('failed', 'cancelled', 'interrupted', 'stopped'):
+            with self.subTest(status=status), tempfile.TemporaryDirectory() as folder, \
+                 patch.object(guest, 'STATE', Path(folder)):
+                active = Path(folder) / 'verification-run.json'
+                run = {'key': 'key', 'marker': 'marker', 'run_id': 'run'}
+                active.write_text(json.dumps(run))
+                with patch.object(guest, 'request', return_value=(200, {'status': status})):
+                    with self.assertRaisesRegex(guest.SetupFailure, 'Model verification failed'):
+                        guest.test_model('https://guest.example.ts.net', 'token')
+                self.assertFalse(active.exists())
+                self.assertEqual(json.loads((Path(folder) / 'verification-run-key.json').read_text()), {**run, 'endpoint': 'https://guest.example.ts.net'})
+
+    def test_ambiguous_admission_reuses_persisted_idempotency_key(self):
+        with tempfile.TemporaryDirectory() as folder, patch.object(guest, 'STATE', Path(folder)):
+            active = Path(folder) / 'verification-run.json'
+            with patch.object(guest, 'request', side_effect=TimeoutError):
+                with self.assertRaises(TimeoutError):
+                    guest.test_model('https://guest.example.ts.net', 'token')
+            persisted = json.loads(active.read_text())
+            with patch.object(guest, 'request', side_effect=[(202, {'run_id': 'same-run'}),
+                    (200, {'status': 'completed', 'output': persisted['marker']})]) as request:
+                guest.test_model('https://guest.example.ts.net', 'token')
+            self.assertEqual(request.call_args_list[0].args[4], persisted['key'])
+            self.assertEqual(request.call_args_list[0].args[3]['session_id'], 'tether-setup-' + persisted['key'])
+
     def test_computer_use_verification_requires_live_grant_permissions_and_health(self):
         permissions = {'accessibility': True, 'screen_recording': True,
                        'source': {'attribution': 'driver-daemon'},

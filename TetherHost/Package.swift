@@ -15,10 +15,21 @@ let package = Package(
             exclude: ["Package.swift", "Tests", "App", "Views", "Resources", "Sources"],
             sources: ["Models", "Services"]
         ),
+        .target(
+            name: "TetherHostRuntime",
+            dependencies: ["TetherHostCore"],
+            path: "App",
+            exclude: ["TetherHostApp.swift"]
+        ),
         .testTarget(
             name: "TetherHostCoreTests",
             dependencies: ["TetherHostCore"],
             path: "Tests/TetherHostCoreTests"
+        ),
+        .testTarget(
+            name: "TetherHostRuntimeTests",
+            dependencies: ["TetherHostRuntime", "TetherHostCore"],
+            path: "Tests/TetherHostRuntimeTests"
         )
     ]
 )
