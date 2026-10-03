@@ -9,8 +9,11 @@ import TetherHostCore
 enum NativeVMError: LocalizedError {
     case unsupportedImage
     case newerGuestRequiresHostUpdate(guest: Int, host: Int)
-    case insufficientSpace
+    case insufficientSpace(Int)
     case insufficientDownloadSpace
+    case invalidResources(String)
+    case noCompatibleDownload(host: String)
+    case imageCatalogUnavailable
     case missingVM
     case invalidVM
     case anotherVMRunning
@@ -24,9 +27,12 @@ enum NativeVMError: LocalizedError {
         switch self {
         case .unsupportedImage: "This macOS IPSW is not compatible with this Mac's virtualization hardware. Choose another IPSW."
         case .newerGuestRequiresHostUpdate(let guest, let host):
-            "This is a macOS \(guest) IPSW, but this Mac runs macOS \(host). Apple's installer requires a host software update. Choose a macOS \(host) IPSW or update this Mac first."
-        case .insufficientSpace: "At least 45 GB of free disk space is needed to install a fresh macOS VM."
-        case .insufficientDownloadSpace: "At least 65 GB of free disk space is needed to download macOS and install a fresh VM."
+            "This is a macOS \(guest) IPSW, but this Mac runs macOS \(host). Choose a macOS \(host) IPSW or update this Mac first."
+        case .insufficientSpace(let gib): "At least \(gib) GB of free space is needed on the selected VM drive to install this macOS VM."
+        case .insufficientDownloadSpace: "At least 25 GB of free space is needed in Application Support to cache the macOS download."
+        case .invalidResources(let message): message
+        case .noCompatibleDownload(let host): "No downloadable macOS IPSW was found for macOS \(host). Update this Mac or choose a compatible IPSW manually."
+        case .imageCatalogUnavailable: "Could not check available macOS images. Check your internet connection, try again, or choose a compatible IPSW manually."
         case .missingVM: "The selected Tether VM is missing. Refresh the VM list."
         case .invalidVM: "The Tether VM is incomplete or damaged. Create a new VM from an IPSW."
         case .anotherVMRunning: "Another Tether VM is already running. Shut it down before starting this one."
@@ -100,6 +106,13 @@ private final class RestoreImageDownload: NSObject, URLSessionDownloadDelegate, 
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask,
+                    willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest,
+                    completionHandler: @escaping (URLRequest?) -> Void) {
+        completionHandler(RestoreImagePolicy.isAppleImageURL(request.url) ? request : nil)
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask,
                     didCompleteWithError error: Error?) {
         defer { session.finishTasksAndInvalidate(); self.session = nil }
         guard let continuation else { return }
@@ -114,16 +127,56 @@ private final class RestoreImageDownload: NSObject, URLSessionDownloadDelegate, 
     }
 }
 
+private struct CachedRestoreImage: Codable {
+    let filename: String
+    let sha256: String
+    let majorVersion: Int
+    let minorVersion: Int
+    let buildVersion: String
+}
+
+private struct RemoteRestoreCandidate {
+    let url: URL
+    let version: OperatingSystemVersion
+    let build: String
+    let expectedSHA256: String?
+
+    var versionLabel: String {
+        version.patchVersion == 0 ? "\(version.majorVersion).\(version.minorVersion)" :
+            "\(version.majorVersion).\(version.minorVersion).\(version.patchVersion)"
+    }
+}
+
+struct RestoreImageDownloadOption: Identifiable, Hashable {
+    let id: String
+    let title: String
+    let versionLabel: String
+}
+
+private struct IPSWCatalog: Decodable {
+    struct Firmware: Decodable {
+        let identifier: String
+        let version: String
+        let buildid: String
+        let url: URL
+        let sha256sum: String?
+    }
+    let firmwares: [Firmware]
+}
+
 @MainActor
 final class NativeVMManager: ObservableObject {
     private static let macOS262URL = URL(string: "https://updates.cdn-apple.com/2025FallFCS/fullrestores/093-37399/E144C918-CF99-4BBC-B1D0-3E739B9A3F2D/UniversalMac_26.2_25C56_Restore.ipsw")!
     private static let macOS262SHA256 = "bc7c67b2a2cc4ac8c9da0c2b149b9f31e153cd542ce387e6fb8620e41b5278ef"
     private static let networkEnabledKey = "nativeVM.networkEnabled"
     private static let selectedImageKey = "restoreImage.lastSelectedPath"
+    private static let downloadedImageKey = "restoreImage.lastDownloadedFilename"
+    private static let creationFolderPathKey = "vmCreation.folderPath"
+    private static let creationFolderBookmarkKey = "vmCreation.folderBookmark"
+    private static let creationFolderVolumeKey = "vmCreation.volumeIdentity"
 
     static var canDownloadHostImage: Bool {
-        let version = ProcessInfo.processInfo.operatingSystemVersion
-        return version.majorVersion == 26 && version.minorVersion == 2
+        true // Keep the action visible so unsupported hosts receive an explanation.
     }
 
     @Published private(set) var imageURL: URL?
@@ -133,6 +186,10 @@ final class NativeVMManager: ObservableObject {
     var isBusy: Bool { operationState.isBusy }
     @Published private(set) var installationProgress: Double?
     @Published private(set) var downloadProgress: DownloadProgressEstimate?
+    @Published private(set) var downloadImageOptions: [RestoreImageDownloadOption] = []
+    @Published var selectedDownloadVersion = ""
+    @Published private(set) var recommendedDownloadVersion = ""
+    @Published private(set) var isLoadingDownloadImageOptions = false
     @Published private(set) var isRunning = false
     @Published private(set) var shutdownRequested = false
     @Published private(set) var virtualMachine: VZVirtualMachine?
@@ -146,9 +203,14 @@ final class NativeVMManager: ObservableObject {
             ? "Shared internet (NAT). Guest access to the host and local network is not blocked."
             : "Offline. The VM has no network device; Tailscale and internet access are unavailable."
     }
+    @Published var creationCPUCount: Int
+    @Published var creationMemoryGiB: Int
+    @Published var creationDiskGiB: Int
+    @Published private(set) var selectedCreationStorageURL: URL?
 
     private var restoreImage: VZMacOSRestoreImage?
     private var activeDownloadID: UUID?
+    private var downloadCandidates: [RemoteRestoreCandidate] = []
     private var runningID: VirtualMachineID?
     var runningVMID: VirtualMachineID? { isRunning ? runningID : nil }
     private let otherHostCopyRunning: @MainActor () -> Bool
@@ -168,6 +230,10 @@ final class NativeVMManager: ObservableObject {
             try await GuestSetupDiskExporter.export(appURL: Bundle.main.bundleURL, to: destination)
         }
     ) {
+        let defaults = Self.baseResourceLimits.defaults
+        creationCPUCount = defaults.cpuCount
+        creationMemoryGiB = defaults.memoryGiB
+        creationDiskGiB = defaults.diskGiB
         self.preferences = preferences
         self.otherHostCopyRunning = otherHostCopyRunning
         networkEnabled = preferences.object(forKey: Self.networkEnabledKey) as? Bool ?? true
@@ -175,6 +241,14 @@ final class NativeVMManager: ObservableObject {
         self.guestDiskExporter = guestDiskExporter
         self.rootURL = rootURL ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Tether Host for Mac/Virtual Machines", isDirectory: true)
+        if let path = preferences.string(forKey: Self.creationFolderPathKey) {
+            var stale = false
+            let bookmarked = preferences.data(forKey: Self.creationFolderBookmarkKey).flatMap {
+                try? URL(resolvingBookmarkData: $0, options: [.withoutUI, .withoutMounting],
+                         bookmarkDataIsStale: &stale)
+            }
+            selectedCreationStorageURL = bookmarked ?? URL(fileURLWithPath: path, isDirectory: true)
+        }
         vmDelegate.owner = self
         if let savedPath = preferences.string(forKey: Self.selectedImageKey) {
             let savedURL = URL(fileURLWithPath: savedPath)
@@ -187,9 +261,134 @@ final class NativeVMManager: ObservableObject {
         }
     }
 
-    var cachedHostImageURL: URL {
+    private static var baseResourceLimits: NativeVMResourceLimits {
+        NativeVMResourceLimits(
+            hostCPUCount: ProcessInfo.processInfo.activeProcessorCount,
+            hostMemoryBytes: ProcessInfo.processInfo.physicalMemory,
+            maximumCPUCount: VZVirtualMachineConfiguration.maximumAllowedCPUCount,
+            maximumMemoryBytes: VZVirtualMachineConfiguration.maximumAllowedMemorySize
+        )
+    }
+
+    private var creationLimits: NativeVMResourceLimits {
+        NativeVMResourceLimits(
+            hostCPUCount: ProcessInfo.processInfo.activeProcessorCount,
+            hostMemoryBytes: ProcessInfo.processInfo.physicalMemory,
+            minimumCPUCount: restoreImage?.mostFeaturefulSupportedConfiguration?.minimumSupportedCPUCount ?? 2,
+            minimumMemoryBytes: restoreImage?.mostFeaturefulSupportedConfiguration?.minimumSupportedMemorySize ?? 4 * 1_073_741_824,
+            maximumCPUCount: VZVirtualMachineConfiguration.maximumAllowedCPUCount,
+            maximumMemoryBytes: VZVirtualMachineConfiguration.maximumAllowedMemorySize
+        )
+    }
+
+    var creationCPURange: ClosedRange<Int> { creationLimits.cpu }
+    var creationMemoryRange: ClosedRange<Int> { creationLimits.memoryGiB }
+    var creationDiskRange: ClosedRange<Int> { creationLimits.diskGiB }
+    var creationStorageDisplayName: String {
+        selectedCreationStorageURL?.path ?? "This Mac (default)"
+    }
+    var creationStorageValidationMessage: String? {
+        guard let folder = selectedCreationStorageURL else { return nil }
+        let resolvedFolder = folder.resolvingSymlinksInPath()
+        let resolvedDefault = rootURL.resolvingSymlinksInPath()
+        if resolvedFolder == resolvedDefault || resolvedFolder.path.hasPrefix(resolvedDefault.path + "/") {
+            return "Choose a folder outside Tether's default Virtual Machines folder."
+        }
+        var ancestor = resolvedFolder
+        while ancestor.path != "/" {
+            if FileManager.default.fileExists(atPath: ancestor.appendingPathComponent(NativeVirtualMachineStore.manifestFilename).path) {
+                return "Choose a storage folder outside an existing virtual machine."
+            }
+            ancestor.deleteLastPathComponent()
+        }
+        guard FileManager.default.fileExists(atPath: folder.path),
+              let volume = try? NativeVMStorageRegistry.volumeIdentity(at: folder),
+              volume == preferences.string(forKey: Self.creationFolderVolumeKey) else {
+            return "The selected VM drive is unavailable or has changed. Reconnect it or choose another folder."
+        }
+        guard FileManager.default.isWritableFile(atPath: folder.path) else {
+            return "The selected VM folder is not writable. Choose a folder where you can save files."
+        }
+        guard (try? folder.resourceValues(forKeys: [.volumeSupportsSparseFilesKey]))?
+            .volumeSupportsSparseFiles == true else {
+            return "This drive does not support sparse VM disk images. Choose an APFS folder."
+        }
+        return nil
+    }
+
+    func chooseCreationStorageFolder() {
+        guard !isBusy else { return }
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Use This Folder"
+        panel.message = "New virtual machines will be saved here. macOS downloads stay on this Mac."
+        if panel.runModal() == .OK, let folder = panel.url?.standardizedFileURL {
+            do {
+                guard folder != rootURL, !folder.path.hasPrefix(rootURL.path + "/") else {
+                    status = "Choose a folder outside Tether's default Virtual Machines folder."
+                    return
+                }
+                let volume = try NativeVMStorageRegistry.volumeIdentity(at: folder)
+                guard FileManager.default.isWritableFile(atPath: folder.path) else {
+                    status = "The selected VM folder is not writable. Choose another folder."
+                    return
+                }
+                guard (try? folder.resourceValues(forKeys: [.volumeSupportsSparseFilesKey]))?
+                    .volumeSupportsSparseFiles == true else {
+                    status = "This drive does not support sparse VM disk images. Choose an APFS folder."
+                    return
+                }
+                preferences.set(try folder.bookmarkData(), forKey: Self.creationFolderBookmarkKey)
+                preferences.set(folder.path, forKey: Self.creationFolderPathKey)
+                preferences.set(volume, forKey: Self.creationFolderVolumeKey)
+                selectedCreationStorageURL = folder
+            } catch {
+                status = "Could not use this VM folder: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    func resetCreationStorageToDefault() {
+        guard !isBusy else { return }
+        preferences.removeObject(forKey: Self.creationFolderBookmarkKey)
+        preferences.removeObject(forKey: Self.creationFolderPathKey)
+        preferences.removeObject(forKey: Self.creationFolderVolumeKey)
+        selectedCreationStorageURL = nil
+    }
+    var creationResourceError: String? {
+        creationLimits.validationMessage(for: NativeVMResources(
+            cpuCount: creationCPUCount, memoryGiB: creationMemoryGiB, diskGiB: creationDiskGiB
+        ))
+    }
+
+    func resetCreationResources() {
+        let defaults = creationLimits.defaults
+        creationCPUCount = defaults.cpuCount
+        creationMemoryGiB = defaults.memoryGiB
+        creationDiskGiB = defaults.diskGiB
+    }
+
+    private var restoreCacheDirectory: URL {
         rootURL.deletingLastPathComponent()
-            .appendingPathComponent("Restore Images/UniversalMac_26.2_25C56_Restore.ipsw")
+            .appendingPathComponent("Restore Images", isDirectory: true)
+    }
+
+    private var pinnedHostImageURL: URL {
+        restoreCacheDirectory.appendingPathComponent("UniversalMac_26.2_25C56_Restore.ipsw")
+    }
+
+    var cachedHostImageURL: URL {
+        if let filename = preferences.string(forKey: Self.downloadedImageKey),
+           filename == URL(fileURLWithPath: filename).lastPathComponent,
+           filename.hasSuffix(".ipsw") {
+            let url = restoreCacheDirectory.appendingPathComponent(filename)
+            if FileManager.default.fileExists(atPath: url.path),
+               FileManager.default.fileExists(atPath: cacheRecordURL(for: url).path) { return url }
+        }
+        return pinnedHostImageURL
     }
 
     var hasCachedHostImage: Bool {
@@ -211,15 +410,29 @@ final class NativeVMManager: ObservableObject {
         operationState.begin(.checkingImage)
         status = "Verifying the saved macOS image…"
         do {
-            guard try await Self.sha256(of: cachedHostImageURL) == Self.macOS262SHA256 else {
+            let cached = cachedHostImageURL
+            let expectedDigest: String
+            if cached == pinnedHostImageURL {
+                expectedDigest = Self.macOS262SHA256
+            } else {
+                let record = try JSONDecoder().decode(CachedRestoreImage.self,
+                    from: Data(contentsOf: cacheRecordURL(for: cached)))
+                guard record.filename == cached.lastPathComponent else { throw NativeVMError.unsupportedImage }
+                expectedDigest = record.sha256
+            }
+            guard try await Self.sha256(of: cached) == expectedDigest else {
                 throw NativeVMError.unsupportedImage
             }
             operationState.finish()
-            await inspect(cachedHostImageURL)
+            await inspect(cached)
         } catch {
             operationState.finish()
             status = "Saved image could not be verified. Choose Download again to replace it. \(error.localizedDescription)"
         }
+    }
+
+    private func cacheRecordURL(for image: URL) -> URL {
+        image.appendingPathExtension("json")
     }
 
     func isDesktopReady(for id: VirtualMachineID) -> Bool {
@@ -274,11 +487,25 @@ final class NativeVMManager: ObservableObject {
                 throw NativeVMError.newerGuestRequiresHostUpdate(guest: guestMajor, host: hostMajor)
             }
             restoreImage = image
+            // A different IPSW may raise the guest minimum. Keep user choices
+            // intact unless the new image makes them invalid.
+            let limits = creationLimits
+            let adjusted = !limits.cpu.contains(creationCPUCount) ||
+                !limits.memoryGiB.contains(creationMemoryGiB) ||
+                !limits.diskGiB.contains(creationDiskGiB)
+            creationCPUCount = min(max(creationCPUCount, limits.cpu.lowerBound), limits.cpu.upperBound)
+            creationMemoryGiB = min(max(creationMemoryGiB, limits.memoryGiB.lowerBound), limits.memoryGiB.upperBound)
+            creationDiskGiB = min(max(creationDiskGiB, limits.diskGiB.lowerBound), limits.diskGiB.upperBound)
             imageURL = url
             preferences.set(url.path, forKey: Self.selectedImageKey)
             let version = image.operatingSystemVersion
-            imageDescription = "macOS \(version.majorVersion).\(version.minorVersion) (\(image.buildVersion)) — compatible with this Mac"
-            status = "Ready to create a new, separate Tether Host VM."
+            let versionLabel = version.patchVersion == 0 ?
+                "\(version.majorVersion).\(version.minorVersion)" :
+                "\(version.majorVersion).\(version.minorVersion).\(version.patchVersion)"
+            imageDescription = "macOS \(versionLabel) (\(image.buildVersion)) — compatible with this Mac"
+            status = adjusted
+                ? "VM resources were adjusted to meet this macOS image and Mac's limits. Review them before creating the VM."
+                : "Ready to create a new, separate Tether Host VM."
         } catch {
             restoreImage = nil
             imageURL = nil
@@ -290,22 +517,123 @@ final class NativeVMManager: ObservableObject {
         }
     }
 
+    private static func discoverDownloadCandidates() async throws -> [RemoteRestoreCandidate] {
+        let host = ProcessInfo.processInfo.operatingSystemVersion
+        var candidates: [RemoteRestoreCandidate] = []
+        var catalogAvailable = false
+
+        if let latest = try? await VZMacOSRestoreImage.latestSupported,
+           latest.isSupported, latest.mostFeaturefulSupportedConfiguration != nil,
+           RestoreImagePolicy.isEligible(latest.operatingSystemVersion, for: host),
+           RestoreImagePolicy.isAppleImageURL(latest.url) {
+            candidates.append(RemoteRestoreCandidate(url: latest.url,
+                version: latest.operatingSystemVersion, build: latest.buildVersion, expectedSHA256: nil))
+        }
+
+        // Apple publishes only its current IPSW in the public feed. The VM firmware
+        // history is discovery metadata; image bytes must still come from Apple.
+        let catalogURL = URL(string: "https://api.ipsw.me/v4/device/VirtualMac2,1?type=ipsw")!
+        if let (data, response) = try? await URLSession.shared.data(from: catalogURL),
+           (response as? HTTPURLResponse)?.statusCode == 200, data.count <= 10_000_000,
+           let catalog = try? JSONDecoder().decode(IPSWCatalog.self, from: data) {
+            catalogAvailable = true
+            for firmware in catalog.firmwares {
+                guard firmware.identifier == "VirtualMac2,1",
+                      let version = RestoreImagePolicy.parseVersion(firmware.version),
+                      RestoreImagePolicy.isEligible(version, for: host),
+                      RestoreImagePolicy.isAppleImageURL(firmware.url), !firmware.buildid.isEmpty else { continue }
+                let digest = firmware.url == macOS262URL ? macOS262SHA256 : firmware.sha256sum
+                guard let digest, digest.count == 64,
+                      digest.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }) else { continue }
+                candidates.append(RemoteRestoreCandidate(url: firmware.url, version: version,
+                    build: firmware.buildid, expectedSHA256: digest))
+            }
+        }
+
+        if RestoreImagePolicy.isEligible(OperatingSystemVersion(majorVersion: 26, minorVersion: 2, patchVersion: 0), for: host) {
+            candidates.append(RemoteRestoreCandidate(url: macOS262URL,
+                version: OperatingSystemVersion(majorVersion: 26, minorVersion: 2, patchVersion: 0),
+                build: "25C56", expectedSHA256: macOS262SHA256))
+        }
+        candidates.sort { left, right in
+            let leftVersion = (left.version.majorVersion, left.version.minorVersion, left.version.patchVersion)
+            let rightVersion = (right.version.majorVersion, right.version.minorVersion, right.version.patchVersion)
+            return leftVersion == rightVersion ?
+                (left.expectedSHA256 != nil && right.expectedSHA256 == nil) :
+                (leftVersion > rightVersion)
+        }
+        var seenVersions = Set<String>()
+        let distinct = candidates.filter { seenVersions.insert($0.versionLabel).inserted }
+        guard !distinct.isEmpty else {
+            if !catalogAvailable { throw NativeVMError.imageCatalogUnavailable }
+            throw NativeVMError.noCompatibleDownload(host: "\(host.majorVersion).\(host.minorVersion)")
+        }
+        return distinct
+    }
+
+    func loadDownloadImageOptions() async {
+        guard !isBusy, !isLoadingDownloadImageOptions, downloadCandidates.isEmpty else { return }
+        isLoadingDownloadImageOptions = true
+        status = "Finding macOS images…"
+        defer { isLoadingDownloadImageOptions = false }
+        do {
+            let candidates = try await Self.discoverDownloadCandidates()
+            downloadCandidates = candidates
+            downloadImageOptions = candidates.map {
+                RestoreImageDownloadOption(id: $0.versionLabel,
+                    title: "macOS \($0.versionLabel)", versionLabel: $0.versionLabel)
+            }
+            let host = ProcessInfo.processInfo.operatingSystemVersion
+            let recommended = RestoreImagePolicy.preferredVersion(from: candidates.map(\.version), for: host)
+            recommendedDownloadVersion = candidates.first(where: { candidate in
+                guard let recommended else { return false }
+                return (candidate.version.majorVersion, candidate.version.minorVersion, candidate.version.patchVersion) ==
+                    (recommended.majorVersion, recommended.minorVersion, recommended.patchVersion)
+            })?.versionLabel ?? ""
+            let previous = RestoreImagePolicy.parseVersion(selectedDownloadVersion)
+            let selected = RestoreImagePolicy.preferredVersion(from: candidates.map(\.version),
+                for: host, retaining: previous)
+            selectedDownloadVersion = candidates.first(where: { candidate in
+                guard let selected else { return false }
+                return (candidate.version.majorVersion, candidate.version.minorVersion, candidate.version.patchVersion) ==
+                    (selected.majorVersion, selected.minorVersion, selected.patchVersion)
+            })?.versionLabel ?? ""
+            status = "Choose a macOS version, then download its IPSW from Apple."
+        } catch {
+            downloadCandidates = []
+            downloadImageOptions = []
+            recommendedDownloadVersion = ""
+            status = error.localizedDescription
+        }
+    }
+
     func downloadHostImage() async {
-        guard Self.canDownloadHostImage, !isBusy else { return }
+        guard !isBusy, !isLoadingDownloadImageOptions else { return }
+        if downloadCandidates.isEmpty { await loadDownloadImageOptions() }
+        guard !isBusy, !downloadCandidates.isEmpty else { return }
+        guard let candidate = downloadCandidates.first(where: { $0.versionLabel == selectedDownloadVersion }) else {
+            status = "Choose an available macOS version to download."
+            return
+        }
         operationState.begin(.downloadingImage)
         downloadProgress = nil
         defer {
             activeDownloadID = nil
             downloadProgress = nil
         }
-        status = "Downloading macOS 26.2 from Apple's servers (about 18 GB)…"
-        let destination = cachedHostImageURL
         do {
+            guard RestoreImagePolicy.isAppleImageURL(candidate.url) else { throw NativeVMError.unsupportedImage }
+            let safeBuild = candidate.build.filter { $0.isASCII && ($0.isLetter || $0.isNumber) }
+            guard !safeBuild.isEmpty else { throw NativeVMError.unsupportedImage }
+            let destination = candidate.url == Self.macOS262URL ? pinnedHostImageURL :
+                restoreCacheDirectory.appendingPathComponent(
+                    "UniversalMac_\(candidate.versionLabel)_\(safeBuild)_Restore.ipsw")
+            status = "Downloading macOS \(candidate.versionLabel) from Apple's servers…"
             try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
             let available = try destination.deletingLastPathComponent()
                 .resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
                 .volumeAvailableCapacityForImportantUsage ?? 0
-            guard available >= 65 * 1_073_741_824 else {
+            guard available >= 25 * 1_073_741_824 else {
                 throw NativeVMError.insufficientDownloadSpace
             }
             let staged = destination.deletingLastPathComponent()
@@ -321,26 +649,41 @@ final class NativeVMManager: ObservableObject {
                     )
                 }
             }
-            let (temporary, response) = try await downloader.run(from: Self.macOS262URL)
+            let (temporary, response) = try await downloader.run(from: candidate.url)
             activeDownloadID = nil
             guard (response as? HTTPURLResponse)?.statusCode == 200,
-                  response.url?.host == "updates.cdn-apple.com" else {
+                  RestoreImagePolicy.isAppleImageURL(response.url) else {
                 throw URLError(.badServerResponse)
             }
             downloadProgress = nil
             status = "Verifying the downloaded IPSW…"
             let digest = try await Self.sha256(of: temporary)
-            guard digest == Self.macOS262SHA256 else { throw NativeVMError.unsupportedImage }
+            if let expected = candidate.expectedSHA256 {
+                guard digest == expected else { throw NativeVMError.unsupportedImage }
+            }
+            let image = try await VZMacOSRestoreImage.image(from: temporary)
+            guard image.isSupported, image.mostFeaturefulSupportedConfiguration != nil,
+                  image.operatingSystemVersion.majorVersion == candidate.version.majorVersion,
+                  image.operatingSystemVersion.minorVersion == candidate.version.minorVersion,
+                  image.operatingSystemVersion.patchVersion == candidate.version.patchVersion,
+                  image.buildVersion == candidate.build else { throw NativeVMError.unsupportedImage }
             if FileManager.default.fileExists(atPath: destination.path) {
                 _ = try FileManager.default.replaceItemAt(destination, withItemAt: temporary)
             } else {
                 try FileManager.default.moveItem(at: temporary, to: destination)
             }
+            if destination != pinnedHostImageURL {
+                let record = CachedRestoreImage(filename: destination.lastPathComponent, sha256: digest,
+                    majorVersion: candidate.version.majorVersion,
+                    minorVersion: candidate.version.minorVersion, buildVersion: candidate.build)
+                try JSONEncoder().encode(record).write(to: cacheRecordURL(for: destination), options: .atomic)
+            }
+            preferences.set(destination.lastPathComponent, forKey: Self.downloadedImageKey)
             operationState.finish()
             await inspect(destination)
         } catch {
             operationState.finish()
-            status = "Could not download or verify macOS 26.2: \(error.localizedDescription)"
+            status = "Could not download or verify macOS: \(error.localizedDescription)"
         }
     }
 
@@ -359,6 +702,13 @@ final class NativeVMManager: ObservableObject {
     func install() async -> VirtualMachineID? {
         guard !isBusy, !isRunning, !shutdownRequested, let imageURL, let restoreImage,
               let requirements = restoreImage.mostFeaturefulSupportedConfiguration else { return nil }
+        if let creationResourceError {
+            status = creationResourceError
+            return nil
+        }
+        let resources = NativeVMResources(
+            cpuCount: creationCPUCount, memoryGiB: creationMemoryGiB, diskGiB: creationDiskGiB
+        )
         guard !hasOtherHostCopy else {
             status = NativeVMError.anotherHostCopyRunning.localizedDescription
             return nil
@@ -366,14 +716,25 @@ final class NativeVMManager: ObservableObject {
         operationState.begin(.installing)
         defer { operationState.finish() }
         let id = VirtualMachineID(rawValue: UUID())
-        let stage = rootURL.appendingPathComponent(".creating-\(id.description)", isDirectory: true)
-        let destination = rootURL.appendingPathComponent(id.description, isDirectory: true)
+        let creationRoot = selectedCreationStorageURL ?? rootURL
+        let stage = creationRoot.appendingPathComponent(".creating-\(id.description)", isDirectory: true)
+        let destination = creationRoot.appendingPathComponent(id.description, isDirectory: true)
+        var presentedInstallerVM: VZVirtualMachine?
         do {
-            try FileManager.default.createDirectory(at: rootURL, withIntermediateDirectories: true)
-            let capacity = try rootURL
+            if let creationStorageValidationMessage {
+                status = creationStorageValidationMessage
+                return nil
+            }
+            if selectedCreationStorageURL == nil {
+                try FileManager.default.createDirectory(at: rootURL, withIntermediateDirectories: true)
+            }
+            let capacity = try creationRoot
                 .resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
                 .volumeAvailableCapacityForImportantUsage ?? 0
-            guard capacity >= 45 * 1_073_741_824 else { throw NativeVMError.insufficientSpace }
+            let requiredGiB = min(resources.diskGiB + 4, 45)
+            guard capacity >= Int64(requiredGiB) * 1_073_741_824 else {
+                throw NativeVMError.insufficientSpace(requiredGiB)
+            }
             try FileManager.default.createDirectory(at: stage, withIntermediateDirectories: false)
             let hardware = requirements.hardwareModel
             let machineID = VZMacMachineIdentifier()
@@ -387,18 +748,21 @@ final class NativeVMManager: ObservableObject {
             let diskURL = stage.appendingPathComponent("disk.img")
             FileManager.default.createFile(atPath: diskURL.path, contents: nil)
             let disk = try FileHandle(forWritingTo: diskURL)
-            try disk.truncate(atOffset: 64 * 1_073_741_824)
+            try disk.truncate(atOffset: UInt64(resources.diskGiB) * 1_073_741_824)
             try disk.close()
 
             let configuration = try makeConfiguration(
                 bundle: stage, hardware: hardware, machineID: machineID,
-                cpuCount: max(requirements.minimumSupportedCPUCount, min(4, ProcessInfo.processInfo.activeProcessorCount / 2)),
-                memorySize: max(requirements.minimumSupportedMemorySize, 8 * 1_073_741_824),
+                cpuCount: resources.cpuCount,
+                memorySize: UInt64(resources.memoryGiB) * 1_073_741_824,
                 includeGuestDisk: false
             )
             let vm = VZVirtualMachine(configuration: configuration)
-            virtualMachine = vm
-            showsDisplay = true
+            if !isRunning {
+                virtualMachine = vm
+                presentedInstallerVM = vm
+                showsDisplay = true
+            }
             status = "Installing macOS from the selected IPSW. This can take a while; keep Tether Host open."
             let installer = VZMacOSInstaller(virtualMachine: vm, restoringFromImageAt: imageURL)
             let progressMonitor = Task { [weak self] in
@@ -413,13 +777,16 @@ final class NativeVMManager: ObservableObject {
             }
             try await installer.install()
             if vm.state == .running { try await vm.stop() }
-            virtualMachine = nil
-            showsDisplay = false
+            if let presentedInstallerVM, virtualMachine === presentedInstallerVM {
+                virtualMachine = nil
+                showsDisplay = false
+            }
 
             let version = restoreImage.operatingSystemVersion
             let manifest = NativeVirtualMachineManifest(
                 id: id, name: "Tether Host VM · \(id.description.prefix(8))",
-                guestImageVersion: "\(version.majorVersion).\(version.minorVersion) (\(restoreImage.buildVersion))"
+                guestImageVersion: "\(version.majorVersion).\(version.minorVersion) (\(restoreImage.buildVersion))",
+                resources: resources
             )
             let encoder = JSONEncoder()
             encoder.dateEncodingStrategy = .iso8601
@@ -428,13 +795,16 @@ final class NativeVMManager: ObservableObject {
                 to: stage.appendingPathComponent(NativeVirtualMachineStore.manifestFilename), options: .atomic
             )
             try FileManager.default.moveItem(at: stage, to: destination)
+            try NativeVMStorageRegistry(defaultRootURL: rootURL).register(manifest, at: destination)
             operationState.transition(from: .installing, to: .starting)
             status = "Starting the fresh VM…"
             try await bootWhileBusy(id)
             return id
         } catch {
-            virtualMachine = nil
-            showsDisplay = false
+            if let presentedInstallerVM, virtualMachine === presentedInstallerVM {
+                virtualMachine = nil
+                showsDisplay = false
+            }
             try? FileManager.default.removeItem(at: stage)
             if FileManager.default.fileExists(atPath: destination.appendingPathComponent(NativeVirtualMachineStore.manifestFilename).path) {
                 status = "macOS is installed, but the VM could not start: \(error.localizedDescription)"
@@ -457,19 +827,43 @@ final class NativeVMManager: ObservableObject {
         if isRunning, runningID == id { showsDisplay = true; return }
         if isRunning { throw NativeVMError.anotherVMRunning }
         guard !hasOtherHostCopy else { throw NativeVMError.anotherHostCopyRunning }
-        let bundle = rootURL.appendingPathComponent(id.description, isDirectory: true)
+        let registry = NativeVMStorageRegistry(defaultRootURL: rootURL)
+        let registeredBundle = registry.location(of: id)
+        if registry.lastKnownLocation(of: id) != nil && registeredBundle == nil {
+            throw NativeVMError.missingVM
+        }
+        let bundle = registeredBundle ?? rootURL.appendingPathComponent(id.description, isDirectory: true)
         guard FileManager.default.fileExists(atPath: bundle.path) else { throw NativeVMError.missingVM }
         let freshMedia = await prepareGuestDiskWhileBusy()
         let includeGuestDisk = GuestSetupDiskExporter.isUsableImage(at: guestDiskURL)
+        guard VirtualMachineBundleLocator(nativeRoot: rootURL).locate(id) == bundle else {
+            throw NativeVMError.invalidVM
+        }
         let hardwareData = try Data(contentsOf: bundle.appendingPathComponent("hardware.bin"))
         let machineData = try Data(contentsOf: bundle.appendingPathComponent("machine.bin"))
         guard let hardware = VZMacHardwareModel(dataRepresentation: hardwareData),
               let machineID = VZMacMachineIdentifier(dataRepresentation: machineData),
               hardware.isSupported else { throw NativeVMError.invalidVM }
+        let manifestURL = bundle.appendingPathComponent(NativeVirtualMachineStore.manifestFilename)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        guard let manifest = try? decoder.decode(NativeVirtualMachineManifest.self, from: Data(contentsOf: manifestURL)),
+              manifest.id == id,
+              manifest.schemaVersion == NativeVirtualMachineManifest.currentSchemaVersion else {
+            throw NativeVMError.invalidVM
+        }
+        // Old manifests did not store resources; preserve their launch behavior.
+        let cpuCount = manifest.resources?.cpuCount ?? min(4, max(2, ProcessInfo.processInfo.activeProcessorCount / 2))
+        let memoryGiB = manifest.resources?.memoryGiB ?? 8
+        guard cpuCount > 0, memoryGiB > 0,
+              cpuCount <= VZVirtualMachineConfiguration.maximumAllowedCPUCount,
+              UInt64(memoryGiB) <= VZVirtualMachineConfiguration.maximumAllowedMemorySize / 1_073_741_824 else {
+            throw NativeVMError.invalidVM
+        }
         let configuration = try makeConfiguration(
             bundle: bundle, hardware: hardware, machineID: machineID,
-            cpuCount: min(4, max(2, ProcessInfo.processInfo.activeProcessorCount / 2)),
-            memorySize: 8 * 1_073_741_824, includeGuestDisk: includeGuestDisk
+            cpuCount: cpuCount,
+            memorySize: UInt64(memoryGiB) * 1_073_741_824, includeGuestDisk: includeGuestDisk
         )
         let vm = VZVirtualMachine(configuration: configuration)
         vm.delegate = vmDelegate
@@ -484,7 +878,7 @@ final class NativeVMManager: ObservableObject {
             shutdownRequested = false
             showsDisplay = true
             markBundleUsed(id)
-            status = "Tether Host VM started. Finish the macOS welcome screens in this window."
+            status = "VM started. Finish macOS setup or sign in to continue."
             if !freshMedia {
                 status += includeGuestDisk
                     ? " Using the previous guest setup disk because its update failed."
@@ -572,9 +966,29 @@ final class NativeVMManager: ObservableObject {
         guard !hasOtherHostCopy else { throw NativeVMError.cannotRemoveWithOtherHostCopy }
         let locator = VirtualMachineBundleLocator(nativeRoot: rootURL)
         guard let bundle = locator.locate(id) else { throw NativeVMError.missingVM }
-        try FileManager.default.removeItem(at: bundle)
+        try removeNativeBundle(bundle, id: id)
         clearDesktopReady(for: id)
         status = "Tether Host VM \(id.description) and its files were deleted."
+    }
+
+    private func readManifest(at bundle: URL) throws -> NativeVirtualMachineManifest {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try decoder.decode(NativeVirtualMachineManifest.self,
+                                  from: Data(contentsOf: bundle.appendingPathComponent(NativeVirtualMachineStore.manifestFilename)))
+    }
+
+    private func removeNativeBundle(_ bundle: URL, id: VirtualMachineID) throws {
+        let registry = NativeVMStorageRegistry(defaultRootURL: rootURL)
+        let external = bundle.deletingLastPathComponent() != rootURL
+        let manifest = external ? try readManifest(at: bundle) : nil
+        if external { try registry.unregister(id) }
+        do {
+            try FileManager.default.removeItem(at: bundle)
+        } catch {
+            if let manifest { try? registry.register(manifest, at: bundle) }
+            throw error
+        }
     }
 
     var hasOtherHostCopy: Bool {
@@ -650,12 +1064,14 @@ final class NativeVMManager: ObservableObject {
         runningID = nil
         virtualMachine = nil
         showsDisplay = false
-        status = error.map { "The VM stopped: \($0.localizedDescription)" } ?? "The VM shut down. Select Start / Show to boot it again."
+        status = error.map { "The VM stopped: \($0.localizedDescription)" } ?? "The VM is off. Choose Start VM to resume."
     }
 
     private func markBundleUsed(_ id: VirtualMachineID) {
-        let bundle = rootURL.appendingPathComponent(id.description, isDirectory: true)
-        try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: bundle.path)
+        let locator = VirtualMachineBundleLocator(nativeRoot: rootURL)
+        if let bundle = locator.locate(id) {
+            try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: bundle.path)
+        }
     }
 }
 

@@ -11,7 +11,7 @@ struct HostWorkspaceView: View {
     @State private var workspaceWindow: NSWindow?
     @State private var healthTab = 0
     @State private var showToken = false
-    @State private var showsCreateVM = false
+    @State private var showsVMConfiguration = false
     @State private var isVMFullScreen = false
     @State private var fullScreenWindow: NSWindow?
 
@@ -66,7 +66,7 @@ struct HostWorkspaceView: View {
         }
         .onChange(of: model.setupDependencies) { _, gates in
             model.syncHostSleepAssertion()
-            if let step = model.workspaceSection.dependency, !gates.isUnlocked(step) {
+            if let step = model.workspaceSection.dependency, !canOpenDependency(step) {
                 model.workspaceSection = .vm
             }
         }
@@ -98,11 +98,24 @@ struct HostWorkspaceView: View {
                 fullScreenWindow = nil
             }
         }
-        .sheet(isPresented: $showsCreateVM) {
+        .onChange(of: model.showsCreateVM) { _, shown in
+            if shown { showsVMConfiguration = false }
+        }
+        .sheet(isPresented: $model.showsCreateVM) {
             createVMSheet
                 .interactiveDismissDisabled(manager.isBusy)
         }
         .tint(.accentColor)
+    }
+
+    private func canOpenDependency(_ dependency: HostSetupDependency) -> Bool {
+        dependency == .vm || model.designatedVM != nil
+    }
+
+    private var managerHasError: Bool {
+        manager.status.localizedCaseInsensitiveContains("failed")
+            || manager.status.localizedCaseInsensitiveContains("could not")
+            || manager.status.localizedCaseInsensitiveContains("unavailable")
     }
 
     private var pageTitle: String {
@@ -122,7 +135,7 @@ struct HostWorkspaceView: View {
             set: { selection in
                 guard let section = selection else { return }
                 if let dependency = section.dependency,
-                   !model.setupDependencies.isUnlocked(dependency) { return }
+                   !canOpenDependency(dependency) { return }
                 model.workspaceSection = section
             }
         )) {
@@ -156,7 +169,7 @@ struct HostWorkspaceView: View {
 
     private func navigationRow(_ section: HostWorkspaceSection, title: String, symbol: String) -> some View {
         let dependency = section.dependency
-        let enabled = dependency.map { model.setupDependencies.isUnlocked($0) } ?? true
+        let enabled = dependency.map { canOpenDependency($0) } ?? true
         let completed = dependency.map { model.setupDependencies.isCompleted($0) } ?? false
         return HStack(spacing: 8) {
             Label(title, systemImage: symbol)
@@ -188,7 +201,7 @@ struct HostWorkspaceView: View {
         case .phone:
             scrollContent { phoneSection }
         case .library:
-            VMInventoryView(createVM: { showsCreateVM = true })
+            VMInventoryView(createVM: { model.showsCreateVM = true })
         case .overview:
             VStack(spacing: 0) {
                 Picker("View", selection: $healthTab) {
@@ -223,7 +236,7 @@ struct HostWorkspaceView: View {
                 } description: {
                     Text("Create a macOS virtual machine, then connect it to Tether on your iPhone.")
                 } actions: {
-                    Button("Create virtual machine…") { showsCreateVM = true }
+                    Button("Create virtual machine…") { model.showsCreateVM = true }
                         .buttonStyle(.borderedProminent)
                         .disabled(manager.isBusy || manager.hasOtherHostCopy)
                 }
@@ -314,9 +327,18 @@ struct HostWorkspaceView: View {
     private var createVMSheet: some View {
         VStack(alignment: .leading, spacing: 20) {
             VStack(alignment: .leading, spacing: 5) {
-                Text("Create a macOS VM").font(.title2.bold())
-                Text("Tether Host installs macOS and opens the new VM here.")
+                Text(showsVMConfiguration ? "Configure your VM" : "Choose macOS")
+                    .font(.title2.bold())
+                Text(showsVMConfiguration ? "Step 2 of 2 · Configure and create" : "Step 1 of 2 · Installation image")
+                    .font(.callout).foregroundStyle(.secondary)
+                Text(manager.isRunning
+                     ? "Tether Host installs macOS in a separate VM."
+                     : "Tether Host installs macOS and opens the new VM here.")
                 .foregroundStyle(.secondary)
+                if manager.isRunning {
+                    Text("Your current VM will keep running. The new VM will be saved for you to start later.")
+                        .font(.callout).foregroundStyle(.secondary)
+                }
             }
 
             if manager.isBusy {
@@ -352,67 +374,165 @@ struct HostWorkspaceView: View {
                 }
                 .frame(maxWidth: .infinity, minHeight: 160, alignment: .leading)
             } else {
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("macOS installation image").font(.headline)
-                    Text("A new VM needs an Apple IPSW. Choose one you have or download it from Apple.")
-                        .font(.callout).foregroundStyle(.secondary)
-                    Button("Choose IPSW…") { manager.chooseIPSW() }
-                    if manager.hasCachedHostImage {
-                        Label("A macOS 26.2 image already exists on this Mac. Reuse it for another VM?",
-                              systemImage: "checkmark.circle.fill")
-                            .font(.callout).foregroundStyle(.green)
-                        HStack {
-                            Button("Reuse image") { Task { await manager.useCachedHostImage() } }
-                                .buttonStyle(.borderedProminent)
-                            Button("Show in Finder") { manager.revealCachedHostImageInFinder() }
-                            if NativeVMManager.canDownloadHostImage {
-                                Button("Download again") { Task { await manager.downloadHostImage() } }
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 12) {
+                        if showsVMConfiguration {
+                            Label(manager.imageDescription, systemImage: "checkmark.circle.fill")
+                                .font(.callout).foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Divider().padding(.vertical, 4)
+                            VMCreationSettingsView(manager: manager)
+                            Divider().padding(.vertical, 4)
+                            creationStoragePicker
+                            if manager.hasOtherHostCopy {
+                                Text("Quit the other Tether Host copy before creating this VM.")
+                                    .font(.callout).foregroundStyle(.orange)
+                            }
+                            if managerHasError {
+                                Text(manager.status).font(.callout).foregroundStyle(.orange)
+                            }
+                        } else {
+                        Text("macOS installation image").font(.headline)
+                        Text("Download a compatible macOS restore image or choose an IPSW on this Mac. The download is cached on this Mac. You can store the VM on an external drive in the next step.")
+                            .font(.callout).foregroundStyle(.secondary)
+                        downloadVersionPicker
+                        if manager.hasCachedHostImage {
+                            Label("A downloaded macOS image is available on this Mac.",
+                                  systemImage: "checkmark.circle.fill")
+                                .font(.callout).foregroundStyle(.secondary)
+                            HStack {
+                                if manager.imageURL == nil {
+                                    Button("Reuse image") { Task { await manager.useCachedHostImage() } }
+                                        .buttonStyle(.borderedProminent)
+                                } else {
+                                    Button("Reuse image") { Task { await manager.useCachedHostImage() } }
+                                        .buttonStyle(.bordered)
+                                }
+                                Button("Show in Finder") { manager.revealCachedHostImageInFinder() }
                             }
                         }
-                    } else if NativeVMManager.canDownloadHostImage {
-                        Button("Download macOS 26.2") { Task { await manager.downloadHostImage() } }
-                    }
-                    Text(manager.imageDescription).font(.callout).foregroundStyle(.secondary)
-                    if manager.imageURL != nil {
-                        Button("Show selected image in Finder") { manager.revealSelectedImageInFinder() }
-                            .font(.caption)
-                    }
-                    Link("Find a macOS IPSW", destination: URL(string: "https://ipsw.me/product/Mac")!)
-                        .font(.caption)
-                    if manager.status != "No VM installation has started." {
-                        Text(manager.status).font(.callout)
+                        HStack(spacing: 12) {
+                            if NativeVMManager.canDownloadHostImage {
+                                if !manager.hasCachedHostImage && manager.imageURL == nil {
+                                    Button("Download macOS") { Task { await manager.downloadHostImage() } }
+                                        .buttonStyle(.borderedProminent)
+                                        .disabled(manager.downloadImageOptions.isEmpty || manager.isLoadingDownloadImageOptions)
+                                } else {
+                                    Button("Download macOS") { Task { await manager.downloadHostImage() } }
+                                        .buttonStyle(.bordered)
+                                        .disabled(manager.downloadImageOptions.isEmpty || manager.isLoadingDownloadImageOptions)
+                                }
+                            }
+                            Button("Choose an IPSW…") { manager.chooseIPSW() }
+                        }
+                        Label(manager.imageDescription,
+                              systemImage: manager.imageURL == nil ? "doc" : "checkmark.circle.fill")
+                            .font(.callout).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
+                        if manager.imageURL != nil {
+                            Button("Show selected image in Finder") { manager.revealSelectedImageInFinder() }
+                                .font(.caption)
+                        }
+                        Link("Find a macOS IPSW", destination: URL(string: "https://ipsw.me/product/Mac")!)
+                            .font(.caption)
+                        if manager.status != "No VM installation has started." {
+                            Text(manager.status).font(.callout)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        if manager.hasOtherHostCopy {
+                            Label("Quit the other Tether Host copy before creating a VM.",
+                                  systemImage: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.orange)
+                        }
+                        }
                     }
-                    if manager.hasOtherHostCopy {
-                        Label("Quit the other Tether Host copy before creating a VM.",
-                              systemImage: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.orange)
-                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                Spacer(minLength: 12)
+                .frame(height: showsVMConfiguration ? 440 : 380)
                 HStack {
-                    Button("Cancel") { showsCreateVM = false }
-                        .keyboardShortcut(.cancelAction)
+                    Button("Cancel") { model.showsCreateVM = false }.keyboardShortcut(.cancelAction)
                     Spacer()
+                    if showsVMConfiguration {
+                    Button("Back") { showsVMConfiguration = false }
                     Button("Create VM") {
                         Task {
                             if let id = await manager.install() {
                                 await model.refresh()
-                                model.selectVM(id)
-                                showsCreateVM = false
+                                if !manager.isRunning || manager.runningVMID == id {
+                                    model.selectVM(id)
+                                } else {
+                                    model.workspaceSection = .library
+                                }
+                                model.showsCreateVM = false
                             }
                         }
                     }
                     .buttonStyle(.borderedProminent)
                     .keyboardShortcut(.defaultAction)
-                    .disabled(manager.imageURL == nil || manager.isRunning
+                    .disabled(manager.imageURL == nil
+                        || manager.creationResourceError != nil
+                        || manager.creationStorageValidationMessage != nil
                         || !model.providerSetup.availability.canContinue || manager.hasOtherHostCopy)
+                    } else {
+                        Button("Continue to configuration") { showsVMConfiguration = true }
+                            .buttonStyle(.borderedProminent)
+                            .keyboardShortcut(.defaultAction)
+                    .disabled(manager.imageURL == nil)
+                    }
                 }
             }
         }
         .padding(24)
         .frame(width: 520)
         .frame(minHeight: 340)
+    }
+
+    private var creationStoragePicker: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Storage location").font(.headline)
+            Label(manager.creationStorageDisplayName, systemImage: "externaldrive")
+                .font(.callout).textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack {
+                Button("Choose folder…") { manager.chooseCreationStorageFolder() }
+                if manager.selectedCreationStorageURL != nil {
+                    Button("Use this Mac") { manager.resetCreationStorageToDefault() }
+                        .buttonStyle(.borderless)
+                }
+            }
+            Text("Choose a folder on this Mac or an external drive. Keep the drive connected while the VM runs.")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if let error = manager.creationStorageValidationMessage {
+                Text(error).font(.callout).foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private var downloadVersionPicker: some View {
+        Group {
+            if !manager.downloadImageOptions.isEmpty {
+                Picker("macOS version", selection: $manager.selectedDownloadVersion) {
+                    ForEach(manager.downloadImageOptions) { option in
+                        Text(option.title + (option.id == manager.recommendedDownloadVersion
+                                             ? " — Recommended" : ""))
+                            .tag(option.id)
+                    }
+                }
+                .pickerStyle(.menu)
+                .frame(maxWidth: 400, alignment: .leading)
+            } else if manager.isLoadingDownloadImageOptions {
+                ProgressView("Finding macOS versions…")
+                    .controlSize(.small)
+            } else {
+                Button("Find macOS versions") {
+                    Task { await manager.loadDownloadImageOptions() }
+                }
+                .buttonStyle(.borderless)
+            }
+        }
+        .task { await manager.loadDownloadImageOptions() }
     }
 
     private func transferSize(_ bytes: Int64) -> String {
@@ -557,8 +677,11 @@ struct HostWorkspaceView: View {
     private var phoneInstructions: some View {
         VStack(alignment: .leading, spacing: 24) {
             sectionHeader("Connect your iPhone", detail: "Add this Mac as a server in Tether on your iPhone.")
-            Label("Guest connection verified. Keep this VM running while you connect.", systemImage: "checkmark.circle.fill")
-                .foregroundStyle(.green)
+            Label(model.setupDependencies.hermesReady
+                  ? "Guest connection verified. Keep this VM running while you connect."
+                  : "Saved connection details. Start the VM and verify Hermes to reconnect.",
+                  systemImage: model.setupDependencies.hermesReady ? "checkmark.circle.fill" : "info.circle")
+                .foregroundStyle(model.setupDependencies.hermesReady ? Color.green : .secondary)
             Divider()
             setupInstruction(1, "Join the same Tailscale network", detail: "Open Tailscale on your iPhone and connect.")
             setupInstruction(2, "Add this server in Tether", detail: "Choose Hermes API Server and paste these connection details.")
@@ -575,6 +698,15 @@ struct HostWorkspaceView: View {
                 Label(message, systemImage: "checkmark.circle.fill").font(.callout).foregroundStyle(.green)
             }
             setupInstruction(3, "Test the connection", detail: "Tap Test Connection on your iPhone, then save the server.")
+            if model.isPhoneSetupComplete {
+                Label("You confirmed the iPhone connection.", systemImage: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+                Button("Phone test needs attention") { model.resetPhoneSetup() }
+            } else {
+                Button("I tested the connection on my iPhone") { model.confirmPhoneSetup() }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!model.setupDependencies.hermesReady)
+            }
             Text("After restarting the VM, unlock macOS and log in to resume the guest services.")
                 .font(.callout).foregroundStyle(.secondary)
         }
@@ -588,6 +720,7 @@ struct HostWorkspaceView: View {
             }
             Spacer()
             Button("Copy", action: copy).accessibilityLabel("Copy \(title)")
+                .disabled(model.connectionVerifiedAt == nil)
         }
     }
 
@@ -698,7 +831,7 @@ private struct VMMonitorView: View {
                             Task { await manager.startOrShow(vm.id) }
                         }
                         .buttonStyle(.borderedProminent)
-                        .disabled(manager.isBusy || manager.hasOtherHostCopy || model.designatedVM == nil)
+                        .disabled(manager.isBusy || manager.hasOtherHostCopy || model.designatedVM == nil || model.designatedVM?.state == .unavailable)
                     }
                     .foregroundStyle(.white.opacity(0.75))
                     .multilineTextAlignment(.center)
@@ -860,6 +993,60 @@ private struct WorkspaceWindowReader: NSViewRepresentable {
             DispatchQueue.main.async { [weak self] in
                 self?.resolve?(currentWindow)
             }
+        }
+    }
+}
+
+/// Shared by first-run setup and VM creation; edits apply only to the new VM.
+struct VMCreationSettingsView: View {
+    @ObservedObject var manager: NativeVMManager
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Virtual machine settings").font(.headline)
+            resourceRow("Memory (RAM)", value: $manager.creationMemoryGiB,
+                        range: manager.creationMemoryRange, unit: "GB")
+            resourceRow("CPU cores", value: $manager.creationCPUCount,
+                        range: manager.creationCPURange, unit: "cores")
+            resourceRow("Disk space", value: $manager.creationDiskGiB,
+                        range: manager.creationDiskRange, unit: "GB", step: 8)
+            Text("Disk space grows as the VM uses it, up to this limit.")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if manager.creationDiskGiB < 64 {
+                Text(manager.creationDiskGiB < 40
+                     ? "Experimental disk size. macOS installation may fail; use 64 GB or more for room to install and update."
+                     : "Below 64 GB, space for macOS and updates is limited. Installation may require a larger disk.")
+                    .font(.caption).foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Button("Use recommended settings") { manager.resetCreationResources() }
+                .buttonStyle(.borderless).font(.callout)
+            if let error = manager.creationResourceError {
+                Text(error).font(.callout).foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .frame(maxWidth: 400, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 8)
+        .disabled(manager.isBusy)
+    }
+
+    private func resourceRow(_ title: String, value: Binding<Int>,
+                             range: ClosedRange<Int>, unit: String, step: Int = 1) -> some View {
+        HStack(spacing: 8) {
+            Text(title)
+            Spacer()
+            TextField(title, value: value, format: .number.grouping(.never))
+                .textFieldStyle(.roundedBorder)
+                .multilineTextAlignment(.trailing)
+                .frame(width: 68)
+                .accessibilityLabel(title)
+            Text(unit).foregroundStyle(.secondary).frame(width: 38, alignment: .leading)
+            Stepper(title, value: value, in: range, step: step)
+                .labelsHidden()
+                .accessibilityLabel(title)
         }
     }
 }

@@ -11,18 +11,90 @@ public struct NativeVirtualMachineManifest: Codable, Equatable, Sendable {
     public let name: String
     public let guestImageVersion: String
     public let createdAt: Date
+    /// Absent in VMs created before resource selection was added.
+    public let resources: NativeVMResources?
 
     public init(
         id: VirtualMachineID,
         name: String = "Tether Sandbox",
         guestImageVersion: String,
-        createdAt: Date = Date()
+        createdAt: Date = Date(),
+        resources: NativeVMResources? = nil
     ) {
         self.schemaVersion = Self.currentSchemaVersion
         self.id = id
         self.name = name
         self.guestImageVersion = guestImageVersion
         self.createdAt = createdAt
+        self.resources = resources
+    }
+}
+
+public struct NativeVMResources: Codable, Equatable, Sendable {
+    public let cpuCount: Int
+    public let memoryGiB: Int
+    public let diskGiB: Int
+
+    public init(cpuCount: Int, memoryGiB: Int, diskGiB: Int) {
+        self.cpuCount = cpuCount
+        self.memoryGiB = memoryGiB
+        self.diskGiB = diskGiB
+    }
+}
+
+/// UI bounds and final validation for new Apple silicon macOS VMs. Disk images
+/// are sparse, so the requested virtual capacity does not have to be free now.
+public struct NativeVMResourceLimits: Sendable {
+    public let cpu: ClosedRange<Int>
+    public let memoryGiB: ClosedRange<Int>
+    public let diskGiB: ClosedRange<Int>
+    public let hostCapabilityError: String?
+
+    public init(
+        hostCPUCount: Int, hostMemoryBytes: UInt64,
+        minimumCPUCount: Int = 2, minimumMemoryBytes: UInt64 = 4 * 1_073_741_824,
+        maximumCPUCount: Int = 64, maximumMemoryBytes: UInt64 = 512 * 1_073_741_824
+    ) {
+        let gib: UInt64 = 1_073_741_824
+        let cpuMinimum = max(2, minimumCPUCount)
+        let memoryMinimum = max(4, Int((minimumMemoryBytes + gib - 1) / gib))
+        // Keep at least 4 GiB for the host where possible. The remaining bound
+        // is advisory; VZ's own maximum is also applied by the caller.
+        let hostMemoryLimit = Int(hostMemoryBytes > 4 * gib ? (hostMemoryBytes - 4 * gib) / gib : 0)
+        let cpuMaximum = min(hostCPUCount, maximumCPUCount)
+        let memoryMaximum = min(hostMemoryLimit, Int(maximumMemoryBytes / gib))
+        cpu = cpuMinimum...max(cpuMinimum, cpuMaximum)
+        memoryGiB = memoryMinimum...max(memoryMinimum, memoryMaximum)
+        diskGiB = 24...1024
+        if cpuMaximum < cpuMinimum {
+            hostCapabilityError = "This macOS image needs at least \(cpuMinimum) CPU cores; this Mac can provide \(max(0, cpuMaximum))."
+        } else if memoryMaximum < memoryMinimum {
+            hostCapabilityError = "This macOS image needs at least \(memoryMinimum) GB of VM memory; this Mac has only \(max(0, memoryMaximum)) GB available after reserving memory for macOS."
+        } else {
+            hostCapabilityError = nil
+        }
+    }
+
+    public var defaults: NativeVMResources {
+        NativeVMResources(
+            cpuCount: min(cpu.upperBound, max(cpu.lowerBound, 4)),
+            memoryGiB: min(memoryGiB.upperBound, max(memoryGiB.lowerBound, 8)),
+            diskGiB: 128
+        )
+    }
+
+    public func validationMessage(for resources: NativeVMResources) -> String? {
+        if let hostCapabilityError { return hostCapabilityError }
+        if !cpu.contains(resources.cpuCount) {
+            return "CPU must be between \(cpu.lowerBound) and \(cpu.upperBound) cores."
+        }
+        if !memoryGiB.contains(resources.memoryGiB) {
+            return "Memory must be between \(memoryGiB.lowerBound) and \(memoryGiB.upperBound) GB."
+        }
+        if !diskGiB.contains(resources.diskGiB) {
+            return "Disk capacity must be between \(diskGiB.lowerBound) and \(diskGiB.upperBound) GB."
+        }
+        return nil
     }
 }
 
@@ -67,6 +139,100 @@ public enum AppleVirtualizationSupport {
     }
 }
 
+/// Remembers complete VM bundles created outside the default VM directory. The
+/// bookmark follows a renamed or remounted volume; the saved path is used only
+/// to explain where an unavailable VM was last seen.
+public struct NativeVMStorageRegistry: Sendable {
+    private struct Entry: Codable {
+        let id: VirtualMachineID
+        let name: String
+        let bookmark: Data
+        let lastPath: String
+        let volumeIdentity: String
+        let provider: String?
+        var resolvedProvider: String { provider ?? VMProvider.builtIn.rawValue }
+    }
+
+    public let defaultRootURL: URL
+    private var fileURL: URL {
+        defaultRootURL.deletingLastPathComponent().appendingPathComponent("external-vms.json")
+    }
+
+    public init(defaultRootURL: URL) {
+        self.defaultRootURL = defaultRootURL.standardizedFileURL
+    }
+
+    private func entries() throws -> [Entry] {
+        guard FileManager.default.fileExists(atPath: fileURL.path) else { return [] }
+        return try JSONDecoder().decode([Entry].self, from: Data(contentsOf: fileURL))
+    }
+
+    private func save(_ entries: [Entry]) throws {
+        try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        try encoder.encode(entries).write(to: fileURL, options: .atomic)
+    }
+
+    public func register(_ manifest: NativeVirtualMachineManifest, at bundleURL: URL) throws {
+        let bundle = bundleURL.standardizedFileURL
+        guard bundle.lastPathComponent == manifest.id.description else {
+            throw NativeVirtualMachineStoreError.identityMismatch
+        }
+        guard bundle.deletingLastPathComponent() != defaultRootURL else { return }
+        let folder = bundle.deletingLastPathComponent()
+        let bookmark = try folder.bookmarkData()
+        let volumeIdentity = try Self.volumeIdentity(at: folder)
+        var saved = try entries().filter { $0.id != manifest.id || $0.resolvedProvider != VMProvider.builtIn.rawValue }
+        saved.append(Entry(id: manifest.id, name: manifest.name, bookmark: bookmark,
+                           lastPath: folder.path, volumeIdentity: volumeIdentity, provider: VMProvider.builtIn.rawValue))
+        try save(saved)
+    }
+
+    public func unregister(_ id: VirtualMachineID, provider: VMProvider = .builtIn) throws {
+        let saved = try entries()
+        guard saved.contains(where: { $0.id == id && $0.resolvedProvider == provider.rawValue }) else { return }
+        try save(saved.filter { $0.id != id || $0.resolvedProvider != provider.rawValue })
+    }
+
+    public func knownExternalVMs() throws -> [(id: VirtualMachineID, name: String, bundle: URL?)] {
+        try entries().filter { $0.resolvedProvider == VMProvider.builtIn.rawValue }.map { entry in
+            (entry.id, entry.name, resolvedBundle(for: entry))
+        }
+    }
+
+    public func location(of id: VirtualMachineID, provider: VMProvider = .builtIn) -> URL? {
+        guard let entry = try? entries().first(where: { $0.id == id && $0.resolvedProvider == provider.rawValue }) else { return nil }
+        return resolvedBundle(for: entry)
+    }
+
+    private func resolvedBundle(for entry: Entry) -> URL? {
+        var stale = false
+        guard let folder = try? URL(resolvingBookmarkData: entry.bookmark,
+                                    options: [.withoutUI, .withoutMounting], bookmarkDataIsStale: &stale),
+              (try? Self.volumeIdentity(at: folder)) == entry.volumeIdentity else { return nil }
+        let name = entry.id.description
+        return folder.appendingPathComponent(name, isDirectory: true)
+    }
+
+    public static func volumeIdentity(at folder: URL) throws -> String {
+        let values = try folder.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey,
+                                                          .volumeUUIDStringKey, .volumeIdentifierKey])
+        guard values.isDirectory == true, values.isSymbolicLink != true else {
+            throw NativeVirtualMachineStoreError.invalidRoot
+        }
+        if let uuid = values.volumeUUIDString { return uuid }
+        guard let identifier = values.volumeIdentifier else {
+            throw NativeVirtualMachineStoreError.invalidRoot
+        }
+        return String(describing: identifier)
+    }
+
+    public func lastKnownLocation(of id: VirtualMachineID, provider: VMProvider = .builtIn) -> String? {
+        try? entries().first(where: { $0.id == id && $0.resolvedProvider == provider.rawValue })?.lastPath
+    }
+}
+
 /// Owns the on-disk inventory for VMs run directly with Apple's
 /// Virtualization.framework. A complete VM bundle is rooted at its immutable UUID
 /// and contains a Tether-owned manifest plus signed guest artifacts.
@@ -85,13 +251,12 @@ public struct NativeVirtualMachineStore: VirtualMachineReading, Sendable {
         }
         let fileManager = FileManager.default
         guard rootURL.isFileURL else { throw NativeVirtualMachineStoreError.invalidRoot }
-        guard fileManager.fileExists(atPath: rootURL.path) else { return [] }
-
-        let children = try fileManager.contentsOfDirectory(
+        let registry = NativeVMStorageRegistry(defaultRootURL: rootURL)
+        let children = fileManager.fileExists(atPath: rootURL.path) ? try fileManager.contentsOfDirectory(
             at: rootURL,
             includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey],
             options: [.skipsHiddenFiles]
-        ).sorted { $0.lastPathComponent < $1.lastPathComponent }
+        ).sorted { $0.lastPathComponent < $1.lastPathComponent } : []
 
         var records: [VirtualMachineRecord] = []
         for bundleURL in children {
@@ -124,6 +289,15 @@ public struct NativeVirtualMachineStore: VirtualMachineReading, Sendable {
             records.append(VirtualMachineRecord(id: manifest.id, name: manifest.name, state: .stopped))
         }
 
+        let locator = VirtualMachineBundleLocator(nativeRoot: rootURL)
+        for external in try registry.knownExternalVMs() {
+            guard !records.contains(where: { $0.id == external.id }) else {
+                throw NativeVirtualMachineStoreError.duplicateID(external.id)
+            }
+            let available = locator.locate(external.id) != nil
+            records.append(VirtualMachineRecord(id: external.id, name: external.name,
+                                                state: available ? .stopped : .unavailable))
+        }
         if let duplicate = Dictionary(grouping: records, by: \.id).first(where: { $0.value.count > 1 })?.key {
             throw NativeVirtualMachineStoreError.duplicateID(duplicate)
         }

@@ -135,7 +135,14 @@ private enum VMRemovalError: LocalizedError {
 @MainActor
 final class AppViewModel: ObservableObject {
     @Published var selection: HostDestination? = .overview
-    @Published var workspaceSection: HostWorkspaceSection = .vm
+    @Published var workspaceSection: HostWorkspaceSection = .vm {
+        didSet {
+            // Initial return routing is allowed only until the user picks a
+            // section. Later inventory polls must never move them away.
+            if workspaceSection != oldValue { pendingPhoneRestoration = false }
+        }
+    }
+    @Published var showsCreateVM = false
     @Published private(set) var observations: [HealthObservation]
     @Published private(set) var inventory: [VirtualMachineRecord]
     @Published private(set) var setup: SetupJournal
@@ -150,8 +157,29 @@ final class AppViewModel: ObservableObject {
     @Published private(set) var preventsHostSleep = false
     private var hostSleepActivity: NSObjectProtocol?
 
-    @Published var connectionURL = "" { didSet { connectionVerifiedAt = nil; if connectionURL != oldValue { connectionToken = "" } } }
-    @Published var connectionToken = "" { didSet { connectionVerifiedAt = nil } }
+    @Published var connectionURL = "" {
+        didSet {
+            connectionVerifiedAt = nil
+            if !isHydratingSavedConnection && connectionURL != oldValue {
+                isClearingTokenForURLChange = true
+                connectionToken = ""
+                isClearingTokenForURLChange = false
+            }
+            if !isHydratingSavedConnection && PhoneSetupConfirmation.normalizedEndpoint(oldValue) !=
+                PhoneSetupConfirmation.normalizedEndpoint(connectionURL) {
+                resetPhoneSetup()
+            }
+        }
+    }
+    @Published var connectionToken = "" {
+        didSet {
+            connectionVerifiedAt = nil
+            if connectionToken != oldValue && !isHydratingSavedConnection &&
+                !isClearingTokenForURLChange && !isRestoringConnectionToken {
+                resetPhoneSetup()
+            }
+        }
+    }
     @Published private(set) var connectionVerifiedAt: Date?
     @Published private(set) var isVerifyingConnection = false
     @Published private(set) var connectionMessage = "Verify the guest endpoint before connecting your phone."
@@ -168,22 +196,27 @@ final class AppViewModel: ObservableObject {
     private var hasDetectedGuestConnection = false
     private var isReadingVerifiedGuestConnection = false
     private var lastAutomaticVerificationAt: Date?
+    private var isClearingTokenForURLChange = false
+    private var isRestoringConnectionToken = false
+    private var isHydratingSavedConnection = true
+    private var pendingPhoneRestoration = true
 
     @Published private(set) var providerSetup: VMProviderSetup
     let nativeVM: NativeVMManager
     @Published private(set) var selectedVMID: VirtualMachineID?
     @Published private(set) var tailscaleConfirmedVMID: VirtualMachineID?
     @Published private(set) var verifiedForVMID: VirtualMachineID?
+    @Published private(set) var phoneSetupConfirmation: PhoneSetupConfirmation?
     private let preferences: UserDefaults
     private let provider: any HostStatusProviding
 
     init(provider: any HostStatusProviding = LiveHostStatusProvider(), preferences: UserDefaults = .standard,
-         nativeVM: NativeVMManager = NativeVMManager(),
+         nativeVM: NativeVMManager? = nil,
          connectionVerifier: ConnectionVerifier = ConnectionVerifier(),
          connectionVault: any SecretStoring = KeychainSecretStore(service: "app.tether.host.connection"),
          isInsideGuest: Bool = GuestSetupEnvironment.isVirtualMac,
          now: @escaping @MainActor () -> Date = { Date() }) {
-        self.nativeVM = nativeVM
+        self.nativeVM = nativeVM ?? NativeVMManager(preferences: preferences)
         self.connectionVerifier = connectionVerifier
         self.connectionVault = connectionVault
         self.isInsideGuest = isInsideGuest
@@ -197,10 +230,13 @@ final class AppViewModel: ObservableObject {
             preferences.removeObject(forKey: "setup.vmID")
             preferences.removeObject(forKey: "connection.endpoint")
             preferences.removeObject(forKey: "connection.id")
+            preferences.removeObject(forKey: "setup.phoneConfirmation")
         }
         for key in ["setup.vmProvider", "setup.builtInDefaultApplied", "setup.utmDesktopReadyVMID"] {
             preferences.removeObject(forKey: key)
         }
+        phoneSetupConfirmation = preferences.data(forKey: "setup.phoneConfirmation")
+            .flatMap { try? JSONDecoder().decode(PhoneSetupConfirmation.self, from: $0) }
         providerSetup = VMProviderSetup()
         tailscaleConfirmedVMID = nil
         preferences.removeObject(forKey: "setup.tailscaleConfirmedVMID")
@@ -219,6 +255,7 @@ final class AppViewModel: ObservableObject {
             let revision = connectionInputRevision
             Task { await restoreConnectionToken(for: id, endpoint: endpoint, revision: revision) }
         }
+        isHydratingSavedConnection = false
     }
 
     func selectProvider(_ provider: VMProvider) {
@@ -263,6 +300,37 @@ final class AppViewModel: ObservableObject {
     func startNewVMSetup() {
         selection = .setup
         workspaceSection = .vm
+        showsCreateVM = true
+    }
+
+    /// A persisted iPhone pairing acknowledgement, scoped to this VM and
+    /// canonical HTTPS endpoint. It does not claim the guest is online now.
+    var isPhoneSetupComplete: Bool {
+        phoneSetupConfirmation?.matches(vmID: designatedVM?.id, endpoint: connectionURL) ?? false
+    }
+
+    func confirmPhoneSetup() {
+        guard setupDependencies.hermesReady, let vmID = designatedVM?.id,
+              let confirmation = PhoneSetupConfirmation(vmID: vmID, endpoint: connectionURL) else { return }
+        phoneSetupConfirmation = confirmation
+        if let data = try? JSONEncoder().encode(confirmation) {
+            preferences.set(data, forKey: "setup.phoneConfirmation")
+        }
+    }
+
+    func resetPhoneSetup() {
+        phoneSetupConfirmation = nil
+        preferences.removeObject(forKey: "setup.phoneConfirmation")
+    }
+
+    private func restorePhoneSectionIfReady() {
+        guard pendingPhoneRestoration,
+              workspaceSection == .vm,
+              selection == .setup,
+              !connectionToken.isEmpty,
+              isPhoneSetupComplete else { return }
+        pendingPhoneRestoration = false
+        workspaceSection = .phone
     }
 
     var candidateVMs: [VirtualMachineRecord] {
@@ -339,6 +407,7 @@ final class AppViewModel: ObservableObject {
     }
 
     private func clearConnectionForVMChange() {
+        resetPhoneSetup()
         connectionInputRevision += 1
         hasManualConnectionOverride = false
         hasDetectedGuestConnection = false
@@ -535,7 +604,10 @@ final class AppViewModel: ObservableObject {
               connectionID == id,
               connectionURL == endpoint,
               connectionToken.isEmpty else { return }
+        isRestoringConnectionToken = true
         connectionToken = secret.withUnsafeBytes { String(decoding: $0, as: UTF8.self) }
+        isRestoringConnectionToken = false
+        restorePhoneSectionIfReady()
     }
 
     func startGuestSetup() {
@@ -734,6 +806,7 @@ final class AppViewModel: ObservableObject {
             lastRefresh = Date()
             statusMessage = "Evidence refreshed. Review its source and collection time before acting."
             syncHostSleepAssertion()
+            restorePhoneSectionIfReady()
         } catch {
             guard selectedProvider == providerSetup.provider else { return }
             observations = HostDashboardSnapshot.unobserved.observations

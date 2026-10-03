@@ -21,8 +21,8 @@ struct VMInventoryView: View {
                             if let createVM { createVM() } else { model.startNewVMSetup() }
                         }
                             .buttonStyle(.borderedProminent)
-                            .disabled(model.nativeVM.isBusy || model.nativeVM.isRunning || model.nativeVM.hasOtherHostCopy)
-                            .accessibilityHint("Opens creation for the selected VM provider")
+                            .disabled(model.nativeVM.isBusy || model.nativeVM.hasOtherHostCopy)
+                            .accessibilityHint("Opens Apple virtual machine creation")
                     }
                 }
                 if model.isRemovingVM { ProgressView("Deleting VM files…") }
@@ -121,6 +121,10 @@ private struct VMRecordRow: View {
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 5) {
                     Text(vm.name).font(.headline)
+                    if vm.state == .unavailable {
+                        Text("Storage unavailable. Reconnect the drive and refresh.")
+                            .font(.callout).foregroundStyle(.secondary)
+                    }
                     Text(vm.id.rawValue.uuidString)
                         .font(.system(.caption, design: .monospaced))
                         .foregroundStyle(.secondary)

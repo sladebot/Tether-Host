@@ -20,6 +20,7 @@ struct HostDashboardView: View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 20) {
                 header
+                nextStep
                 isolationSummary
 
                 ForEach(groups, id: \.0) { group in
@@ -36,14 +37,12 @@ struct HostDashboardView: View {
                             .font(.headline)
                     }
                 }
-
-                actions
             }
             .padding(24)
             .frame(maxWidth: 980, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .top)
         }
-        .navigationTitle("Security overview")
+        .navigationTitle("Health")
         .onReceive(timer) { now = $0 }
     }
 
@@ -63,9 +62,9 @@ struct HostDashboardView: View {
 
     private var isolationSummary: some View {
         HStack(alignment: .center, spacing: 20) {
-            Image(systemName: model.securityState.symbol)
+            Image(systemName: isolationState.symbol)
                 .font(.system(size: 42, weight: .semibold))
-                .foregroundStyle(model.securityState.color)
+                .foregroundStyle(isolationState.color)
                 .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 4) {
@@ -76,19 +75,27 @@ struct HostDashboardView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer()
-            StateBadge(state: model.securityState)
+            StateBadge(state: isolationState)
         }
         .padding(20)
-        .background(model.securityState.color.opacity(0.09), in: RoundedRectangle(cornerRadius: 14))
+        .background(isolationState.color.opacity(0.09), in: RoundedRectangle(cornerRadius: 14))
         .overlay {
             RoundedRectangle(cornerRadius: 14)
-                .stroke(model.securityState.color.opacity(0.25), lineWidth: 1)
+                .stroke(isolationState.color.opacity(0.25), lineWidth: 1)
         }
         .accessibilityElement(children: .combine)
     }
 
+    private var isolationState: HealthState {
+        HealthAggregator.aggregate(
+            model.observations,
+            required: Set(groups[0].2),
+            now: now
+        ).overall
+    }
+
     private var summaryTitle: String {
-        switch model.securityState {
+        switch isolationState {
         case .healthy: "Isolation is verified"
         case .degraded: "Isolation needs attention"
         case .unhealthy: "Isolation verification failed"
@@ -97,46 +104,57 @@ struct HostDashboardView: View {
     }
 
     private var summaryDetail: String {
-        switch model.securityState {
-        case .healthy: "All required checks have fresh evidence from an accepted source."
-        case .degraded: "Review the warning evidence before allowing guest workloads."
+        switch isolationState {
+        case .healthy: "All four boundary checks have fresh host evidence."
+        case .degraded: "Review the boundary warning before running guest workloads."
         case .unhealthy: "Keep the VM stopped until the failed boundary check is repaired and repeated."
-        case .unknown: "Unknown, stale, duplicated, or incomplete evidence never counts as a pass."
+        case .unknown: "One or more boundary checks lack fresh, accepted host evidence."
         }
     }
 
-    private var actions: some View {
-        GroupBox("Management controls") {
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Controls remain unavailable while this observation build is connected to a read-only provider.")
-                    .font(.callout)
+    private var nextStep: some View {
+        GroupBox("Connection setup") {
+            HStack(alignment: .center, spacing: 16) {
+                Text(connectionDetail)
                     .foregroundStyle(.secondary)
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 190), spacing: 10)], spacing: 10) {
-                    ReadOnlyAction(title: "Start VM", symbol: "play.fill", reason: readOnlyReason)
-                    ReadOnlyAction(title: "Stop VM", symbol: "stop.fill", reason: readOnlyReason)
-                    ReadOnlyAction(title: "Restart Hermes", symbol: "arrow.clockwise", reason: readOnlyReason)
-                    ReadOnlyAction(title: "Run diagnostics", symbol: "stethoscope", reason: readOnlyReason)
-                    ReadOnlyAction(title: "Repair installation", symbol: "wrench.and.screwdriver", reason: readOnlyReason)
-                    ReadOnlyAction(title: "Rotate token", symbol: "key", reason: "Token rotation requires a Keychain-backed implementation and explicit confirmation.")
-                    Button("Connect Tether", systemImage: "iphone") {
-                        if model.isInsideGuest {
-                            model.selection = .setup
-                        } else {
-                            let gates = model.setupDependencies
-                            model.workspaceSection = !gates.vmReady ? .vm
-                                : !gates.tailscaleReady ? .tailscale
-                                : !gates.hermesReady ? .hermes : .phone
-                        }
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 8)
+                Button(connectionActionTitle, systemImage: connectionActionSymbol) {
+                    if model.isInsideGuest {
+                        model.selection = .setup
+                    } else {
+                        let gates = model.setupDependencies
+                        model.workspaceSection = !gates.vmReady ? .vm
+                            : !gates.tailscaleReady ? .tailscale
+                            : !gates.hermesReady ? .hermes : .phone
                     }
-                    ReadOnlyAction(title: "Uninstall", symbol: "trash", reason: "Uninstall requires an ownership inventory and a separate confirmation before VM data deletion.")
                 }
+                .buttonStyle(.borderedProminent)
             }
             .padding(.vertical, 6)
         }
     }
 
-    private var readOnlyReason: String {
-        "Unavailable in the read-only observation build."
+    private var connectionDetail: String {
+        if model.isInsideGuest { return "Complete guest setup to make this Mac available to your iPhone." }
+        let gates = model.setupDependencies
+        if !gates.vmReady { return "Set up and start a virtual machine to continue." }
+        if !gates.tailscaleReady { return "VM ready. Confirm Tailscale inside the guest." }
+        if !gates.hermesReady { return "Tailscale confirmed. Verify Hermes inside the guest." }
+        if model.isPhoneSetupComplete { return "iPhone setup confirmed by you. Guest connection verified." }
+        return "Guest connection verified. Connect your iPhone."
+    }
+
+    private var connectionActionTitle: String {
+        if model.isInsideGuest { return "Open guest setup" }
+        if model.setupDependencies.hermesReady {
+            return model.isPhoneSetupComplete ? "View connection" : "Connect iPhone"
+        }
+        return "Continue setup"
+    }
+
+    private var connectionActionSymbol: String {
+        !model.isInsideGuest && model.setupDependencies.hermesReady ? "iphone" : "arrow.right"
     }
 
     private func observations(for keys: [HealthComponent]) -> [HealthObservation] {

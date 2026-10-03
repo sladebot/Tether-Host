@@ -14,7 +14,7 @@ Tether Host prepares a separate macOS guest for [Tether Flow on iPhone](https://
 
 Tether Host uses Apple's `Virtualization.framework` exclusively. It creates and runs a Tether-owned macOS VM with its display embedded in the host workspace.
 
-Choose a compatible macOS IPSW, or download the supported restore image in the app. Downloaded images are checked against a pinned SHA-256 digest before installation.
+Choose a compatible macOS IPSW, or download the supported restore image in the app. Published SHA-256 digests are checked when available; image downloads are restricted to Apple HTTPS servers and validated for compatibility, version, and build.
 
 After macOS setup, Tether Host attaches a read-only **Tether Guest Setup** disk. Its six-step guest installer:
 
@@ -24,6 +24,12 @@ After macOS setup, Tether Host attaches a read-only **Tether Guest Setup** disk.
 4. Configures loopback-only bearer-authenticated Hermes API access.
 5. Installs CuaDriver and verifies Accessibility plus direct full-screen capture inside the guest.
 6. Configures private Tailscale HTTPS and verifies capabilities, authentication, computer use, and a real model response.
+
+## VM configuration
+
+Creation follows **Choose macOS → Configure your VM → Create**. Select an available compatible macOS version, memory, CPU cores, disk capacity, and an internal or external storage folder. Settings apply only to the new VM; existing VM disks and resources are preserved. External drives must stay connected while their VM runs. Disk sizes below 64 GB are experimental and may fail installation.
+
+The native sidebar separates the VM display, guest setup, iPhone connection, library, and diagnostics. Setup instructions remain available while the VM is stopped. Phone setup can be confirmed after testing from the iPhone; this records the user's confirmation, not ongoing phone reachability.
 
 ## Host and guest responsibilities
 
@@ -37,7 +43,7 @@ The verified guest sends its private URL and token to Tether Host through a priv
 
 ## Security model
 
-**Network containment is not yet implemented.** Internet mode uses Apple NAT and does not block guest access to reachable host, LAN, tailnet, or public services. A separate guest desktop and authenticated phone connection do not prove network isolation. The PF tools are offline prototypes, not active protection. Disable **Enable internet access for VM starts** for a disconnected VM with no network device; this setting persists across app launches and applies to subsequent VM starts. Full network containment and physical-phone acceptance remain production release blockers.
+**Network containment is not yet implemented.** Internet mode uses Apple NAT and does not block guest access to reachable host, LAN, tailnet, or public services. A separate guest desktop and authenticated phone connection do not prove network isolation. The PF tools are offline prototypes, not active protection. Disable **Enable internet access on next start** for a disconnected VM with no network device; this setting persists across app launches and applies to subsequent VM starts. Full network containment and physical-phone acceptance remain production release blockers.
 
 - Guest dependency checks never use Hermes, Tailscale, or developer tools from the physical Mac.
 - Hermes listens on guest loopback at `127.0.0.1:8642`; Tailscale Serve provides tailnet-only HTTPS and Funnel must remain disabled.
@@ -49,7 +55,7 @@ The verified guest sends its private URL and token to Tether Host through a priv
 
 ## Current status
 
-The current preview is version 1.0.0, build 48. It is ad-hoc signed and is not a notarized production release, so macOS may request confirmation on first launch. The new guest installation flow has not yet completed a clean-VM, physical-phone end-to-end acceptance run.
+The current preview is version 1.0.0, build 92. It is ad-hoc signed and is not a notarized production release, so macOS may request confirmation on first launch. The new guest installation flow has not yet completed a clean-VM, physical-phone end-to-end acceptance run.
 
 Deployment target: macOS 14 or newer. Bundle identifier: `app.tether.host`.
 
@@ -72,7 +78,7 @@ This repository was extracted from the Tether iOS repository at source commit `4
 3. Verify the download from the directory containing both files:
 
    ```sh
-   shasum -a 256 -c Tether-Host-for-Mac-v1.0.0-build-48-preview.dmg.sha256
+   shasum -a 256 -c Tether-Host-for-Mac-v1.0.0-build-92-preview.dmg.sha256
    ```
 
 4. Open the DMG and drag **Tether Host for Mac** to Applications.
@@ -80,10 +86,10 @@ This repository was extracted from the Tether iOS repository at source commit `4
 
 ### Create the macOS guest
 
-1. Open Tether Host and choose **Create new…**.
+1. Open Tether Host and choose **VM library → Create New VM**.
 2. Choose a compatible macOS IPSW or use the in-app restore-image download.
 3. Create the VM and complete Apple's macOS welcome and account screens.
-4. Return to Tether Host and choose **Desktop is ready — Continue**.
+4. Return to Tether Host and choose **Desktop is ready**.
 
 ### Install guest services
 

@@ -9,7 +9,11 @@ public struct VirtualMachineBundleLocator: Sendable {
     }
 
     public func locate(_ id: VirtualMachineID) -> URL? {
-        let bundle = nativeRoot.appendingPathComponent(id.description, isDirectory: true)
+        let registry = NativeVMStorageRegistry(defaultRootURL: nativeRoot)
+        let bundle = registry.location(of: id) ?? nativeRoot.appendingPathComponent(id.description, isDirectory: true)
+        // A known external VM must never resolve to a newly created local
+        // directory when its original volume is disconnected.
+        if registry.lastKnownLocation(of: id) != nil && registry.location(of: id) == nil { return nil }
         guard isPlainDirectory(bundle) else { return nil }
         let manifestURL = bundle.appendingPathComponent(NativeVirtualMachineStore.manifestFilename)
         guard isPlainFile(manifestURL),
@@ -17,7 +21,8 @@ public struct VirtualMachineBundleLocator: Sendable {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         guard let manifest = try? decoder.decode(NativeVirtualMachineManifest.self, from: data),
-              manifest.id == id else { return nil }
+              manifest.id == id,
+              manifest.schemaVersion == NativeVirtualMachineManifest.currentSchemaVersion else { return nil }
         return bundle
     }
 
