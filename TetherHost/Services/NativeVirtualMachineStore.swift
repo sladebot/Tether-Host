@@ -3,6 +3,43 @@ import Foundation
 import Virtualization
 #endif
 
+public enum NativeGuestOS: String, Codable, Sendable {
+    case macOS
+    case debian
+}
+
+/// Free space needed on the volume that will hold a new VM. Filesystems without
+/// sparse files can allocate the entire virtual disk as soon as it is created.
+public enum NativeVMStorageCapacity {
+    public static let bytesPerGiB: Int64 = 1_073_741_824
+
+    public static func requiredFreeGiB(diskGiB: Int, guestOS: NativeGuestOS,
+                                       supportsSparseFiles: Bool) -> Int {
+        if !supportsSparseFiles { return diskGiB + 4 }
+        return guestOS == .debian ? 12 : min(diskGiB + 4, 45)
+    }
+
+    public static func availableBytes(at folder: URL) throws -> Int64 {
+        let values = try folder.resourceValues(forKeys: [
+            .volumeAvailableCapacityForImportantUsageKey, .volumeAvailableCapacityKey
+        ])
+        // FSKit volumes such as exFAT may report zero for Important Usage even
+        // though ordinary available capacity is valid and nonzero.
+        if let available = effectiveAvailableBytes(
+            important: values.volumeAvailableCapacityForImportantUsage,
+            ordinary: values.volumeAvailableCapacity
+        ) { return available }
+        return (try FileManager.default.attributesOfFileSystem(forPath: folder.path)[.systemFreeSize]
+            as? NSNumber)?.int64Value ?? 0
+    }
+
+    public static func effectiveAvailableBytes(important: Int64?, ordinary: Int?) -> Int64? {
+        if let important, important > 0 { return important }
+        if let ordinary { return Int64(ordinary) }
+        return nil
+    }
+}
+
 public struct NativeVirtualMachineManifest: Codable, Equatable, Sendable {
     public static let currentSchemaVersion = 1
 
@@ -10,6 +47,8 @@ public struct NativeVirtualMachineManifest: Codable, Equatable, Sendable {
     public let id: VirtualMachineID
     public let name: String
     public let guestImageVersion: String
+    /// Missing in older manifests, which always represent macOS guests.
+    public let guestOS: NativeGuestOS
     public let createdAt: Date
     /// Absent in VMs created before resource selection was added.
     public let resources: NativeVMResources?
@@ -19,14 +58,31 @@ public struct NativeVirtualMachineManifest: Codable, Equatable, Sendable {
         name: String = "Tether Sandbox",
         guestImageVersion: String,
         createdAt: Date = Date(),
-        resources: NativeVMResources? = nil
+        resources: NativeVMResources? = nil,
+        guestOS: NativeGuestOS = .macOS
     ) {
         self.schemaVersion = Self.currentSchemaVersion
         self.id = id
         self.name = name
         self.guestImageVersion = guestImageVersion
+        self.guestOS = guestOS
         self.createdAt = createdAt
         self.resources = resources
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case schemaVersion, id, name, guestImageVersion, guestOS, createdAt, resources
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
+        id = try container.decode(VirtualMachineID.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        guestImageVersion = try container.decode(String.self, forKey: .guestImageVersion)
+        guestOS = try container.decodeIfPresent(NativeGuestOS.self, forKey: .guestOS) ?? .macOS
+        createdAt = try container.decode(Date.self, forKey: .createdAt)
+        resources = try container.decodeIfPresent(NativeVMResources.self, forKey: .resources)
     }
 }
 
@@ -42,8 +98,8 @@ public struct NativeVMResources: Codable, Equatable, Sendable {
     }
 }
 
-/// UI bounds and final validation for new Apple silicon macOS VMs. Disk images
-/// are sparse, so the requested virtual capacity does not have to be free now.
+/// UI bounds and final validation for new Apple silicon VMs. The selected
+/// filesystem determines whether a disk image can grow sparsely.
 public struct NativeVMResourceLimits: Sendable {
     public let cpu: ClosedRange<Int>
     public let memoryGiB: ClosedRange<Int>
@@ -67,9 +123,9 @@ public struct NativeVMResourceLimits: Sendable {
         memoryGiB = memoryMinimum...max(memoryMinimum, memoryMaximum)
         diskGiB = 24...1024
         if cpuMaximum < cpuMinimum {
-            hostCapabilityError = "This macOS image needs at least \(cpuMinimum) CPU cores; this Mac can provide \(max(0, cpuMaximum))."
+            hostCapabilityError = "This guest image needs at least \(cpuMinimum) CPU cores; this Mac can provide \(max(0, cpuMaximum))."
         } else if memoryMaximum < memoryMinimum {
-            hostCapabilityError = "This macOS image needs at least \(memoryMinimum) GB of VM memory; this Mac has only \(max(0, memoryMaximum)) GB available after reserving memory for macOS."
+            hostCapabilityError = "This guest image needs at least \(memoryMinimum) GB of VM memory; this Mac has only \(max(0, memoryMaximum)) GB available after reserving memory for macOS."
         } else {
             hostCapabilityError = nil
         }

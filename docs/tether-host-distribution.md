@@ -6,8 +6,9 @@ checks below pass on a clean machine.
 
 The application uses Apple Virtualization exclusively and has no external VM
 provider prerequisite or recovery integration. The preview DMG contains the app
-and a guest setup ISO. The app installs a fresh macOS guest from a compatible
-IPSW; its supported download is checked against a pinned digest.
+and a guest setup ISO. The app creates macOS guests from compatible IPSWs and Debian 13 ARM64 guests
+from verified cloud images. It bundles Debian first-boot resources, the guest
+tools disk, and the disk converter. Updating the app preserves existing VMs.
 
 The preview does not establish network containment. Internet mode is ordinary
 Apple NAT. External enforcement, clean-VM acceptance, and physical-phone tests

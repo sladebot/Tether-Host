@@ -1,0 +1,5 @@
+package main
+import("archive/zip";"bytes";"os";"path/filepath";"testing")
+func archiveWith(name string,mode os.FileMode) []byte { var data bytes.Buffer; writer:=zip.NewWriter(&data); header:=&zip.FileHeader{Name:name};header.SetMode(mode); file,_:=writer.CreateHeader(header);file.Write([]byte("test"));writer.Close();return data.Bytes() }
+func TestRejectUnsafeResources(t *testing.T){for _,name:=range []string{"../escape","/absolute","nested/file","."}{if err:=unpack(archiveWith(name,0700),t.TempDir());err==nil{t.Fatalf("accepted %s",name)}};if err:=unpack(archiveWith("link",os.ModeSymlink|0777),t.TempDir());err==nil{t.Fatal("accepted symlink")}}
+func TestPrivateExtraction(t *testing.T){root:=t.TempDir();if err:=unpack(archiveWith("guest_installer.py",0700),root);err!=nil{t.Fatal(err)};p:=filepath.Join(root,"guest_installer.py");info,_:=os.Stat(p);if info.Mode().Perm()!=0700{t.Fatal(info.Mode())};if err:=unpack(archiveWith("guest_installer.py",0700),root);err==nil{t.Fatal("overwrote existing file")}}

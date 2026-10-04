@@ -1,7 +1,9 @@
 import importlib.util
 import itertools
 import json
+import os
 from pathlib import Path
+import subprocess
 import sys
 import subprocess
 import os
@@ -196,10 +198,67 @@ class GuestSetupTests(unittest.TestCase):
     def test_guest_shell_installs_hermes_command_and_uses_prompting_permission_probe(self):
         script = (module_path.parent / 'Set up Tether Guest.command').read_text()
         self.assertIn('command_path="$command_directory/hermes"', script)
-        self.assertIn('[ -x "$command_path" ]', script)
+        self.assertIn('is_hermes_command "$command_path"', script)
         self.assertIn('guest_setup.py" verify-computer-use', script)
         self.assertIn('bypass the private window picker and directly access your screen and audio, click Allow', script)
         self.assertNotIn('"$HERMES_BIN" computer-use doctor', script)
+
+    def test_macos_hermes_path_accepts_only_managed_commands(self):
+        source = (module_path.parent / 'Set up Tether Guest.command').read_text()
+        helpers = source[source.index('is_hermes_command() {'):source.index('complete() {')]
+        for variant in ('missing', 'direct', 'official', 'official-python',
+                        'unrelated', 'wrong-target', 'wrong-entry', 'extra-command',
+                        'wrapper-symlink', 'non-executable'):
+            with self.subTest(variant=variant), tempfile.TemporaryDirectory() as folder:
+                home = Path(folder)
+                binary = home / '.hermes/hermes-agent/venv/bin/hermes'
+                binary.parent.mkdir(parents=True)
+                binary.write_text('#!/bin/sh\nexit 0\n')
+                binary.chmod(0o755)
+                python = binary.with_name('python')
+                python.write_text('#!/bin/sh\nexit 0\n')
+                python.chmod(0o755)
+                entry = home / '.hermes/hermes-agent/hermes'
+                entry.write_text('# Hermes entry point\n')
+                command_dir = home / '.local/bin'
+                command_dir.mkdir(parents=True)
+                command = command_dir / 'hermes'
+                if variant == 'direct':
+                    command.symlink_to(binary)
+                elif variant != 'missing':
+                    target = binary if variant != 'wrong-target' else home / 'other-hermes'
+                    script = ('#!/usr/bin/env bash\nunset PYTHONPATH\nunset PYTHONHOME\n'
+                              f'exec "{target}" "$@"\n')
+                    if variant in ('official-python', 'wrong-entry'):
+                        target_entry = entry if variant == 'official-python' else home / 'other-hermes'
+                        script = ('#!/usr/bin/env bash\nunset PYTHONPATH\nunset PYTHONHOME\n'
+                                  f'exec "{python}" "{target_entry}" "$@"\n')
+                    if variant == 'unrelated':
+                        script = '#!/bin/sh\nexit 0\n'
+                    elif variant == 'extra-command':
+                        script += 'echo unexpected\n'
+                    wrapper = command if variant != 'wrapper-symlink' else home / 'wrapper'
+                    wrapper.write_text(script)
+                    wrapper.chmod(0o644 if variant == 'non-executable' else 0o755)
+                    if variant == 'wrapper-symlink':
+                        command.symlink_to(wrapper)
+                runner = ('set -euo pipefail\n'
+                          'HERMES_BIN="$HOME/.hermes/hermes-agent/venv/bin/hermes"\n'
+                          'PYTHON_BIN="$HOME/.hermes/hermes-agent/venv/bin/python"\n'
+                          'fail() { echo "$1" >&2; exit 1; }\n'
+                          + helpers + '\ninstall_hermes_command\ninstall_hermes_command\n')
+                result = subprocess.run(['/bin/bash', '-c', runner], env={**os.environ, 'HOME': str(home)},
+                                        text=True, capture_output=True, timeout=10)
+                accepted = variant in ('missing', 'direct', 'official', 'official-python')
+                if accepted:
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual((home / '.zprofile').read_text().count('# Tether Hermes command'), 1)
+                    if variant == 'missing':
+                        self.assertEqual(command.resolve(), binary.resolve())
+                else:
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn('does not point to this Hermes installation', result.stderr)
+                    self.assertFalse((home / '.zprofile').exists())
 
     def test_private_write_atomic_permissions_and_symlink_refusal(self):
         with tempfile.TemporaryDirectory() as folder:

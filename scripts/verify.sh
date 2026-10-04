@@ -17,7 +17,7 @@ trap 'rm -rf "$VERIFY_DIRECTORY"' EXIT
 swift test --package-path TetherHost
 
 while IFS= read -r -d '' script; do bash -n "$script"; done < <(
-    find scripts TetherHost/Resources/GuestSetup -type f \( -name '*.sh' -o -name '*.command' \) -print0
+    find scripts TetherHost/Resources/GuestSetup TetherHost/Resources/LinuxGuestSetup -type f \( -name '*.sh' -o -name '*.command' \) -print0
 )
 xcrun swiftc -parse-as-library -D TAILSCALE_STATUS_TESTS \
     -module-cache-path "$VERIFY_DIRECTORY/ModuleCache" \
@@ -38,6 +38,12 @@ for configuration in Debug Release; do
     codesign --verify --deep --strict "$app"
     while IFS= read -r -d '' candidate; do
         if file -b "$candidate" | grep -F 'Mach-O' >/dev/null; then
+            codesign --verify --strict "$candidate"
+            # Ad-hoc standalone converter/dylibs cannot satisfy Team-ID library
+            # validation. Their signatures are checked above; host and guest
+            # helpers still require hardened runtime. Developer ID releases use
+            # release/verify-signatures.sh to require it for every Mach-O.
+            case "$candidate" in "$app/Contents/Resources/Tools/"*) continue ;; esac
             codesign -dvvv "$candidate" 2>&1 | grep -E '^CodeDirectory .*flags=.*runtime' >/dev/null || {
                 printf 'Missing hardened runtime: %s\n' "$candidate" >&2
                 exit 1

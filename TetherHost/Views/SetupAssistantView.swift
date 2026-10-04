@@ -32,12 +32,12 @@ struct SetupAssistantView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Welcome to Tether Host")
                         .font(.largeTitle.bold())
-                    Text("Run your agent in an Apple virtual machine.")
+                    Text("Run your agent in a macOS or Debian virtual machine.")
                         .font(.title3)
                         .foregroundStyle(.secondary)
                 }
                 VStack(alignment: .leading, spacing: 12) {
-                    Text("Tether Host stores and opens Apple virtual machines. A new VM needs an Apple macOS restore image (IPSW).")
+                    Text("Tether Host creates, stores, and opens macOS and Debian virtual machines using Apple Virtualization. Choose your operating system when creating a VM.")
                     availabilityStatus
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -85,11 +85,12 @@ struct SetupAssistantView: View {
 private struct NativeVMSetupView: View {
     @EnvironmentObject private var model: AppViewModel
     @ObservedObject var manager: NativeVMManager
+    @State private var pendingForceOff: VirtualMachineRecord?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             SetupPhaseBox(number: 1, title: "Create a new macOS VM", symbol: "internaldrive") {
-                Text("Choose a macOS restore image on this Mac or download one from Apple. The download is cached on this Mac; VM installation space is checked separately.")
+                Text("Choose a compatible Apple macOS restore image (IPSW) or download one from Apple. Tether Host installs, stores, and opens the VM.")
                     .foregroundStyle(.secondary)
                 if !manager.downloadImageOptions.isEmpty {
                     Picker("macOS version", selection: $manager.selectedDownloadVersion) {
@@ -175,6 +176,17 @@ private struct NativeVMSetupView: View {
                                 model.selectVM(vm.id)
                                 Task { await manager.startOrShow(vm.id) }
                             }
+                            .disabled(manager.isBusy || manager.hasOtherHostCopy
+                                      || (manager.runningVMID != vm.id
+                                          && (manager.isRunning || vm.state != .stopped)))
+                            if manager.runningVMID == vm.id {
+                                Button(manager.shutdownRequested ? "Shutting Down…" : "Shut Down") {
+                                    manager.requestShutdown(for: vm.id)
+                                }
+                                .disabled(manager.isBusy || manager.shutdownRequested)
+                                Button("Force Off…", role: .destructive) { pendingForceOff = vm }
+                                    .disabled(manager.isBusy)
+                            }
                         }
                         if manager.isDesktopReady(for: vm.id) {
                             HStack {
@@ -243,6 +255,18 @@ private struct NativeVMSetupView: View {
             }
         }
         .task { await manager.loadDownloadImageOptions() }
+        .alert("Force power off \(pendingForceOff?.name ?? "VM")?",
+               isPresented: Binding(get: { pendingForceOff != nil },
+                                    set: { if !$0 { pendingForceOff = nil } })) {
+            Button("Cancel", role: .cancel) { pendingForceOff = nil }
+            Button("Force Power Off", role: .destructive) {
+                guard let vm = pendingForceOff else { return }
+                pendingForceOff = nil
+                Task { await manager.forcePowerOff(for: vm.id) }
+            }
+        } message: {
+            Text("\(pendingForceOff?.name ?? "This VM") (\(pendingForceOff?.id.description ?? "")) will stop immediately. Unsaved work inside it will be lost.")
+        }
     }
 }
 

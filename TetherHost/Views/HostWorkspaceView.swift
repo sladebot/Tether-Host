@@ -12,6 +12,10 @@ struct HostWorkspaceView: View {
     @State private var healthTab = 0
     @State private var showToken = false
     @State private var showsVMConfiguration = false
+    @State private var creationGuestOS: NativeGuestOS = .macOS
+    @State private var debianUsername = ""
+    @State private var debianPassword = ""
+    @State private var debianPasswordConfirmation = ""
     @State private var isVMFullScreen = false
     @State private var fullScreenWindow: NSWindow?
 
@@ -98,8 +102,16 @@ struct HostWorkspaceView: View {
                 fullScreenWindow = nil
             }
         }
-        .onChange(of: model.showsCreateVM) { _, shown in
-            if shown { showsVMConfiguration = false }
+        .onChange(of: model.showsCreateVM) { _, showing in
+            if showing {
+                showsVMConfiguration = false
+                creationGuestOS = .macOS
+                manager.configureMacOSCreationDefaults()
+                Task { await manager.loadDownloadImageOptions() }
+            } else {
+                debianPassword = ""
+                debianPasswordConfirmation = ""
+            }
         }
         .sheet(isPresented: $model.showsCreateVM) {
             createVMSheet
@@ -108,14 +120,18 @@ struct HostWorkspaceView: View {
         .tint(.accentColor)
     }
 
-    private func canOpenDependency(_ dependency: HostSetupDependency) -> Bool {
-        dependency == .vm || model.designatedVM != nil
+    private var selectedGuestIsDebian: Bool {
+        guard let id = model.designatedVM?.id else { return false }
+        return manager.guestOS(for: id) == .debian
     }
 
     private var managerHasError: Bool {
-        manager.status.localizedCaseInsensitiveContains("failed")
-            || manager.status.localizedCaseInsensitiveContains("could not")
-            || manager.status.localizedCaseInsensitiveContains("unavailable")
+        let status = manager.status.lowercased()
+        return status.contains("failed") || status.contains("could not") || status.contains("incompatible") || status.contains("unavailable")
+    }
+
+    private func canOpenDependency(_ dependency: HostSetupDependency) -> Bool {
+        dependency == .vm || model.designatedVM != nil
     }
 
     private var pageTitle: String {
@@ -232,9 +248,9 @@ struct HostWorkspaceView: View {
             }
             if model.candidateVMs.isEmpty && !manager.isRunning {
                 ContentUnavailableView {
-                    Label("A Mac for your agent", systemImage: "desktopcomputer")
+                    Label("A virtual machine for your agent", systemImage: "desktopcomputer")
                 } description: {
-                    Text("Create a macOS virtual machine, then connect it to Tether on your iPhone.")
+                    Text("Create a macOS or Debian virtual machine, then connect it to Tether on your iPhone.")
                 } actions: {
                     Button("Create virtual machine…") { model.showsCreateVM = true }
                         .buttonStyle(.borderedProminent)
@@ -297,13 +313,17 @@ struct HostWorkspaceView: View {
     private var nextStepTitle: String {
         if model.setupDependencies.hermesReady { return "Ready for your iPhone" }
         if model.setupDependencies.vmReady { return "Finish guest setup" }
-        return manager.isRunning ? "Finish setting up macOS" : "Start your virtual machine"
+        return manager.isRunning ? "Finish setting up your guest" : "Start your virtual machine"
     }
 
     private var nextStepDetail: String {
         if model.setupDependencies.hermesReady { return "Hermes is connected. Keep this VM running while you use Tether." }
-        if model.setupDependencies.vmReady { return "Open Tether Guest Installer on the setup disk in the guest." }
-        return manager.isRunning ? "When you reach the macOS desktop, choose Desktop is ready below." : "Start the VM to continue where you left off."
+        if model.setupDependencies.vmReady {
+            return selectedGuestIsDebian
+                ? "Sign in with your Debian account, then open Tether Guest Installer from the applications menu."
+                : "Open Tether Guest Installer on the setup disk in the guest."
+        }
+        return manager.isRunning ? "When you reach the guest desktop, choose Desktop is ready below." : "Start the VM to continue where you left off."
     }
 
     @ViewBuilder
@@ -327,14 +347,14 @@ struct HostWorkspaceView: View {
     private var createVMSheet: some View {
         VStack(alignment: .leading, spacing: 20) {
             VStack(alignment: .leading, spacing: 5) {
-                Text(showsVMConfiguration ? "Configure your VM" : "Choose macOS")
+                Text(showsVMConfiguration ? "Configure your VM" : "Choose your operating system")
                     .font(.title2.bold())
                 Text(showsVMConfiguration ? "Step 2 of 2 · Configure and create" : "Step 1 of 2 · Installation image")
                     .font(.callout).foregroundStyle(.secondary)
-                Text(manager.isRunning
-                     ? "Tether Host installs macOS in a separate VM."
-                     : "Tether Host installs macOS and opens the new VM here.")
-                .foregroundStyle(.secondary)
+                Text(creationGuestOS == .debian
+                     ? "Debian 13 with Xfce/X11, Chromium, and Tether guest setup."
+                     : "Choose a compatible macOS version for your new VM.")
+                    .foregroundStyle(.secondary)
                 if manager.isRunning {
                     Text("Your current VM will keep running. The new VM will be saved for you to start later.")
                         .font(.callout).foregroundStyle(.secondary)
@@ -377,11 +397,31 @@ struct HostWorkspaceView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 12) {
                         if showsVMConfiguration {
-                            Label(manager.imageDescription, systemImage: "checkmark.circle.fill")
+                            Label(creationGuestOS == .debian
+                                  ? manager.debianImageDescription
+                                  : manager.imageDescription, systemImage: "checkmark.circle.fill")
                                 .font(.callout).foregroundStyle(.secondary)
                                 .fixedSize(horizontal: false, vertical: true)
                             Divider().padding(.vertical, 4)
-                            VMCreationSettingsView(manager: manager)
+                            VMCreationSettingsView(manager: manager, guestOS: creationGuestOS)
+                            if creationGuestOS == .debian {
+                                VStack(alignment: .leading, spacing: 8) {
+                                    Text("Your Debian account").font(.headline)
+                                    Text("Choose the username and password you will use to sign in to Debian.")
+                                        .font(.callout).foregroundStyle(.secondary)
+                                    TextField("Debian username", text: $debianUsername)
+                                        .textContentType(.username)
+                                    SecureField("Debian password (at least 12 characters)", text: $debianPassword)
+                                        .textContentType(.newPassword)
+                                    SecureField("Confirm Debian password", text: $debianPasswordConfirmation)
+                                        .textContentType(.newPassword)
+                                    if let error = DebianAccountSetup.usernameError(debianUsername) {
+                                        Text(error).font(.caption).foregroundStyle(.orange)
+                                    } else if let error = DebianAccountSetup.passwordError(debianPassword, confirmation: debianPasswordConfirmation) {
+                                        Text(error).font(.caption).foregroundStyle(.orange)
+                                    }
+                                }
+                            }
                             Divider().padding(.vertical, 4)
                             creationStoragePicker
                             if manager.hasOtherHostCopy {
@@ -392,22 +432,46 @@ struct HostWorkspaceView: View {
                                 Text(manager.status).font(.callout).foregroundStyle(.orange)
                             }
                         } else {
+                        Picker("Operating system", selection: $creationGuestOS) {
+                            Text("macOS").tag(NativeGuestOS.macOS)
+                            Text("Debian").tag(NativeGuestOS.debian)
+                        }
+                        .pickerStyle(.segmented)
+                        .onChange(of: creationGuestOS) { _, os in
+                            if os == .debian { manager.configureDebianCreationDefaults() }
+                            else { manager.configureMacOSCreationDefaults() }
+                        }
+                        if creationGuestOS == .debian {
+                            Text("Debian 13 · Xfce on X11").font(.headline)
+                            Text("A lightweight ARM64 desktop VM with a sparse 24 GB disk. Chromium, accessibility tools, clipboard support, and the Tether guest guide are installed automatically.")
+                                .font(.callout).foregroundStyle(.secondary)
+                            if !creationImageReady {
+                                Button(manager.hasCachedDebianImage ? "Verify downloaded image" : "Download Debian") {
+                                    Task { await manager.downloadDebianImage() }
+                                }
+                                .buttonStyle(.borderedProminent)
+                            }
+                            if creationImageReady, let message = debianReadinessMessage {
+                                Text(message).font(.callout).foregroundStyle(.orange)
+                            }
+                            Text(manager.debianImageDescription)
+                                .font(.callout).foregroundStyle(.secondary)
+                            if manager.hasCachedDebianImage {
+                                debianDownloadCleanup
+                            }
+                            if managerHasError { Text(manager.status).font(.callout).foregroundStyle(.orange) }
+                        } else {
                         Text("macOS installation image").font(.headline)
                         Text("Download a compatible macOS restore image or choose an IPSW on this Mac. The download is cached on this Mac. You can store the VM on an external drive in the next step.")
                             .font(.callout).foregroundStyle(.secondary)
                         downloadVersionPicker
-                        if manager.hasCachedHostImage {
+                        if manager.hasCachedHostImage && manager.imageURL == nil {
                             Label("A downloaded macOS image is available on this Mac.",
                                   systemImage: "checkmark.circle.fill")
                                 .font(.callout).foregroundStyle(.secondary)
                             HStack {
-                                if manager.imageURL == nil {
-                                    Button("Reuse image") { Task { await manager.useCachedHostImage() } }
-                                        .buttonStyle(.borderedProminent)
-                                } else {
-                                    Button("Reuse image") { Task { await manager.useCachedHostImage() } }
-                                        .buttonStyle(.bordered)
-                                }
+                                Button("Use downloaded image") { Task { await manager.useCachedHostImage() } }
+                                    .buttonStyle(.borderedProminent)
                                 Button("Show in Finder") { manager.revealCachedHostImageInFinder() }
                             }
                         }
@@ -435,7 +499,7 @@ struct HostWorkspaceView: View {
                         }
                         Link("Find a macOS IPSW", destination: URL(string: "https://ipsw.me/product/Mac")!)
                             .font(.caption)
-                        if manager.status != "No VM installation has started." {
+                        if managerHasError {
                             Text(manager.status).font(.callout)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
@@ -445,18 +509,27 @@ struct HostWorkspaceView: View {
                                 .foregroundStyle(.orange)
                         }
                         }
+                        }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .frame(height: showsVMConfiguration ? 440 : 380)
+                .frame(height: showsVMConfiguration ? (creationGuestOS == .debian ? 510 : 440) : (creationGuestOS == .debian ? 300 : 380))
                 HStack {
-                    Button("Cancel") { model.showsCreateVM = false }.keyboardShortcut(.cancelAction)
+                    Button("Cancel") { model.showsCreateVM = false }
+                        .keyboardShortcut(.cancelAction)
                     Spacer()
                     if showsVMConfiguration {
                     Button("Back") { showsVMConfiguration = false }
                     Button("Create VM") {
+                        let username = debianUsername
+                        let password = debianPassword
+                        debianPassword = ""
+                        debianPasswordConfirmation = ""
                         Task {
-                            if let id = await manager.install() {
+                            let createdID = creationGuestOS == .debian
+                                ? await manager.installDebian(username: username, password: password)
+                                : await manager.install()
+                            if let id = createdID {
                                 await model.refresh()
                                 if !manager.isRunning || manager.runningVMID == id {
                                     model.selectVM(id)
@@ -469,7 +542,8 @@ struct HostWorkspaceView: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .keyboardShortcut(.defaultAction)
-                    .disabled(manager.imageURL == nil
+                    .disabled(!creationImageReady
+                        || (creationGuestOS == .debian && (debianReadinessMessage != nil || DebianAccountSetup.usernameError(debianUsername) != nil || DebianAccountSetup.passwordError(debianPassword, confirmation: debianPasswordConfirmation) != nil))
                         || manager.creationResourceError != nil
                         || manager.creationStorageValidationMessage != nil
                         || !model.providerSetup.availability.canContinue || manager.hasOtherHostCopy)
@@ -477,7 +551,7 @@ struct HostWorkspaceView: View {
                         Button("Continue to configuration") { showsVMConfiguration = true }
                             .buttonStyle(.borderedProminent)
                             .keyboardShortcut(.defaultAction)
-                    .disabled(manager.imageURL == nil)
+                            .disabled(!creationImageReady || (creationGuestOS == .debian && (debianReadinessMessage != nil)))
                     }
                 }
             }
@@ -485,6 +559,27 @@ struct HostWorkspaceView: View {
         .padding(24)
         .frame(width: 520)
         .frame(minHeight: 340)
+    }
+
+    private var debianDownloadCleanup: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Button("Show downloaded image in Finder") {
+                manager.revealCachedDebianImageInFinder()
+            }
+            .disabled(manager.isBusy)
+            Text("After creating your VM, you can delete this downloaded image in Finder. Your VM keeps working; creating another Debian VM will require a new download.")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var creationImageReady: Bool {
+        guard creationGuestOS == .debian else { return manager.imageURL != nil }
+        return manager.debianImageURL != nil && manager.hasCachedDebianImage
+    }
+
+    private var debianReadinessMessage: String? {
+        manager.debianCreationReadinessMessage
     }
 
     private var creationStoragePicker: some View {
@@ -503,6 +598,10 @@ struct HostWorkspaceView: View {
             Text("Choose a folder on this Mac or an external drive. Keep the drive connected while the VM runs.")
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+            if let warning = manager.creationStorageWarning {
+                Text(warning).font(.callout).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             if let error = manager.creationStorageValidationMessage {
                 Text(error).font(.callout).foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
@@ -551,7 +650,9 @@ struct HostWorkspaceView: View {
     private var tailscaleSection: some View {
         VStack(alignment: .leading, spacing: 16) {
             sectionHeader("Connect Tailscale", detail: "Connect your virtual machine to the same private network as your iPhone.")
-            setupInstruction(1, "Open the guest installer", detail: "Choose Show VM, then open Tether Guest Installer on the Tether Guest Setup disk.")
+            setupInstruction(1, "Open the guest installer", detail: selectedGuestIsDebian
+                             ? "Choose Show VM, sign in with the Debian account you created, then open Tether Guest Installer from the applications menu."
+                             : "Choose Show VM, then open Tether Guest Installer on the Tether Guest Setup disk.")
             setupInstruction(2, "Sign in to Tailscale", detail: "Run Check Internet, then Set up Tailscale. Sign in using the account you use on your iPhone.")
             setupInstruction(3, "Confirm sign-in", detail: "When Tailscale is connected inside the VM, confirm below to continue.")
             Divider()
@@ -707,7 +808,7 @@ struct HostWorkspaceView: View {
                     .buttonStyle(.borderedProminent)
                     .disabled(!model.setupDependencies.hermesReady)
             }
-            Text("After restarting the VM, unlock macOS and log in to resume the guest services.")
+            Text("After restarting the VM, sign in to its desktop to resume the guest services.")
                 .font(.callout).foregroundStyle(.secondary)
         }
     }
@@ -824,7 +925,7 @@ private struct VMMonitorView: View {
                             .font(.system(size: 54, weight: .ultraLight))
                         Text("VM is off")
                             .font(.title3.weight(.medium))
-                        Text("Start this VM to open its macOS desktop.")
+                        Text("Start this VM to open its desktop.")
                             .font(.callout)
                         Button("Start VM") {
                             guard let vm = model.designatedVM else { return }
@@ -879,14 +980,14 @@ private struct VMMonitorView: View {
         .confirmationDialog("Shut down this virtual machine?", isPresented: $showingShutdown) {
             Button("Shut Down") { manager.requestShutdown() }
         } message: {
-            Text("macOS will shut down and your iPhone will disconnect until you start the VM again.")
+            Text("The guest will shut down and your iPhone will disconnect until you start the VM again.")
         }
         .confirmationDialog("Power off this VM immediately?", isPresented: $showingForcePowerOff) {
             Button("Force Power Off", role: .destructive) {
                 Task { await manager.forcePowerOff() }
             }
         } message: {
-            Text("Unsaved work inside macOS will be lost. Use this only when Shut Down does not finish.")
+            Text("Unsaved work inside the VM will be lost. Use this only when Shut Down does not finish.")
         }
     }
 
@@ -900,7 +1001,9 @@ private struct VMMonitorView: View {
             defer { clipboardIsBusy = false }
             do {
                 try await manager.writeGuestClipboardText(text)
-                clipboardMessage = "Text sent to the VM clipboard. Press Command-V inside the VM to paste it."
+                clipboardMessage = manager.runningGuestOS == .debian
+                    ? "Text sent to Debian. Press Ctrl-V to paste, or Ctrl-Shift-V in Terminal."
+                    : "Text sent to the VM clipboard. Press Command-V inside the VM to paste it."
             } catch {
                 clipboardMessage = error.localizedDescription
             }
@@ -952,8 +1055,8 @@ private extension HostSetupDependency {
     var lockReason: String {
         switch self {
         case .vm: ""
-        case .tailscale: "Select and boot a VM, then confirm its macOS desktop."
-        case .hermes: "Select and boot a VM, then confirm its macOS desktop."
+        case .tailscale: "Select and boot a VM, then confirm its desktop."
+        case .hermes: "Select and boot a VM, then confirm its desktop."
         case .phone: "Verify the Hermes connection before connecting your iPhone."
         }
     }
@@ -1000,6 +1103,7 @@ private struct WorkspaceWindowReader: NSViewRepresentable {
 /// Shared by first-run setup and VM creation; edits apply only to the new VM.
 struct VMCreationSettingsView: View {
     @ObservedObject var manager: NativeVMManager
+    var guestOS: NativeGuestOS = .macOS
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -1010,17 +1114,22 @@ struct VMCreationSettingsView: View {
                         range: manager.creationCPURange, unit: "cores")
             resourceRow("Disk space", value: $manager.creationDiskGiB,
                         range: manager.creationDiskRange, unit: "GB", step: 8)
-            Text("Disk space grows as the VM uses it, up to this limit.")
+            Text(manager.creationStorageWarning == nil
+                 ? "Disk space grows as the VM uses it, up to this limit."
+                 : "This drive reserves the full disk capacity when the VM is created.")
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            if manager.creationDiskGiB < 64 {
+            if guestOS == .macOS && manager.creationDiskGiB < 64 {
                 Text(manager.creationDiskGiB < 40
                      ? "Experimental disk size. macOS installation may fail; use 64 GB or more for room to install and update."
                      : "Below 64 GB, space for macOS and updates is limited. Installation may require a larger disk.")
                     .font(.caption).foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            Button("Use recommended settings") { manager.resetCreationResources() }
+            Button("Use recommended settings") {
+                if guestOS == .debian { manager.configureDebianCreationDefaults() }
+                else { manager.configureMacOSCreationDefaults() }
+            }
                 .buttonStyle(.borderless).font(.callout)
             if let error = manager.creationResourceError {
                 Text(error).font(.callout).foregroundStyle(.orange)

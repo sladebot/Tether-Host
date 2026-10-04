@@ -13,14 +13,17 @@ enum NativeVMError: LocalizedError {
     case newerGuestRequiresHostUpdate(guest: Int, host: Int)
     case insufficientSpace(Int)
     case insufficientDownloadSpace
+    case insufficientDebianDownloadSpace
     case invalidResources(String)
     case noCompatibleDownload(host: String)
     case imageCatalogUnavailable
     case missingVM
     case invalidVM
     case anotherVMRunning
-    case anotherHostCopyRunning
     case operationInProgress
+    case cannotStartDuringInstall
+    case anotherHostCopyRunning
+    case guestDiskUnavailable
     case cannotRemoveRunningVM
     case cannotRemoveDuringInstall
     case cannotRemoveWithOtherHostCopy
@@ -30,16 +33,19 @@ enum NativeVMError: LocalizedError {
         case .unsupportedImage: "This macOS IPSW is not compatible with this Mac's virtualization hardware. Choose another IPSW."
         case .newerGuestRequiresHostUpdate(let guest, let host):
             "This is a macOS \(guest) IPSW, but this Mac runs macOS \(host). Choose a macOS \(host) IPSW or update this Mac first."
-        case .insufficientSpace(let gib): "At least \(gib) GB of free space is needed on the selected VM drive to install this macOS VM."
+        case .insufficientSpace(let gib): "At least \(gib) GB of free space is needed on the selected VM drive to create this VM."
         case .insufficientDownloadSpace: "At least 25 GB of free space is needed in Application Support to cache the macOS download."
+        case .insufficientDebianDownloadSpace: "At least 2 GB of free space is needed in Application Support to cache Debian."
         case .invalidResources(let message): message
         case .noCompatibleDownload(let host): "No downloadable macOS IPSW was found for macOS \(host). Update this Mac or choose a compatible IPSW manually."
         case .imageCatalogUnavailable: "Could not check available macOS images. Check your internet connection, try again, or choose a compatible IPSW manually."
         case .missingVM: "The selected Tether VM is missing. Refresh the VM list."
-        case .invalidVM: "The Tether VM is incomplete or damaged. Create a new VM from an IPSW."
+        case .invalidVM: "The Tether VM is incomplete or damaged. Create a new VM."
         case .anotherVMRunning: "Another Tether VM is already running. Shut it down before starting this one."
-        case .anotherHostCopyRunning: "Another Tether Host for Mac copy is open. Quit it before starting this VM."
         case .operationInProgress: "Wait for the current VM operation to finish."
+        case .cannotStartDuringInstall: "Wait for the current VM operation to finish before starting a VM."
+        case .anotherHostCopyRunning: "Another Tether Host for Mac copy is open. Quit it before starting this VM."
+        case .guestDiskUnavailable: "The guest setup disk could not be prepared. Check the Tether Host installation and try Start VM again."
         case .cannotRemoveRunningVM: "Shut down the built-in VM before deleting its files."
         case .cannotRemoveDuringInstall: "Wait for VM installation or setup to finish before deleting a VM."
         case .cannotRemoveWithOtherHostCopy: "Quit the other Tether Host copy before deleting this VM."
@@ -59,7 +65,7 @@ enum GuestClipboardError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .vmNotRunning: "Start the built-in VM before transferring clipboard text."
-        case .serviceUnavailable: "Open Tether Guest Installer in the VM and click Text clipboard (built-in)."
+        case .serviceUnavailable: "Open Tether Guest Installer in the VM to finish clipboard setup, then check the clipboard connection again."
         case .textTooLarge: "Clipboard text must be 64 KB or smaller."
         case .invalidResponse: "The VM sent an invalid clipboard response. Reopen Tether Guest Installer and enable the built-in VM text clipboard again."
         case .timedOut: "Clipboard transfer timed out. Check that the VM and Tether Guest Installer are responsive."
@@ -170,7 +176,6 @@ private struct IPSWCatalog: Decodable {
 final class NativeVMManager: ObservableObject {
     private static let macOS262URL = URL(string: "https://updates.cdn-apple.com/2025FallFCS/fullrestores/093-37399/E144C918-CF99-4BBC-B1D0-3E739B9A3F2D/UniversalMac_26.2_25C56_Restore.ipsw")!
     private static let macOS262SHA256 = "bc7c67b2a2cc4ac8c9da0c2b149b9f31e153cd542ce387e6fb8620e41b5278ef"
-    private static let networkEnabledKey = "nativeVM.networkEnabled"
     private static let selectedImageKey = "restoreImage.lastSelectedPath"
     private static let downloadedImageKey = "restoreImage.lastDownloadedFilename"
     private static let creationFolderPathKey = "vmCreation.folderPath"
@@ -183,6 +188,8 @@ final class NativeVMManager: ObservableObject {
 
     @Published private(set) var imageURL: URL?
     @Published private(set) var imageDescription = "Choose a macOS IPSW to create a fresh VM."
+    @Published private(set) var debianImageURL: URL?
+    @Published private(set) var debianImageDescription = "Download Debian 13 ARM64 with automatic Xfce/X11 setup."
     @Published private(set) var status = "No VM installation has started."
     @Published private(set) var operationState = NativeVMOperationState()
     var isBusy: Bool { operationState.isBusy }
@@ -193,55 +200,61 @@ final class NativeVMManager: ObservableObject {
     @Published private(set) var recommendedDownloadVersion = ""
     @Published private(set) var isLoadingDownloadImageOptions = false
     @Published private(set) var isRunning = false
+    @Published private(set) var runningGuestOS: NativeGuestOS = .macOS
     @Published private(set) var shutdownRequested = false
     @Published private(set) var virtualMachine: VZVirtualMachine?
     @Published private(set) var desktopReadyVMID: VirtualMachineID?
     @Published var showsDisplay = false
-    @Published var networkEnabled = true {
-        didSet { preferences.set(networkEnabled, forKey: Self.networkEnabledKey) }
-    }
-    var networkStatus: String {
-        networkEnabled
-            ? "Shared internet (NAT). Guest access to the host and local network is not blocked."
-            : "Offline. The VM has no network device; Tailscale and internet access are unavailable."
-    }
     @Published var creationCPUCount: Int
     @Published var creationMemoryGiB: Int
     @Published var creationDiskGiB: Int
     @Published private(set) var selectedCreationStorageURL: URL?
+    @Published private(set) var creationStorageSelectionError: String?
+    private var creationGuestOS: NativeGuestOS = .macOS
 
     private var restoreImage: VZMacOSRestoreImage?
     private var activeDownloadID: UUID?
     private var downloadCandidates: [RemoteRestoreCandidate] = []
     private var runningID: VirtualMachineID?
+    private var forcePowerOffRequested = false
+    private var serialLogHandle: FileHandle?
     var runningVMID: VirtualMachineID? { isRunning ? runningID : nil }
-    private let otherHostCopyRunning: @MainActor () -> Bool
     private let rootURL: URL
+    private let rootURLWasOverridden: Bool
+    private let otherHostCopyRunning: @MainActor () -> Bool
     private let guestDiskExporter: @Sendable (URL) async throws -> Void
+    private static let networkEnabledKey = "nativeVM.networkEnabled"
+    @Published var networkEnabled = true {
+        didSet { preferences.set(networkEnabled, forKey: Self.networkEnabledKey) }
+    }
+    var networkStatus: String {
+        networkEnabled ? "Shared internet (NAT). Guest access to the host and local network is not blocked." : "Offline. The VM has no network device; Tailscale and internet access are unavailable."
+    }
     private let vmDelegate = NativeVMDelegate()
     private let preferences: UserDefaults
+    private let serialInputHandleOverride: FileHandle?
 
-    init(
-        preferences: UserDefaults = .standard,
-        rootURL: URL? = nil,
-        otherHostCopyRunning: @escaping @MainActor () -> Bool = {
-            NSRunningApplication.runningApplications(withBundleIdentifier: "app.tether.host")
-                .contains { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }
-        },
-        guestDiskExporter: @escaping @Sendable (URL) async throws -> Void = { destination in
-            try await GuestSetupDiskExporter.export(appURL: Bundle.main.bundleURL, to: destination)
-        }
-    ) {
+    init(preferences: UserDefaults = .standard, rootURL: URL? = nil, rootURLOverride: URL? = nil,
+         serialInputHandleOverride: FileHandle? = nil,
+         otherHostCopyRunning: @escaping @MainActor () -> Bool = {
+             NSRunningApplication.runningApplications(withBundleIdentifier: "app.tether.host")
+                 .contains { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }
+         },
+         guestDiskExporter: @escaping @Sendable (URL) async throws -> Void = { destination in
+             try await GuestSetupDiskExporter.export(appURL: Bundle.main.bundleURL, to: destination)
+         }) {
         let defaults = Self.baseResourceLimits.defaults
         creationCPUCount = defaults.cpuCount
         creationMemoryGiB = defaults.memoryGiB
         creationDiskGiB = defaults.diskGiB
         self.preferences = preferences
         self.otherHostCopyRunning = otherHostCopyRunning
-        networkEnabled = preferences.object(forKey: Self.networkEnabledKey) as? Bool ?? true
-        desktopReadyVMID = preferences.string(forKey: "setup.nativeDesktopReadyVMID").flatMap(VirtualMachineID.init)
         self.guestDiskExporter = guestDiskExporter
-        self.rootURL = rootURL ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        networkEnabled = preferences.object(forKey: Self.networkEnabledKey) as? Bool ?? true
+        self.serialInputHandleOverride = serialInputHandleOverride
+        rootURLWasOverridden = rootURL != nil || rootURLOverride != nil
+        desktopReadyVMID = preferences.string(forKey: "setup.nativeDesktopReadyVMID").flatMap(VirtualMachineID.init)
+        self.rootURL = rootURL ?? rootURLOverride ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Tether Host for Mac/Virtual Machines", isDirectory: true)
         if let path = preferences.string(forKey: Self.creationFolderPathKey) {
             var stale = false
@@ -261,6 +274,13 @@ final class NativeVMManager: ObservableObject {
                 preferences.removeObject(forKey: Self.selectedImageKey)
             }
         }
+        Task { [weak self] in
+            guard let self else { return }
+            if let cached = try? await DebianVMImageService.verifiedCachedImage(in: self.debianCacheDirectory) {
+                self.debianImageURL = cached
+                self.debianImageDescription = "Verified Debian 13 ARM64 image is ready."
+            }
+        }
     }
 
     private static var baseResourceLimits: NativeVMResourceLimits {
@@ -276,8 +296,10 @@ final class NativeVMManager: ObservableObject {
         NativeVMResourceLimits(
             hostCPUCount: ProcessInfo.processInfo.activeProcessorCount,
             hostMemoryBytes: ProcessInfo.processInfo.physicalMemory,
-            minimumCPUCount: restoreImage?.mostFeaturefulSupportedConfiguration?.minimumSupportedCPUCount ?? 2,
-            minimumMemoryBytes: restoreImage?.mostFeaturefulSupportedConfiguration?.minimumSupportedMemorySize ?? 4 * 1_073_741_824,
+            minimumCPUCount: creationGuestOS == .debian ? 2 :
+                (restoreImage?.mostFeaturefulSupportedConfiguration?.minimumSupportedCPUCount ?? 2),
+            minimumMemoryBytes: creationGuestOS == .debian ? 4 * 1_073_741_824 :
+                (restoreImage?.mostFeaturefulSupportedConfiguration?.minimumSupportedMemorySize ?? 4 * 1_073_741_824),
             maximumCPUCount: VZVirtualMachineConfiguration.maximumAllowedCPUCount,
             maximumMemoryBytes: VZVirtualMachineConfiguration.maximumAllowedMemorySize
         )
@@ -289,8 +311,18 @@ final class NativeVMManager: ObservableObject {
     var creationStorageDisplayName: String {
         selectedCreationStorageURL?.path ?? "This Mac (default)"
     }
+    var creationStorageWarning: String? {
+        guard let folder = selectedCreationStorageURL,
+              (try? folder.resourceValues(forKeys: [.volumeSupportsSparseFilesKey]))?
+                .volumeSupportsSparseFiles != true else { return nil }
+        let required = NativeVMStorageCapacity.requiredFreeGiB(
+            diskGiB: creationDiskGiB, guestOS: creationGuestOS, supportsSparseFiles: false
+        )
+        return "This drive cannot store sparse VM disks. A \(creationDiskGiB) GB VM may use the full \(creationDiskGiB) GB immediately. Keep at least \(required) GB free."
+    }
     var creationStorageValidationMessage: String? {
         guard let folder = selectedCreationStorageURL else { return nil }
+        if let creationStorageSelectionError { return creationStorageSelectionError }
         let resolvedFolder = folder.resolvingSymlinksInPath()
         let resolvedDefault = rootURL.resolvingSymlinksInPath()
         if resolvedFolder == resolvedDefault || resolvedFolder.path.hasPrefix(resolvedDefault.path + "/") {
@@ -311,9 +343,14 @@ final class NativeVMManager: ObservableObject {
         guard FileManager.default.isWritableFile(atPath: folder.path) else {
             return "The selected VM folder is not writable. Choose a folder where you can save files."
         }
-        guard (try? folder.resourceValues(forKeys: [.volumeSupportsSparseFilesKey]))?
-            .volumeSupportsSparseFiles == true else {
-            return "This drive does not support sparse VM disk images. Choose an APFS folder."
+        let sparse = (try? folder.resourceValues(forKeys: [.volumeSupportsSparseFilesKey]))?
+            .volumeSupportsSparseFiles == true
+        let requiredGiB = NativeVMStorageCapacity.requiredFreeGiB(
+            diskGiB: creationDiskGiB, guestOS: creationGuestOS, supportsSparseFiles: sparse
+        )
+        guard let available = try? NativeVMStorageCapacity.availableBytes(at: folder),
+              available >= Int64(requiredGiB) * NativeVMStorageCapacity.bytesPerGiB else {
+            return "This VM needs at least \(requiredGiB) GB free on the selected drive."
         }
         return nil
     }
@@ -326,29 +363,21 @@ final class NativeVMManager: ObservableObject {
         panel.canCreateDirectories = true
         panel.allowsMultipleSelection = false
         panel.prompt = "Use This Folder"
-        panel.message = "New virtual machines will be saved here. macOS downloads stay on this Mac."
+        panel.message = "New virtual machines will be saved here. OS downloads stay on this Mac."
         if panel.runModal() == .OK, let folder = panel.url?.standardizedFileURL {
+            // Keep the user's choice visible even if validation fails, so the
+            // inline error explains why this particular folder cannot be used.
+            selectedCreationStorageURL = folder
+            creationStorageSelectionError = nil
+            preferences.set(folder.path, forKey: Self.creationFolderPathKey)
+            preferences.removeObject(forKey: Self.creationFolderBookmarkKey)
+            preferences.removeObject(forKey: Self.creationFolderVolumeKey)
             do {
-                guard folder != rootURL, !folder.path.hasPrefix(rootURL.path + "/") else {
-                    status = "Choose a folder outside Tether's default Virtual Machines folder."
-                    return
-                }
                 let volume = try NativeVMStorageRegistry.volumeIdentity(at: folder)
-                guard FileManager.default.isWritableFile(atPath: folder.path) else {
-                    status = "The selected VM folder is not writable. Choose another folder."
-                    return
-                }
-                guard (try? folder.resourceValues(forKeys: [.volumeSupportsSparseFilesKey]))?
-                    .volumeSupportsSparseFiles == true else {
-                    status = "This drive does not support sparse VM disk images. Choose an APFS folder."
-                    return
-                }
                 preferences.set(try folder.bookmarkData(), forKey: Self.creationFolderBookmarkKey)
-                preferences.set(folder.path, forKey: Self.creationFolderPathKey)
                 preferences.set(volume, forKey: Self.creationFolderVolumeKey)
-                selectedCreationStorageURL = folder
             } catch {
-                status = "Could not use this VM folder: \(error.localizedDescription)"
+                creationStorageSelectionError = "Could not remember this VM folder: \(error.localizedDescription) Choose the folder again."
             }
         }
     }
@@ -359,6 +388,7 @@ final class NativeVMManager: ObservableObject {
         preferences.removeObject(forKey: Self.creationFolderPathKey)
         preferences.removeObject(forKey: Self.creationFolderVolumeKey)
         selectedCreationStorageURL = nil
+        creationStorageSelectionError = nil
     }
     var creationResourceError: String? {
         creationLimits.validationMessage(for: NativeVMResources(
@@ -367,15 +397,111 @@ final class NativeVMManager: ObservableObject {
     }
 
     func resetCreationResources() {
+        creationGuestOS = .macOS
         let defaults = creationLimits.defaults
         creationCPUCount = defaults.cpuCount
         creationMemoryGiB = defaults.memoryGiB
         creationDiskGiB = defaults.diskGiB
     }
 
+    func configureDebianCreationDefaults() {
+        guard !isBusy else { return }
+        creationGuestOS = .debian
+        creationCPUCount = min(creationCPURange.upperBound, max(creationCPURange.lowerBound, 4))
+        creationMemoryGiB = min(creationMemoryRange.upperBound, max(creationMemoryRange.lowerBound, 8))
+        creationDiskGiB = 24
+    }
+
+    func configureMacOSCreationDefaults() {
+        guard !isBusy else { return }
+        resetCreationResources()
+    }
+
     private var restoreCacheDirectory: URL {
         rootURL.deletingLastPathComponent()
             .appendingPathComponent("Restore Images", isDirectory: true)
+    }
+
+    private var debianCacheDirectory: URL {
+        rootURL.deletingLastPathComponent().appendingPathComponent("Debian Images", isDirectory: true)
+    }
+
+    private var bundledDebianConverter: URL? {
+        Bundle.main.url(forResource: "qemu-img", withExtension: nil, subdirectory: "Tools")
+    }
+
+    var debianConverterAvailable: Bool {
+        DebianVMImageService.converterURL(bundledDebianConverter) != nil
+    }
+
+    var debianCreationReadinessMessage: String? {
+        if !debianConverterAvailable { return DebianVMImageError.converterUnavailable.localizedDescription }
+        guard let debianImageURL,
+              FileManager.default.fileExists(atPath: debianImageURL.path) else {
+            return "The downloaded Debian image is missing. Download and verify it again."
+        }
+        return creationResourceError ?? creationStorageValidationMessage
+    }
+
+    var hasCachedDebianImage: Bool {
+        FileManager.default.fileExists(atPath: DebianVMImageService.cachedImageURL(in: debianCacheDirectory).path)
+    }
+
+    var debianCachedImageSizeDescription: String {
+        let image = DebianVMImageService.cachedImageURL(in: debianCacheDirectory)
+        guard let bytes = try? image.resourceValues(forKeys: [.fileSizeKey]).fileSize else { return "" }
+        return ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
+    }
+
+    func revealCachedDebianImageInFinder() {
+        guard hasCachedDebianImage else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([DebianVMImageService.cachedImageURL(in: debianCacheDirectory)])
+    }
+
+    func downloadDebianImage() async {
+        guard !isBusy else { return }
+        operationState.begin(.downloadingImage)
+        downloadProgress = nil
+        let downloadID = UUID()
+        activeDownloadID = downloadID
+        status = "Downloading and checking Debian 13 for ARM64…"
+        defer {
+            operationState.finish()
+            activeDownloadID = nil
+            downloadProgress = nil
+        }
+        do {
+            try FileManager.default.createDirectory(at: debianCacheDirectory, withIntermediateDirectories: true)
+            if try await DebianVMImageService.verifiedCachedImage(in: debianCacheDirectory) == nil {
+                let capacity = try debianCacheDirectory
+                    .resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
+                    .volumeAvailableCapacityForImportantUsage ?? 0
+                guard capacity >= 2 * 1_073_741_824 else { throw NativeVMError.insufficientDebianDownloadSpace }
+            }
+            let image = try await DebianVMImageService.downloadVerifiedImage(into: debianCacheDirectory) {
+                [weak self] received, total, elapsed in
+                Task { @MainActor [weak self] in
+                    guard self?.activeDownloadID == downloadID else { return }
+                    self?.downloadProgress = DownloadProgressEstimate(
+                        receivedBytes: received, expectedBytes: total, elapsedSeconds: elapsed
+                    )
+                }
+            }
+            debianImageURL = image
+            debianImageDescription = "Verified Debian 13 ARM64 image is ready."
+            status = "Debian image is ready. Configure the VM, then choose Create VM."
+        } catch {
+            debianImageURL = nil
+            debianImageDescription = "Debian image could not be verified. Download it again."
+            status = "Debian download failed: \(error.localizedDescription)"
+        }
+    }
+
+    func guestOS(for id: VirtualMachineID) -> NativeGuestOS {
+        guard let bundle = VirtualMachineBundleLocator(nativeRoot: rootURL)
+            .locate(id),
+              let manifest = try? readManifest(at: bundle) else { return .macOS }
+        return manifest.guestOS
     }
 
     private var pinnedHostImageURL: URL {
@@ -445,21 +571,27 @@ final class NativeVMManager: ObservableObject {
         guard isRunning, let runningID else { return }
         desktopReadyVMID = runningID
         preferences.set(runningID.description, forKey: "setup.nativeDesktopReadyVMID")
-        status = "macOS desktop confirmed by you. Continue with the guest setup disk in the VM."
+        status = runningGuestOS == .debian
+            ? "Debian desktop confirmed by you. Continue with guest setup in the VM."
+            : "macOS desktop confirmed by you. Continue with the guest setup disk in the VM."
     }
 
     func confirmDesktopReadyFromGuestSetup() {
         guard isRunning, let runningID else { return }
         desktopReadyVMID = runningID
         preferences.set(runningID.description, forKey: "setup.nativeDesktopReadyVMID")
-        status = "The verified guest installer is running in the macOS desktop session."
+        status = runningGuestOS == .debian
+            ? "The verified guest installer is running in Debian."
+            : "The verified guest installer is running in the macOS desktop session."
     }
 
     func clearDesktopReady(for id: VirtualMachineID) {
         guard desktopReadyVMID == id else { return }
         desktopReadyVMID = nil
         preferences.removeObject(forKey: "setup.nativeDesktopReadyVMID")
-        status = "Finish the macOS welcome screens, then confirm when the desktop appears."
+        status = guestOS(for: id) == .debian
+            ? "Sign in to Debian, then confirm when its desktop appears."
+            : "Finish the macOS welcome screens, then confirm when the desktop appears."
     }
 
     func chooseIPSW() {
@@ -701,8 +833,113 @@ final class NativeVMManager: ObservableObject {
         }.value
     }
 
+    func installDebian(username: String, password: String) async -> VirtualMachineID? {
+        guard !isBusy, let imageURL = debianImageURL else { return nil }
+        guard DebianAccountSetup.usernameError(username) == nil,
+              DebianAccountSetup.passwordError(password, confirmation: password) == nil else {
+            status = "Enter a valid Debian username and password before creating the VM."
+            return nil
+        }
+        if let readinessMessage = debianCreationReadinessMessage {
+            status = readinessMessage
+            return nil
+        }
+        guard !hasOtherHostCopy else {
+            status = NativeVMError.anotherHostCopyRunning.localizedDescription
+            return nil
+        }
+        if let creationResourceError {
+            status = creationResourceError
+            return nil
+        }
+        operationState.begin(.installing)
+        defer { operationState.finish() }
+        let id = VirtualMachineID(rawValue: UUID())
+        let resources = NativeVMResources(cpuCount: creationCPUCount,
+                                          memoryGiB: creationMemoryGiB,
+                                          diskGiB: creationDiskGiB)
+        let creationRoot = selectedCreationStorageURL ?? rootURL
+        let stage = creationRoot.appendingPathComponent(".creating-\(id.description)", isDirectory: true)
+        let destination = creationRoot.appendingPathComponent(id.description, isDirectory: true)
+        do {
+            let verifiedImage = try await DebianVMImageService.verifiedCachedImage(in: debianCacheDirectory)
+            guard verifiedImage == imageURL else {
+                throw DebianVMImageError.checksumMismatch
+            }
+            if let creationStorageValidationMessage {
+                status = creationStorageValidationMessage
+                return nil
+            }
+            if selectedCreationStorageURL == nil {
+                try FileManager.default.createDirectory(at: rootURL, withIntermediateDirectories: true)
+            }
+            let sparse = (try? creationRoot.resourceValues(forKeys: [.volumeSupportsSparseFilesKey]))?
+                .volumeSupportsSparseFiles == true
+            let requiredGiB = NativeVMStorageCapacity.requiredFreeGiB(
+                diskGiB: resources.diskGiB, guestOS: .debian, supportsSparseFiles: sparse
+            )
+            let capacity = try NativeVMStorageCapacity.availableBytes(at: creationRoot)
+            guard capacity >= Int64(requiredGiB) * NativeVMStorageCapacity.bytesPerGiB else {
+                throw NativeVMError.insufficientSpace(requiredGiB)
+            }
+            try FileManager.default.createDirectory(at: stage, withIntermediateDirectories: false)
+            status = "Preparing the Debian disk…"
+            try await DebianVMImageService.createRawDisk(
+                from: imageURL, at: stage.appendingPathComponent("disk.img"),
+                diskGiB: resources.diskGiB,
+                bundledConverter: bundledDebianConverter
+            )
+            let sourceDigest = try Data(contentsOf: DebianVMImageService.cachedDigestURL(in: debianCacheDirectory))
+            try sourceDigest.write(to: stage.appendingPathComponent("debian-image.sha512"), options: .atomic)
+            let machineID = VZGenericMachineIdentifier()
+            try machineID.dataRepresentation.write(to: stage.appendingPathComponent("machine.bin"), options: .atomic)
+            _ = try VZEFIVariableStore(creatingVariableStoreAt: stage.appendingPathComponent("efi-vars.bin"))
+            status = "Preparing Debian first-boot setup…"
+            _ = try await LinuxGuestSeedWriter.createSeed(
+                in: stage, vmID: id, username: username, password: password,
+                guestResourcesURL: Bundle.main.bundleURL.appendingPathComponent(
+                    "Contents/Resources/LinuxGuestSetup", isDirectory: true)
+            )
+            let configuration = try makeDebianConfiguration(
+                bundle: stage, machineID: machineID, cpuCount: resources.cpuCount,
+                memorySize: UInt64(resources.memoryGiB) * 1_073_741_824,
+                serialLogHandle: nil
+            )
+            _ = configuration // Validation happens before the bundle is published.
+            let manifest = NativeVirtualMachineManifest(
+                id: id, name: "Debian 13 · \(id.description.prefix(8))",
+                guestImageVersion: "Debian 13 ARM64 · Xfce/X11",
+                resources: resources, guestOS: .debian
+            )
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            encoder.outputFormatting = [.sortedKeys]
+            try encoder.encode(manifest).write(
+                to: stage.appendingPathComponent(NativeVirtualMachineStore.manifestFilename), options: .atomic
+            )
+            try FileManager.default.moveItem(at: stage, to: destination)
+            try NativeVMStorageRegistry(defaultRootURL: rootURL).register(manifest, at: destination)
+            if isRunning {
+                status = "Debian VM saved. Shut down the running VM, then sign in with your chosen Debian account."
+                return id
+            }
+            status = "Starting the fresh Debian VM…"
+            operationState.transition(from: .installing, to: .starting)
+            try await bootWhileBusy(id)
+            return id
+        } catch {
+            try? FileManager.default.removeItem(at: stage)
+            if FileManager.default.fileExists(atPath: destination.appendingPathComponent(NativeVirtualMachineStore.manifestFilename).path) {
+                status = "Debian VM was saved, but could not start: \(error.localizedDescription)"
+                return id
+            }
+            status = "Debian VM creation failed: \(error.localizedDescription)"
+            return nil
+        }
+    }
+
     func install() async -> VirtualMachineID? {
-        guard !isBusy, !isRunning, !shutdownRequested, let imageURL, let restoreImage,
+        guard !isBusy, let imageURL, let restoreImage,
               let requirements = restoreImage.mostFeaturefulSupportedConfiguration else { return nil }
         if let creationResourceError {
             status = creationResourceError
@@ -730,11 +967,13 @@ final class NativeVMManager: ObservableObject {
             if selectedCreationStorageURL == nil {
                 try FileManager.default.createDirectory(at: rootURL, withIntermediateDirectories: true)
             }
-            let capacity = try creationRoot
-                .resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
-                .volumeAvailableCapacityForImportantUsage ?? 0
-            let requiredGiB = min(resources.diskGiB + 4, 45)
-            guard capacity >= Int64(requiredGiB) * 1_073_741_824 else {
+            let sparse = (try? creationRoot.resourceValues(forKeys: [.volumeSupportsSparseFilesKey]))?
+                .volumeSupportsSparseFiles == true
+            let requiredGiB = NativeVMStorageCapacity.requiredFreeGiB(
+                diskGiB: resources.diskGiB, guestOS: .macOS, supportsSparseFiles: sparse
+            )
+            let capacity = try NativeVMStorageCapacity.availableBytes(at: creationRoot)
+            guard capacity >= Int64(requiredGiB) * NativeVMStorageCapacity.bytesPerGiB else {
                 throw NativeVMError.insufficientSpace(requiredGiB)
             }
             try FileManager.default.createDirectory(at: stage, withIntermediateDirectories: false)
@@ -798,8 +1037,12 @@ final class NativeVMManager: ObservableObject {
             )
             try FileManager.default.moveItem(at: stage, to: destination)
             try NativeVMStorageRegistry(defaultRootURL: rootURL).register(manifest, at: destination)
-            operationState.transition(from: .installing, to: .starting)
+            if isRunning {
+                status = "New VM installed and saved. Shut down the running VM, then select this VM and choose Start VM."
+                return id
+            }
             status = "Starting the fresh VM…"
+            operationState.transition(from: .installing, to: .starting)
             try await bootWhileBusy(id)
             return id
         } catch {
@@ -824,28 +1067,12 @@ final class NativeVMManager: ObservableObject {
         try await bootWhileBusy(id)
     }
 
-    /// The installation transaction deliberately retains its operation lock through boot.
     private func bootWhileBusy(_ id: VirtualMachineID) async throws {
         if isRunning, runningID == id { showsDisplay = true; return }
         if isRunning { throw NativeVMError.anotherVMRunning }
         guard !hasOtherHostCopy else { throw NativeVMError.anotherHostCopyRunning }
-        let registry = NativeVMStorageRegistry(defaultRootURL: rootURL)
-        let registeredBundle = registry.location(of: id)
-        if registry.lastKnownLocation(of: id) != nil && registeredBundle == nil {
-            throw NativeVMError.missingVM
-        }
-        let bundle = registeredBundle ?? rootURL.appendingPathComponent(id.description, isDirectory: true)
-        guard FileManager.default.fileExists(atPath: bundle.path) else { throw NativeVMError.missingVM }
-        let freshMedia = await prepareGuestDiskWhileBusy()
-        let includeGuestDisk = GuestSetupDiskExporter.isUsableImage(at: guestDiskURL)
-        guard VirtualMachineBundleLocator(nativeRoot: rootURL).locate(id) == bundle else {
-            throw NativeVMError.invalidVM
-        }
-        let hardwareData = try Data(contentsOf: bundle.appendingPathComponent("hardware.bin"))
-        let machineData = try Data(contentsOf: bundle.appendingPathComponent("machine.bin"))
-        guard let hardware = VZMacHardwareModel(dataRepresentation: hardwareData),
-              let machineID = VZMacMachineIdentifier(dataRepresentation: machineData),
-              hardware.isSupported else { throw NativeVMError.invalidVM }
+        let locator = VirtualMachineBundleLocator(nativeRoot: rootURL)
+        guard let bundle = locator.locate(id) else { throw NativeVMError.missingVM }
         let manifestURL = bundle.appendingPathComponent(NativeVirtualMachineStore.manifestFilename)
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
@@ -854,6 +1081,17 @@ final class NativeVMManager: ObservableObject {
               manifest.schemaVersion == NativeVirtualMachineManifest.currentSchemaVersion else {
             throw NativeVMError.invalidVM
         }
+        if manifest.guestOS == .debian {
+            try await bootDebian(id, bundle: bundle, manifest: manifest)
+            return
+        }
+        let freshMedia = await prepareGuestDiskWhileBusy()
+        let includeGuestDisk = GuestSetupDiskExporter.isUsableImage(at: guestDiskURL)
+        let hardwareData = try Data(contentsOf: bundle.appendingPathComponent("hardware.bin"))
+        let machineData = try Data(contentsOf: bundle.appendingPathComponent("machine.bin"))
+        guard let hardware = VZMacHardwareModel(dataRepresentation: hardwareData),
+              let machineID = VZMacMachineIdentifier(dataRepresentation: machineData),
+              hardware.isSupported else { throw NativeVMError.invalidVM }
         // Old manifests did not store resources; preserve their launch behavior.
         let cpuCount = manifest.resources?.cpuCount ?? min(4, max(2, ProcessInfo.processInfo.activeProcessorCount / 2))
         let memoryGiB = manifest.resources?.memoryGiB ?? 8
@@ -872,11 +1110,10 @@ final class NativeVMManager: ObservableObject {
         virtualMachine = vm
         do {
             try await vm.start()
-            guard self.virtualMachine === vm, vm.state == .running else {
-                throw NativeVMError.invalidVM
-            }
+            guard virtualMachine === vm, vm.state == .running else { throw NativeVMError.invalidVM }
             runningID = id
             isRunning = true
+            runningGuestOS = .macOS
             shutdownRequested = false
             showsDisplay = true
             markBundleUsed(id)
@@ -894,6 +1131,56 @@ final class NativeVMManager: ObservableObject {
         }
     }
 
+    private func bootDebian(_ id: VirtualMachineID, bundle: URL,
+                            manifest: NativeVirtualMachineManifest) async throws {
+        let machineData = try Data(contentsOf: bundle.appendingPathComponent("machine.bin"))
+        guard let machineID = VZGenericMachineIdentifier(dataRepresentation: machineData) else {
+            throw NativeVMError.invalidVM
+        }
+        let cpuCount = manifest.resources?.cpuCount ?? 4
+        let memoryGiB = manifest.resources?.memoryGiB ?? 8
+        guard cpuCount >= VZVirtualMachineConfiguration.minimumAllowedCPUCount,
+              cpuCount <= VZVirtualMachineConfiguration.maximumAllowedCPUCount,
+              memoryGiB > 0,
+              UInt64(memoryGiB) * 1_073_741_824 >= VZVirtualMachineConfiguration.minimumAllowedMemorySize,
+              UInt64(memoryGiB) * 1_073_741_824 <= VZVirtualMachineConfiguration.maximumAllowedMemorySize else {
+            throw NativeVMError.invalidVM
+        }
+        let serialURL = bundle.appendingPathComponent("serial.log")
+        if !FileManager.default.fileExists(atPath: serialURL.path) {
+            FileManager.default.createFile(atPath: serialURL.path, contents: nil)
+        }
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: serialURL.path)
+        let logHandle = try FileHandle(forWritingTo: serialURL)
+        try logHandle.seekToEnd()
+        do {
+            let configuration = try makeDebianConfiguration(
+                bundle: bundle, machineID: machineID, cpuCount: cpuCount,
+                memorySize: UInt64(memoryGiB) * 1_073_741_824,
+                serialLogHandle: logHandle
+            )
+            let vm = VZVirtualMachine(configuration: configuration)
+            vm.delegate = vmDelegate
+            virtualMachine = vm
+            try await vm.start()
+            guard virtualMachine === vm, vm.state == .running else { throw NativeVMError.invalidVM }
+            serialLogHandle = logHandle
+            runningID = id
+            isRunning = true
+            runningGuestOS = .debian
+            shutdownRequested = false
+            showsDisplay = true
+            markBundleUsed(id)
+            status = "Debian is starting. On first boot, wait while Xfce, Chromium, and guest setup tools are prepared."
+        } catch {
+            try? logHandle.close()
+            virtualMachine = nil
+            showsDisplay = false
+            status = "Could not boot Debian: \(error.localizedDescription)"
+            throw error
+        }
+    }
+
     func startOrShow(_ id: VirtualMachineID) async {
         do { try await boot(id) }
         catch {
@@ -901,14 +1188,15 @@ final class NativeVMManager: ObservableObject {
         }
     }
 
-    func requestShutdown() {
-        guard isRunning, !isBusy, !shutdownRequested, let virtualMachine else { return }
+    func requestShutdown(for id: VirtualMachineID? = nil) {
+        guard isRunning, !isBusy, !shutdownRequested,
+              id == nil || runningID == id, let virtualMachine else { return }
         do {
             try virtualMachine.requestStop()
             shutdownRequested = true
-            status = "Asked macOS to shut down. Wait for the VM status to change to Off."
+            status = "Asked the guest to shut down. Wait for the VM status to change to Off."
         } catch {
-            status = "macOS did not accept the shutdown request: \(error.localizedDescription)"
+            status = "The guest did not accept the shutdown request: \(error.localizedDescription)"
         }
     }
 
@@ -916,6 +1204,11 @@ final class NativeVMManager: ObservableObject {
     /// installer listens on this private VM socket; neither clipboard is polled.
     func readGuestClipboardText() async throws -> String {
         try await transferGuestClipboard(opcode: 1, text: nil)
+    }
+
+    /// Checks the guest bridge without reading or changing either clipboard.
+    func checkGuestClipboardConnection() async throws {
+        _ = try await transferGuestClipboard(opcode: 4, text: nil)
     }
 
     func writeGuestClipboardText(_ text: String) async throws {
@@ -949,15 +1242,24 @@ final class NativeVMManager: ObservableObject {
         }.value
     }
 
-    func forcePowerOff() async {
-        guard isRunning, !isBusy, let virtualMachine else { return }
+    func forcePowerOff(for id: VirtualMachineID? = nil) async {
+        guard isRunning, !isBusy, id == nil || runningID == id,
+              let virtualMachine else { return }
         operationState.begin(.stopping)
+        forcePowerOffRequested = true
         status = "Powering off the VM…"
         defer { operationState.finish() }
         do {
             try await virtualMachine.stop()
-            guestStopped(identity: ObjectIdentifier(virtualMachine), error: nil)
+            // A host-initiated stop completes here; guestDidStop is only for
+            // guest-initiated shutdown. Release state even if no delegate fires.
+            guestStopped(ObjectIdentifier(virtualMachine), error: nil)
         } catch {
+            if virtualMachine.state == .stopped {
+                guestStopped(ObjectIdentifier(virtualMachine), error: nil)
+                return
+            }
+            forcePowerOffRequested = false
             status = "Could not power off the VM: \(error.localizedDescription)"
         }
     }
@@ -994,7 +1296,17 @@ final class NativeVMManager: ObservableObject {
     }
 
     var hasOtherHostCopy: Bool {
-        otherHostCopyRunning()
+        #if TETHER_E2E
+        let normalizedRoot = rootURL.standardizedFileURL.path
+        if rootURLWasOverridden,
+           Bundle.main.bundleIdentifier == "app.tether.debian.e2e",
+           (normalizedRoot == "/tmp/tether-debian-e2e" ||
+            normalizedRoot.hasPrefix("/tmp/tether-debian-e2e/") ||
+            normalizedRoot.hasPrefix("/tmp/tether-debian-e2e-")) {
+            return false
+        }
+        #endif
+        return otherHostCopyRunning()
     }
 
     private func makeConfiguration(
@@ -1033,6 +1345,72 @@ final class NativeVMManager: ObservableObject {
         return configuration
     }
 
+    private func makeDebianConfiguration(
+        bundle: URL, machineID: VZGenericMachineIdentifier,
+        cpuCount: Int, memorySize: UInt64, serialLogHandle: FileHandle?
+    ) throws -> VZVirtualMachineConfiguration {
+        let configuration = VZVirtualMachineConfiguration()
+        let bootLoader = VZEFIBootLoader()
+        bootLoader.variableStore = VZEFIVariableStore(url: bundle.appendingPathComponent("efi-vars.bin"))
+        configuration.bootLoader = bootLoader
+        let platform = VZGenericPlatformConfiguration()
+        platform.machineIdentifier = machineID
+        configuration.platform = platform
+        configuration.cpuCount = cpuCount
+        configuration.memorySize = memorySize
+        configuration.entropyDevices = [VZVirtioEntropyDeviceConfiguration()]
+        configuration.socketDevices = [VZVirtioSocketDeviceConfiguration()]
+        configuration.keyboards = [VZUSBKeyboardConfiguration()]
+        configuration.pointingDevices = [VZUSBScreenCoordinatePointingDeviceConfiguration()]
+        let graphics = VZVirtioGraphicsDeviceConfiguration()
+        graphics.scanouts = [VZVirtioGraphicsScanoutConfiguration(widthInPixels: 1600,
+                                                                  heightInPixels: 1000)]
+        configuration.graphicsDevices = [graphics]
+        let network = VZVirtioNetworkDeviceConfiguration()
+        network.macAddress = try debianMACAddress(in: bundle)
+        network.attachment = VZNATNetworkDeviceAttachment()
+        configuration.networkDevices = networkEnabled ? [network] : []
+        let disk = try VZDiskImageStorageDeviceAttachment(
+            url: bundle.appendingPathComponent("disk.img"), readOnly: false)
+        let seed = try VZDiskImageStorageDeviceAttachment(
+            url: bundle.appendingPathComponent("seed.iso"), readOnly: true)
+        configuration.storageDevices = [VZVirtioBlockDeviceConfiguration(attachment: disk),
+                                        VZVirtioBlockDeviceConfiguration(attachment: seed)]
+        let toolsDisk = Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/Tether Debian Guest Tools.img")
+        guard FileManager.default.fileExists(atPath: toolsDisk.path) else {
+            throw NativeVMError.guestDiskUnavailable
+        }
+        let attachment = try VZDiskImageStorageDeviceAttachment(url: toolsDisk, readOnly: true)
+        configuration.storageDevices.append(VZVirtioBlockDeviceConfiguration(attachment: attachment))
+        if let serialLogHandle {
+            let serial = VZVirtioConsoleDeviceSerialPortConfiguration()
+            serial.attachment = VZFileHandleSerialPortAttachment(
+                fileHandleForReading: serialInputHandleOverride,
+                fileHandleForWriting: serialLogHandle)
+            configuration.serialPorts = [serial]
+        }
+        try configuration.validate()
+        return configuration
+    }
+
+    private func debianMACAddress(in bundle: URL) throws -> VZMACAddress {
+        let file = bundle.appendingPathComponent("network.mac")
+        if FileManager.default.fileExists(atPath: file.path) {
+            let stored = try String(contentsOf: file, encoding: .utf8)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let address = VZMACAddress(string: stored),
+                  address.isLocallyAdministeredAddress,
+                  address.isUnicastAddress else { throw NativeVMError.invalidVM }
+            return address
+        }
+        // VZ otherwise creates a different MAC on every launch. Debian's
+        // persistent network configuration and DHCP identity need one address.
+        let address = VZMACAddress.randomLocallyAdministered()
+        try Data("\(address.string)\n".utf8).write(to: file, options: .atomic)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+        return address
+    }
+
     private var guestDiskURL: URL {
         rootURL.deletingLastPathComponent().appendingPathComponent("Tether Guest Setup.iso")
     }
@@ -1046,7 +1424,7 @@ final class NativeVMManager: ObservableObject {
     }
 
     private func prepareGuestDiskWhileBusy() async -> Bool {
-        let destination = guestDiskURL
+        let destination = rootURL.deletingLastPathComponent().appendingPathComponent("Tether Guest Setup.iso")
         do {
             status = "Preparing the guest setup disk…"
             try await guestDiskExporter(destination)
@@ -1058,12 +1436,18 @@ final class NativeVMManager: ObservableObject {
         }
     }
 
-    fileprivate func guestStopped(identity: ObjectIdentifier, error: Error?) {
-        guard let currentVM = virtualMachine, ObjectIdentifier(currentVM) == identity else { return }
-        if let runningID { markBundleUsed(runningID) }
+    fileprivate func guestStopped(_ identity: ObjectIdentifier, error: Error?) {
+        guard virtualMachine.map(ObjectIdentifier.init) == identity else { return }
+        if let runningID {
+            markBundleUsed(runningID)
+        }
+        forcePowerOffRequested = false
         isRunning = false
         shutdownRequested = false
         runningID = nil
+        try? serialLogHandle?.close()
+        serialLogHandle = nil
+        runningGuestOS = .macOS
         virtualMachine = nil
         showsDisplay = false
         status = error.map { "The VM stopped: \($0.localizedDescription)" } ?? "The VM is off. Choose Start VM to resume."
@@ -1122,7 +1506,7 @@ private enum GuestClipboardTransport {
         guard status == 0 else {
             throw GuestClipboardError.guestRejected(text.isEmpty ? "Request failed." : text)
         }
-        if opcode == 2 && !text.isEmpty { throw GuestClipboardError.invalidResponse }
+        if (opcode == 2 || opcode == 4) && !text.isEmpty { throw GuestClipboardError.invalidResponse }
         return text
     }
 
@@ -1174,27 +1558,162 @@ private final class NativeVMDelegate: NSObject, VZVirtualMachineDelegate, @unche
 
     nonisolated func guestDidStop(_ virtualMachine: VZVirtualMachine) {
         let identity = ObjectIdentifier(virtualMachine)
-        Task { @MainActor [weak owner] in owner?.guestStopped(identity: identity, error: nil) }
+        Task { @MainActor [weak owner] in owner?.guestStopped(identity, error: nil) }
     }
 
     nonisolated func virtualMachine(_ virtualMachine: VZVirtualMachine, didStopWithError error: any Error) {
         let identity = ObjectIdentifier(virtualMachine)
-        Task { @MainActor [weak owner] in owner?.guestStopped(identity: identity, error: error) }
+        Task { @MainActor [weak owner] in owner?.guestStopped(identity, error: error) }
     }
 }
 
+enum NativeVMTypeTextError: LocalizedError {
+    case empty
+    case tooLong
+    case unsupportedCharacter
+    case displayUnavailable
+    case vmNotRunning
+    case alreadyTyping
+    case eventUnavailable
+
+    var errorDescription: String? {
+        switch self {
+        case .empty: "The clipboard has no text to type."
+        case .tooLong: "Paste as typing supports up to 4,096 characters. Use the guest clipboard after signing in for longer text."
+        case .unsupportedCharacter: "Paste as typing supports printable US keyboard characters only. Use the guest clipboard after signing in for other text."
+        case .displayUnavailable: "Show this VM's display before pasting as typing."
+        case .vmNotRunning: "Start the VM before pasting as typing."
+        case .alreadyTyping: "Wait for the current paste to finish."
+        case .eventUnavailable: "The VM display could not receive a key event. Try again."
+        }
+    }
+}
+
+@MainActor
 struct NativeVMDisplay: NSViewRepresentable {
     let virtualMachine: VZVirtualMachine
+    private static weak var registeredView: VZVirtualMachineView?
+    private static var isTyping = false
+
+    private struct Stroke {
+        let keyCode: UInt16
+        let base: Character
+        let rendered: Character
+        let shift: Bool
+    }
+
+    /// Uses the VM's virtual keyboard before any guest clipboard service exists.
+    /// The caller owns clipboard access; this method never reads, logs, or stores text.
+    static func typeText(_ text: String, into vm: VZVirtualMachine) async throws {
+        guard !text.isEmpty else { throw NativeVMTypeTextError.empty }
+        guard text.utf8.count <= 4_096 else { throw NativeVMTypeTextError.tooLong }
+        // Resolve every key before sending the first one, so unsupported text
+        // never leaves a partially typed password in the guest.
+        let strokes = try text.unicodeScalars.map { scalar -> Stroke in
+            guard (0x20...0x7e).contains(scalar.value) else {
+                throw NativeVMTypeTextError.unsupportedCharacter
+            }
+            let rendered = Character(String(scalar))
+            let base: Character
+            let shift: Bool
+            if (0x41...0x5a).contains(scalar.value) {
+                base = Character(String(scalar).lowercased())
+                shift = true
+            } else if let shiftedBase = shiftedBases[rendered] {
+                base = shiftedBase
+                shift = true
+            } else {
+                base = rendered
+                shift = false
+            }
+            guard let keyCode = keyCodes[base] else {
+                throw NativeVMTypeTextError.unsupportedCharacter
+            }
+            return Stroke(keyCode: keyCode, base: base, rendered: rendered, shift: shift)
+        }
+        guard !isTyping else { throw NativeVMTypeTextError.alreadyTyping }
+        guard vm.state == .running else { throw NativeVMTypeTextError.vmNotRunning }
+        guard let view = registeredView, view.virtualMachine === vm,
+              let window = view.window, window.makeFirstResponder(view) else {
+            throw NativeVMTypeTextError.displayUnavailable
+        }
+
+        isTyping = true
+        var shiftDown = false
+        defer {
+            if shiftDown { try? sendShift(false, to: view) }
+            isTyping = false
+        }
+        for stroke in strokes {
+            try Task.checkCancellation()
+            guard vm.state == .running, view.window === window,
+                  window.firstResponder === view, view.virtualMachine === vm else {
+                throw NativeVMTypeTextError.displayUnavailable
+            }
+            if stroke.shift != shiftDown {
+                try sendShift(stroke.shift, to: view)
+                shiftDown = stroke.shift
+                try await Task.sleep(for: .milliseconds(5))
+            }
+            guard let down = keyEvent(.keyDown, stroke: stroke, view: view),
+                  let up = keyEvent(.keyUp, stroke: stroke, view: view) else {
+                throw NativeVMTypeTextError.eventUnavailable
+            }
+            view.keyDown(with: down)
+            view.keyUp(with: up)
+            try await Task.sleep(for: .milliseconds(5))
+        }
+    }
+
+    private static func sendShift(_ pressed: Bool, to view: VZVirtualMachineView) throws {
+        guard let event = NSEvent.keyEvent(
+            with: .flagsChanged, location: .zero,
+            modifierFlags: pressed ? [.shift] : [], timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: view.window?.windowNumber ?? 0, context: nil,
+            characters: "", charactersIgnoringModifiers: "", isARepeat: false, keyCode: 56
+        ) else { throw NativeVMTypeTextError.eventUnavailable }
+        view.flagsChanged(with: event)
+    }
+
+    private static func keyEvent(_ type: NSEvent.EventType, stroke: Stroke,
+                                 view: VZVirtualMachineView) -> NSEvent? {
+        NSEvent.keyEvent(
+            with: type, location: .zero,
+            modifierFlags: stroke.shift ? [.shift] : [],
+            timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: view.window?.windowNumber ?? 0, context: nil,
+            // AppKit preserves Shift in charactersIgnoringModifiers.
+            characters: String(stroke.rendered), charactersIgnoringModifiers: String(stroke.rendered),
+            isARepeat: false, keyCode: stroke.keyCode
+        )
+    }
+
+    private static let keyCodes: [Character: UInt16] = [
+        "a": 0, "s": 1, "d": 2, "f": 3, "h": 4, "g": 5, "z": 6, "x": 7, "c": 8, "v": 9,
+        "b": 11, "q": 12, "w": 13, "e": 14, "r": 15, "y": 16, "t": 17,
+        "1": 18, "2": 19, "3": 20, "4": 21, "6": 22, "5": 23, "=": 24, "9": 25,
+        "7": 26, "-": 27, "8": 28, "0": 29, "]": 30, "o": 31, "u": 32,
+        "[": 33, "i": 34, "p": 35, "l": 37, "j": 38, "'": 39, "k": 40,
+        ";": 41, "\\": 42, ",": 43, "/": 44, "n": 45, "m": 46, ".": 47,
+        " ": 49, "`": 50
+    ]
+    private static let shiftedBases: [Character: Character] = [
+        "!": "1", "@": "2", "#": "3", "$": "4", "%": "5", "^": "6", "&": "7", "*": "8",
+        "(": "9", ")": "0", "_": "-", "+": "=", "{": "[", "}": "]", ":": ";", "\"": "'",
+        "|": "\\", "<": ",", ">": ".", "?": "/", "~": "`"
+    ]
 
     func makeNSView(context: Context) -> VZVirtualMachineView {
         let view = VZVirtualMachineView()
         view.virtualMachine = virtualMachine
         view.capturesSystemKeys = true
         view.automaticallyReconfiguresDisplay = true
+        Self.registeredView = view
         return view
     }
 
     func updateNSView(_ view: VZVirtualMachineView, context: Context) {
         view.virtualMachine = virtualMachine
+        Self.registeredView = view
     }
 }

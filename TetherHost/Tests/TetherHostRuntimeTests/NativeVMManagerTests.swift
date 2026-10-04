@@ -10,6 +10,10 @@ final class NativeVMManagerTests: XCTestCase {
         let id = VirtualMachineID(rawValue: UUID())
         let bundle = root.appendingPathComponent(id.description)
         try FileManager.default.createDirectory(at: bundle, withIntermediateDirectories: true)
+        let manifest = NativeVirtualMachineManifest(id: id, guestImageVersion: "test")
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        try encoder.encode(manifest).write(to: bundle.appendingPathComponent(NativeVirtualMachineStore.manifestFilename))
         defer { try? FileManager.default.removeItem(at: root) }
         let suite = "app.tether.tests.\(UUID().uuidString)"
         let preferences = UserDefaults(suiteName: suite)!

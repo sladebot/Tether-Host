@@ -116,3 +116,18 @@ addresses (including any public Studio relay/Funnel) are not blocked, and the
 LaunchDaemon has not yet passed a full pre-FileVault-unlock test.
 External tailnet/host enforcement plus a non-admin Hermes runtime are still
 required before calling the VM fully isolated.
+
+## Debian graphical installer build
+
+Debian guest preparation installs the native `chromium` and `chromium-driver`
+packages from Debian's signed stable APT repository. Existing installations are
+reused; the computer-use stage checks the executable and package state before
+continuing. Browser sandboxing remains enabled.
+
+`build-linux-installer.sh` builds a Linux ARM64 ELF executable with the Python
+GTK guide and guest backend embedded. It requires a Go compiler on the build
+machine (`TETHER_GO_BINARY` may point to one). The guest uses Debian Desktop's
+system Python 3 / GTK 3 bindings; the graphical bootstrap installs VTE and other
+guest dependencies through polkit. The launcher does not require FUSE or run
+a local web server. Test launching directly from the read-only TETHERTOOLS disk
+before distributing a new build. The Go compiler is a build dependency only.

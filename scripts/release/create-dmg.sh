@@ -15,6 +15,12 @@ require_execute_flag "$@"
 require_command hdiutil
 require_command ditto
 require_directory "${TETHER_APP_PATH}"
+require_file "${TETHER_APP_PATH}/Contents/Resources/Tether Debian Guest Tools.img"
+require_file "${TETHER_APP_PATH}/Contents/Resources/LinuxGuestSetup/installer-version.json"
+project_build="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "${TETHER_APP_PATH}/Contents/Info.plist")"
+guest_build="$(/usr/bin/python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["build"])' "${TETHER_APP_PATH}/Contents/Resources/LinuxGuestSetup/installer-version.json")"
+[[ "$project_build" == "$guest_build" ]] || release_die \
+    "host build ${project_build} does not match Debian guest tools build ${guest_build}"
 ensure_new_output "${TETHER_DMG_PATH}"
 make_release_parent
 

@@ -22,7 +22,7 @@ struct VMInventoryView: View {
                         }
                             .buttonStyle(.borderedProminent)
                             .disabled(model.nativeVM.isBusy || model.nativeVM.hasOtherHostCopy)
-                            .accessibilityHint("Opens Apple virtual machine creation")
+                            .accessibilityHint("Opens creation for the selected VM provider")
                     }
                 }
                 if model.isRemovingVM { ProgressView("Deleting VM files…") }
@@ -34,7 +34,7 @@ struct VMInventoryView: View {
             if model.candidateVMs.isEmpty {
                 EmptyEvidenceView(
                     title: "No VM found",
-                    message: "Choose Create New VM to install macOS with Apple Virtualization.",
+                    message: "Choose Create New VM to create a macOS or Debian VM.",
                     symbol: "macpro.gen3"
                 )
             } else {
@@ -72,7 +72,7 @@ struct VMInventoryView: View {
                 Text(request.vm.id.description)
                     .font(.system(.caption, design: .monospaced))
                     .textSelection(.enabled)
-                Text("Tether Host will permanently delete this VM bundle, including its macOS disk and data. It will not go to Trash.")
+                Text("Tether Host will permanently delete this VM bundle, including its virtual disk and data. It will not go to Trash.")
                     .fixedSize(horizontal: false, vertical: true)
                 Text("Type the last 8 characters of the VM ID to confirm: \(request.confirmationCode)")
                     .font(.callout)
@@ -121,10 +121,6 @@ private struct VMRecordRow: View {
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 5) {
                     Text(vm.name).font(.headline)
-                    if vm.state == .unavailable {
-                        Text("Storage unavailable. Reconnect the drive and refresh.")
-                            .font(.callout).foregroundStyle(.secondary)
-                    }
                     Text(vm.id.rawValue.uuidString)
                         .font(.system(.caption, design: .monospaced))
                         .foregroundStyle(.secondary)

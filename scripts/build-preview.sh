@@ -21,13 +21,18 @@ TETHER_PREVIEW_DMG="${TETHER_PREVIEW_DMG:-$DEFAULT_PREVIEW_DMG}"
 mkdir -p "$(dirname "$TETHER_PREVIEW_DMG")"
 find "$APP_PATH/Contents/Resources/GuestSetup" -type d -name '__pycache__' -prune -exec rm -rf {} +
 find "$APP_PATH/Contents/Resources/GuestSetup" -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
+find "$APP_PATH/Contents/Resources/LinuxGuestSetup" -type d -name '__pycache__' -prune -exec rm -rf {} +
+find "$APP_PATH/Contents/Resources/LinuxGuestSetup" -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
+test -x "$APP_PATH/Contents/Resources/Tools/qemu-img"
+for debian_resource in setup.sh guest_installer.py vsock_helper.py linux_guest_setup.py display-resize.py; do
+    test -f "$APP_PATH/Contents/Resources/LinuxGuestSetup/$debian_resource"
+done
+test -f "$APP_PATH/Contents/Resources/Tether Debian Guest Tools.img"
+HOST_BUILD="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP_PATH/Contents/Info.plist")"
+GUEST_BUILD="$(/usr/bin/python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["build"])' "$APP_PATH/Contents/Resources/LinuxGuestSetup/installer-version.json")"
+[[ "$HOST_BUILD" == "$GUEST_BUILD" ]] || { printf 'Host build %s does not match Debian guest tools build %s\n' "$HOST_BUILD" "$GUEST_BUILD" >&2; exit 1; }
 codesign --force --deep --sign - --preserve-metadata=identifier,entitlements,flags,runtime "$APP_PATH"
 codesign --verify --deep --strict "$APP_PATH"
-# Ad-hoc hardened previews cannot load Xcode's separate debug dylib under library validation.
-if otool -L "$APP_PATH/Contents/MacOS/Tether Host for Mac" | grep -F '.debug.dylib' >/dev/null; then
-    printf '%s\n' 'Preview must be built with ENABLE_DEBUG_DYLIB=NO.' >&2
-    exit 1
-fi
 mkdir "$STAGING_DIRECTORY/content"
 ditto "$APP_PATH" "$STAGING_DIRECTORY/content/Tether Host for Mac.app"
 # Finder shows the bundle directory timestamp; set it to this packaged build.
@@ -74,42 +79,43 @@ printf 'Tether Host local development preview\nVersion %s (%s)\n\n' \
     "$APP_VERSION" "$APP_BUILD" > "$STAGING_DIRECTORY/content/Read Me.txt"
 cat >> "$STAGING_DIRECTORY/content/Read Me.txt" <<'NOTE'
 
-Drag Tether Host for Mac into Applications and launch it.
-Apple Virtualization is the only VM runtime. Tether Host stores and displays
-its VM directly. A new VM needs a compatible macOS IPSW; an existing one does not.
-The four checks are:
-1. Create or select the exact VM.
-2. Install and boot macOS.
-3. Check/install/configure Tailscale inside the VM.
-4. Check/install/configure Hermes inside the VM, then verify it.
+Quit Tether Host before replacing it in Applications, then open the updated app.
+Updating the app preserves existing VM disks and configuration. Keep only one
+host copy running. Apple Virtualization creates and displays both macOS and
+Debian 13 ARM64 VMs in the current sidebar workspace.
 
-The included Tether Guest Setup.iso carries a small guest helper without
-enabling host folder sharing. Built-in Apple VMs can optionally enable explicit,
-text-only clipboard transfer from the guest installer. Each clipboard transfer
-requires a button click in Tether Host; clipboard contents are never synced continuously.
-Tether-created VMs include a read-only copy. In the guest, open Tether Guest Installer.app and
-follow its six checks. Updating this installer does not reinstall the VM.
+REUSE AN EXISTING VM
+Choose Virtual machine, open the VM name menu, select your existing macOS or
+Debian VM, and choose Start VM. Keep external storage connected. Reusing a VM
+does not require another download or a new account.
 
-Dependency detection for Tailscale and Hermes runs inside the VM. Software on
-the physical Mac never satisfies those checks. The installer guides Tailscale
-sign-in, model login, guest permissions, service configuration, and verification.
-When macOS asks whether CuaDriver may bypass the private window picker and
-directly access the guest screen and audio, choose Allow. The computer-use step
-does not complete until it verifies a real guest desktop capture.
-After guest Verify connection succeeds, a built-in VM sends its private URL and
-token directly to Tether Host. Tether Host fills them and tests Hermes from this
-Mac before enabling the iPhone step. Manual entry and private file import remain available.
-If the helper fails to start, use Retry host handoff in the guest Verify step;
-this does not reinstall macOS, Tailscale, or Hermes.
-Enter those connection details in Tether iOS with the phone on the same tailnet.
+CREATE A NEW VM
+Choose VM library > Create New VM, select macOS or Debian, then continue to
+configuration. Choose CPU, memory, disk capacity, and storage location.
+For macOS, choose an IPSW or download a compatible Apple restore image.
+Complete Apple's welcome screens and open Tether Guest Installer.app from the
+read-only Tether Guest Setup disk. The DMG also includes its setup ISO.
+For Debian, download and verify the official ARM64 image, choose your Debian
+username and password, then create the VM. First boot prepares the desktop and
+guest tools. Open Tether Guest Installer from the Debian applications menu.
+The Debian converter, first-boot resources, and guest tools disk are bundled
+inside the host app. Disk capacity grows sparsely only on supported filesystems.
 
-Existing Hermes installations are preserved: the guest installer refuses
-to overwrite unmanaged data. You can verify an existing connection manually.
+CONNECT YOUR IPHONE
+Follow the guest installer for Internet, clipboard, Tailscale, Hermes, model
+sign-in, computer use, and private connection verification. The host verifies
+the returned URL and token before you copy them into Tether Flow on the iPhone.
+Join the same Tailscale network and run Test Connection on the phone.
 
-This local preview is ad-hoc signed, not Developer ID signed or notarized.
-The built-in VM path has not yet completed a clean-VM, real-phone end-to-end
-test. Internet mode uses Apple NAT without a host/LAN egress firewall.
-Network containment is not established by this preview.
+This is an ad-hoc signed development preview, not Developer ID signed or
+notarized. Internet mode uses Apple NAT; it does not block guest access to
+reachable host or local-network services. No host folders are shared and
+clipboard transfers occur only when you choose an action.
+
+Build 93 was checked with an existing Debian VM, which booted to Xfce and
+reconnected Tailscale and Hermes. Fresh guest and physical-iPhone end-to-end
+acceptance remain outstanding. UTM runtime integration is retired.
+
 NOTE
 hdiutil create -srcfolder "$STAGING_DIRECTORY/content" -volname 'Tether Host Guest Setup' \
     -format UDRW -fs HFS+ "$STAGING_DIRECTORY/preview-rw.dmg"

@@ -10,10 +10,8 @@ public struct VirtualMachineBundleLocator: Sendable {
 
     public func locate(_ id: VirtualMachineID) -> URL? {
         let registry = NativeVMStorageRegistry(defaultRootURL: nativeRoot)
-        let bundle = registry.location(of: id) ?? nativeRoot.appendingPathComponent(id.description, isDirectory: true)
-        // A known external VM must never resolve to a newly created local
-        // directory when its original volume is disconnected.
         if registry.lastKnownLocation(of: id) != nil && registry.location(of: id) == nil { return nil }
+        let bundle = registry.location(of: id) ?? nativeRoot.appendingPathComponent(id.description, isDirectory: true)
         guard isPlainDirectory(bundle) else { return nil }
         let manifestURL = bundle.appendingPathComponent(NativeVirtualMachineStore.manifestFilename)
         guard isPlainFile(manifestURL),
